@@ -1,0 +1,122 @@
+package com.nexus.transaction.infrastructure.streams;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.kstream.*;
+import org.apache.kafka.streams.state.Stores;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.kafka.support.serializer.JsonSerde;
+import org.springframework.stereotype.Component;
+
+import java.math.BigDecimal;
+import java.time.Duration;
+
+/**
+ * Merchant Aggregation Topology — Kafka Streams merchant-level stats.
+ *
+ * Input topic:  transactions.completed
+ * Output topic: transactions.merchant-stats
+ * State store:  merchant-stats (RocksDB, 24-hour retention)
+ *
+ * Aggregates PER MERCHANT PER HOUR:
+ * - transaction count
+ * - total volume
+ * - unique users
+ * - avg transaction size
+ *
+ * Used by fraud service to detect:
+ * - "this merchant has unusual transaction volume today"
+ * - "first time a user transacts at this merchant type"
+ *
+ * Pattern: Kafka Streams KTable with hourly tumbling windows
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class MerchantAggregationTopology {
+
+    private final ObjectMapper objectMapper;
+
+    private static final String INPUT_TOPIC = "transactions.completed";
+    private static final String OUTPUT_TOPIC =
+            "transactions.merchant-stats";
+    private static final String STORE_NAME = "merchant-stats";
+    private static final Duration WINDOW_SIZE = Duration.ofHours(1);
+
+    @Autowired
+    public void buildMerchantTopology(StreamsBuilder builder) {
+
+        JsonSerde<JsonNode> jsonSerde = new JsonSerde<>(objectMapper);
+
+        KStream<String, JsonNode> completedStream =
+                builder.stream(INPUT_TOPIC,
+                        Consumed.with(Serdes.String(), jsonSerde));
+
+        // Filter to only transactions with merchant data
+        KStream<String, JsonNode> withMerchant = completedStream
+                .filter((k, v) -> !v.path("merchantName").isMissingNode()
+                        && !v.path("merchantName").asText().isBlank());
+
+        // Key by merchant name
+        KStream<String, JsonNode> keyedByMerchant = withMerchant
+                .selectKey((k, v) -> v.path("merchantName").asText());
+
+        // Hourly aggregation per merchant
+        KTable<Windowed<String>, JsonNode> merchantTable =
+                keyedByMerchant
+                        .groupByKey(Grouped.with(Serdes.String(), jsonSerde))
+                        .windowedBy(
+                                TimeWindows.ofSizeWithNoGrace(WINDOW_SIZE))
+                        .aggregate(
+                                () -> {
+                                    ObjectNode init = objectMapper.createObjectNode();
+                                    init.put("transactionCount", 0);
+                                    init.put("totalVolume", "0");
+                                    init.put("uniqueUsers", 0);
+                                    return init;
+                                },
+                                (merchant, txn, agg) -> {
+                                    ObjectNode result = (ObjectNode) agg;
+                                    int count = result
+                                            .path("transactionCount").asInt() + 1;
+                                    BigDecimal volume = new BigDecimal(
+                                            result.path("totalVolume").asText("0"))
+                                            .add(new BigDecimal(
+                                                    txn.path("amount").asText("0")));
+
+                                    result.put("merchantName", merchant);
+                                    result.put("transactionCount", count);
+                                    result.put("totalVolume",
+                                            volume.toPlainString());
+                                    result.put("avgTransaction",
+                                            volume.divide(
+                                                            new BigDecimal(count), 4,
+                                                            java.math.RoundingMode.HALF_UP)
+                                                    .toPlainString());
+                                    result.put("computedAt",
+                                            java.time.Instant.now().toString());
+                                    return result;
+                                },
+                                Materialized.<String, JsonNode>as(
+                                                Stores.persistentWindowStore(
+                                                        STORE_NAME,
+                                                        Duration.ofHours(24),
+                                                        WINDOW_SIZE,
+                                                        false))
+                                        .withKeySerde(Serdes.String())
+                                        .withValueSerde(jsonSerde)
+                        );
+
+        merchantTable.toStream()
+                .map((windowedKey, value) ->
+                        new org.apache.kafka.streams.KeyValue<>(
+                                windowedKey.key(), value))
+                .to(OUTPUT_TOPIC,
+                        Produced.with(Serdes.String(), jsonSerde));
+    }
+}
