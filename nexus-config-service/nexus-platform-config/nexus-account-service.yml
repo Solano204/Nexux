@@ -1,0 +1,60 @@
+server:
+  port: 8085
+
+spring:
+  application:
+    name: nexus-account-service
+
+  datasource:
+    url: jdbc:postgresql://nexus-postgres:5432/nexus_accounts
+    username: nexus_app
+    password: ${POSTGRES_PASSWORD}
+    hikari:
+      maximum-pool-size: 60
+      lock-timeout: 10000
+
+  data:
+    mongodb:
+      uri: mongodb://nexus-mongodb:27017/nexus_accounts
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.6
+
+nexus:
+  account:
+    limits:
+      checking:
+        daily-transaction-limit: 50000
+        monthly-transaction-limit: 500000
+        max-single-amount: 100000
+      savings:
+        daily-transaction-limit: 10000
+        monthly-transaction-limit: 200000
+        max-single-amount: 50000
+      investment:
+        daily-transaction-limit: 100000
+        monthly-transaction-limit: 1000000
+        max-single-amount: 500000
+
+    minimum-balance:
+      checking: 0
+      savings: 0
+      investment: 1000
+
+    interest-rates:
+      savings: 0.045              # 4.5% annual
+      investment: 0.072           # 7.2% annual
+
+    reservation-expiry-hours: 24
+
+    advisor:
+      model: gpt-4o-mini
+      temperature: 0.6
+      rag-similarity-threshold: 0.65
+      rag-top-k: 20
+      scheduled-analysis-cron: "0 0 8 * * SUN"

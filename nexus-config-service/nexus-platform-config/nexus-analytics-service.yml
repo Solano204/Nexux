@@ -1,0 +1,53 @@
+server:
+  port: 8092
+
+spring:
+  application:
+    name: nexus-analytics-service
+
+  data:
+    elasticsearch:
+      uris: http://nexus-elasticsearch:9200
+    redis:
+      host: nexus-redis
+      password: ${REDIS_PASSWORD}
+
+  kafka:
+    streams:
+      application-id: nexus-analytics-streams
+      num-stream-threads: 4
+      state-dir: /var/kafka-streams/analytics
+      cache-max-bytes-buffering: 52428800
+      commit-interval-ms: 1000
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.4
+
+nexus:
+  analytics:
+    anomaly-detection:
+      z-score-threshold: 2.0
+      min-samples: 3
+
+    insights:
+      max-per-period: 5
+      min-relevance-score: 0.50
+      cache-ttl-hours: 1
+
+    elasticsearch:
+      user-index-prefix: nexus-analytics-user
+      platform-index: nexus-analytics-platform
+      anomaly-index: nexus-analytics-anomalies
+
+resilience4j:
+  retry:
+    instances:
+      openai-retry:
+        max-attempts: 3
+        wait-duration: 1s
+        exponential-backoff-multiplier: 2

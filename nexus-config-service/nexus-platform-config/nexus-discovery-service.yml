@@ -1,0 +1,17 @@
+server:
+  port: 8761
+
+spring:
+  application:
+    name: nexus-discovery-service
+
+eureka:
+  instance:
+    hostname: nexus-discovery-service
+  client:
+    register-with-eureka: false     # discovery server does not register itself
+    fetch-registry: false
+  server:
+    enable-self-preservation: false  # disable in dev (not a real cluster)
+    eviction-interval-timer-in-ms: 5000
+    response-cache-auto-expiration-in-seconds: 60
