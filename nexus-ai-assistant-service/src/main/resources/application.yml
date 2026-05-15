@@ -1,0 +1,118 @@
+spring:
+  application:
+    name: nexus-ai-assistant-service
+
+  config:
+    import: "optional:configserver:"
+
+  cloud:
+    config:
+      uri: http://nexus-config-service:8888
+      fail-fast: true
+
+  threads:
+    virtual:
+      enabled: true
+
+  # ════════════════════════════════════════════════════════
+  # POSTGRESQL — JDBC chat memory + pgvector stores
+  # ════════════════════════════════════════════════════════
+  datasource:
+    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5432/nexus_ai_assistant}
+    username: ${POSTGRES_USER:nexus}
+    password: ${POSTGRES_PASSWORD:}
+    hikari:
+      maximum-pool-size: 20
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+
+  data:
+    redis:
+      host: ${REDIS_HOST:nexus-redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 100ms
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    producer:
+      acks: "1"
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+  # ════════════════════════════════════════════════════════
+  # SPRING AI — Complete configuration
+  # ════════════════════════════════════════════════════════
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.7
+
+    # Ollama fallback (local Docker container)
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://nexus-ollama:11434}
+      chat:
+        options:
+          model: mistral:7b
+
+    # JDBC chat memory (Section 7)
+    chat:
+      memory:
+        repository:
+          jdbc:
+            initialize-schema: always
+
+    # pgvector stores
+    vectorstore:
+      pgvector:
+        initialize-schema: true
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        dimensions: 1536
+
+server:
+  port: 8090
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+  instance:
+    prefer-ip-address: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    distribution:
+      percentiles-histogram:
+        ai.chat.response.duration: true
+        ai.tool.call.total: true
+      percentiles:
+        ai.chat.response.duration: 0.5, 0.9, 0.95, 0.99
+    tags:
+      application: ${spring.application.name}
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+
+logging:
+  level:
+    com.nexus.assistant: INFO
+    org.springframework.ai: INFO
+  pattern:
+    console: >
+      %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
+      traceId=%X{traceId} spanId=%X{spanId}
+      service=nexus-ai-assistant-service %logger{36} - %msg%n
