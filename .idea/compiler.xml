@@ -7,9 +7,11 @@
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
         <module name="gateway" />
+        <module name="nexus-ai-kyc-service" />
       </profile>
     </annotationProcessing>
     <bytecodeTargetLevel>
+      <module name="fraud" target="25" />
       <module name="nexus-api-gateway" target="25" />
     </bytecodeTargetLevel>
   </component>
