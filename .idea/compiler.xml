@@ -7,9 +7,12 @@
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
         <module name="gateway" />
+        <module name="audit-write-native" />
+        <module name="audit-query-jvm" />
       </profile>
     </annotationProcessing>
     <bytecodeTargetLevel>
+      <module name="fraud" target="25" />
       <module name="nexus-api-gateway" target="25" />
     </bytecodeTargetLevel>
   </component>
