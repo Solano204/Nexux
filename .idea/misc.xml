@@ -5,6 +5,7 @@
     <option name="originalFiles">
       <list>
         <option value="$PROJECT_DIR$/nexus-api-gateway/pom.xml" />
+        <option value="$PROJECT_DIR$/nexus-analytics-service/pom.xml" />
       </list>
     </option>
   </component>
