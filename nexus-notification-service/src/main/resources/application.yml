@@ -1,0 +1,91 @@
+spring:
+  application:
+    name: nexus-notification-service
+
+  config:
+    import: "optional:configserver:"
+
+  cloud:
+    config:
+      uri: http://nexus-config-service:8888
+      fail-fast: true
+
+  threads:
+    virtual:
+      enabled: true
+
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev@nexus-mongodb:27017/nexus_notification?authSource=admin}
+      auto-index-creation: true
+    redis:
+      host: ${REDIS_HOST:nexus-redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 100ms
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    consumer:
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      isolation-level: read_committed
+      max-poll-records: 100
+    listener:
+      ack-mode: manual
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.7
+
+server:
+  port: 8089
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+  instance:
+    prefer-ip-address: true
+
+resilience4j:
+  retry:
+    instances:
+      openai-retry:
+        max-attempts: 3
+        wait-duration: 1s
+        exponential-backoff-multiplier: 2
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    distribution:
+      percentiles-histogram:
+        notification.ai.generation.duration: true
+      percentiles:
+        notification.ai.generation.duration: 0.5, 0.9, 0.95, 0.99
+    tags:
+      application: ${spring.application.name}
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+
+logging:
+  level:
+    com.nexus.notification: INFO
+  pattern:
+    console: >
+      %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
+      traceId=%X{traceId} spanId=%X{spanId}
+      service=nexus-notification-service %logger{36} - %msg%n
