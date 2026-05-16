@@ -1,0 +1,156 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Nexus Payment Processor Lambda.
+  SQS trigger: payment.incoming queue.
+  Validates + enriches + bridges to Plane A Kafka.
+  Publishes to SNS payment.processed for fan-out.
+  DLQ: payment.incoming.dlq for failed messages.
+
+Globals:
+  Function:
+    Runtime: java21
+    MemorySize: 512
+    Timeout: 60            # SQS batch: 60s max for 10 messages
+    Tracing: Active
+    Environment:
+      Variables:
+        AWS_REGION_NAME: !Ref AWS::Region
+        SNS_PAYMENT_PROCESSED_ARN: !Ref PaymentProcessedTopic
+        DYNAMODB_IDEMPOTENCY_TABLE: !Ref IdempotencyTable
+        KAFKA_BRIDGE_MODE: !Ref KafkaBridgeMode
+        KAFKA_BRIDGE_HTTP_URL: !Ref KafkaBridgeHttpUrl
+        MSK_BOOTSTRAP_SERVERS: !Ref MskBootstrapServers
+        PLANE_BRIDGE_SECRET: !Sub
+          "{{resolve:secretsmanager:nexus/plane-bridge-secret:SecretString:secret}}"
+
+Parameters:
+  KafkaBridgeMode:
+    Type: String
+    Default: HTTP              # HTTP or MSK
+    AllowedValues: [HTTP, MSK]
+    Description: >
+      HTTP: call Plane A's /internal/v1/bridge/publish endpoint.
+      MSK: publish directly to Amazon MSK (shared Kafka cluster).
+
+  KafkaBridgeHttpUrl:
+    Type: String
+    Default: http://host.docker.internal:8080
+    Description: Plane A API Gateway URL for HTTP bridge mode.
+
+  MskBootstrapServers:
+    Type: String
+    Default: ""
+    Description: MSK bootstrap servers (MSK mode only).
+
+Resources:
+
+  # ── Lambda Function ───────────────────────────────────────
+  PaymentProcessorLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: nexus-payment-processor-lambda
+      Handler: >
+        com.nexus.payment.lambda.PaymentProcessorHandler::handleRequest
+      CodeUri: target/nexus-payment-processor-lambda-1.0.0.jar
+      AutoPublishAlias: live
+
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt PaymentIncomingQueue.QueueName
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt PaymentProcessedTopic.TopicName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref IdempotencyTable
+        - AWSXRayDaemonWriteAccess
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource:
+                - !Sub >
+                  arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:nexus/*
+
+      Events:
+        SqsTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt PaymentIncomingQueue.Arn
+            BatchSize: 10
+            # Partial batch failure reporting:
+            # Failed messages return to queue; succeeded are deleted.
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+            # Wait up to 5s to fill a batch of 10 before invoking
+            MaximumBatchingWindowInSeconds: 5
+
+  # ── SQS Queues ────────────────────────────────────────────
+  PaymentIncomingQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: payment.incoming
+      VisibilityTimeout: 70      # Lambda timeout (60) + 10s buffer
+      MessageRetentionPeriod: 86400  # 24 hours
+      ReceiveMessageWaitTimeSeconds: 20  # Long polling
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt PaymentIncomingDLQ.Arn
+        maxReceiveCount: 3       # 3 attempts before DLQ
+
+  PaymentIncomingDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: payment.incoming.dlq
+      MessageRetentionPeriod: 1209600  # 14 days for investigation
+
+  # ── SNS Topic ─────────────────────────────────────────────
+  PaymentProcessedTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: payment.processed
+      # Subscriptions added by downstream services:
+      # - nexus-notification-dispatcher-lambda
+      # - nexus-analytics-aggregator-lambda
+
+  # ── DynamoDB Idempotency Table ────────────────────────────
+  IdempotencyTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: nexus-payment-idempotency
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true         # Auto-expire after 24 hours
+
+  # ── CloudWatch Alarms ─────────────────────────────────────
+  DLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: nexus-payment-dlq-messages
+      AlarmDescription: >
+        Payment messages are landing in DLQ.
+        Requires immediate investigation.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt PaymentIncomingDLQ.QueueName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  PaymentIncomingQueueUrl:
+    Value: !Ref PaymentIncomingQueue
+  PaymentProcessedTopicArn:
+    Value: !Ref PaymentProcessedTopic
+  LambdaArn:
+    Value: !GetAtt PaymentProcessorLambda.Arn
