@@ -1,0 +1,256 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Nexus Analytics Aggregator Lambda.
+  DynamoDB Streams trigger: reacts to transaction state changes.
+  Maintains 6 DynamoDB analytics tables with incremental updates.
+  Atomic ADD operations: concurrent-safe without distributed locking.
+  BisectBatchOnFunctionError: isolates bad records to batch of 1.
+  Emits CloudWatch metrics for AWS-side analytics dashboards.
+
+Globals:
+  Function:
+    Runtime: python3.12
+    MemorySize: 256
+    Timeout: 60
+    Tracing: Active
+    Environment:
+      Variables:
+        TRANSACTIONS_TABLE: nexus-transactions
+        DAILY_STATS_TABLE: nexus-analytics-daily
+        CATEGORY_STATS_TABLE: nexus-analytics-category
+        HOURLY_VOLUME_TABLE: nexus-analytics-hourly-volume
+        MERCHANT_FREQUENCY_TABLE: nexus-analytics-merchant-frequency
+        USER_SUMMARY_TABLE: nexus-analytics-user-summary
+        PLATFORM_METRICS_TABLE: nexus-analytics-platform-metrics
+        CLOUDWATCH_NAMESPACE: Nexus/Analytics
+        LOG_LEVEL: INFO
+        AWS_REGION_NAME: !Ref AWS::Region
+
+Resources:
+
+  # ── Lambda Function ───────────────────────────────────────
+  AnalyticsAggregatorLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: nexus-analytics-aggregator-lambda
+      Handler: src/handler.aggregate_transactions
+      CodeUri: .
+
+      Policies:
+        # Read from DynamoDB Streams
+        - DynamoDBStreamReadPolicy:
+            TableName: !Ref TransactionsTable
+            StreamName: "*"
+        # Write to all analytics tables
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyStatsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CategoryStatsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref HourlyVolumeTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MerchantFrequencyTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UserSummaryTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlatformMetricsTable
+        # CloudWatch metrics
+        - CloudWatchPutMetricPolicy: {}
+        # DLQ for permanently failed batches
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt AnalyticsAggregatorDLQ.QueueName
+
+      Events:
+        DynamoDBStreamTrigger:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt TransactionsTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 100
+            MaximumBatchingWindowInSeconds: 5
+
+            # BisectBatchOnFunctionError: on failure, split batch in half
+            # and retry each half separately. A single bad record is
+            # isolated to a batch of 1, then sent to DLQ.
+            # Without this: one bad record blocks the entire shard.
+            BisectBatchOnFunctionError: true
+
+            # DLQ for batches that fail all retries
+            DestinationConfig:
+              OnFailure:
+                Destination: !GetAtt AnalyticsAggregatorDLQ.Arn
+
+            # Only process INSERT and MODIFY — skip DELETE events.
+            # Reversals are handled as MODIFY (status → REVERSED).
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"eventName": ["INSERT", "MODIFY"]}'
+
+  # ── DynamoDB Tables ───────────────────────────────────────
+
+  # Source: transaction records (DynamoDB Streams enabled)
+  TransactionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: nexus-transactions
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES  # Need both for transition detection
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  DailyStatsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: nexus-analytics-daily
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true       # Auto-expire after 90 days
+
+  CategoryStatsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: nexus-analytics-category
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true       # Auto-expire after 12 months
+
+  HourlyVolumeTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: nexus-analytics-hourly-volume
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true       # Auto-expire after 30 days
+
+  MerchantFrequencyTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: nexus-analytics-merchant-frequency
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true       # Auto-expire after 35 days (30-day window + buffer)
+
+  UserSummaryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: nexus-analytics-user-summary
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      # No TTL — one permanent row per user, continuously updated
+
+  PlatformMetricsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: nexus-analytics-platform-metrics
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      # No TTL — REALTIME row continuously overwritten
+
+  # ── DLQ ───────────────────────────────────────────────────
+  AnalyticsAggregatorDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: nexus-analytics-aggregator-dlq
+      MessageRetentionPeriod: 86400
+
+  # ── CloudWatch Alarms ─────────────────────────────────────
+  AggregationErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: nexus-analytics-aggregation-errors
+      AlarmDescription: >
+        Analytics aggregation errors cause data inconsistency.
+        Investigate immediately.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: nexus-analytics-aggregator-lambda
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+
+Outputs:
+  LambdaArn:
+    Value: !GetAtt AnalyticsAggregatorLambda.Arn
+  TransactionsTableStreamArn:
+    Value: !GetAtt TransactionsTable.StreamArn
+  DailyStatsTableName:
+    Value: !Ref DailyStatsTable

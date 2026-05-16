@@ -1,0 +1,5 @@
+# requirements.txt
+# boto3/botocore pre-installed in Lambda runtime; pinned for local dev.
+boto3>=1.34.0
+botocore>=1.34.0
+python-json-logger>=2.0.7
