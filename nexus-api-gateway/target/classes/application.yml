@@ -5,12 +5,10 @@ spring:
   # ══════════════════════════════════════════════════════════════
   # SPRING CLOUD CONFIG — Load all config from Config Service
   # fail-fast: true — gateway refuses to start without config
-  # FIX: Removed duplicate `spring.config.import` key. The correct
-  #      pattern for Spring Cloud Config is spring.cloud.config.uri
-  #      together with the configserver bootstrap. Using both
-  #      spring.config.import AND spring.cloud.config.uri in the
-  #      same file causes a duplicate-binding conflict at startup.
   # ══════════════════════════════════════════════════════════════
+  config:
+    import: "optional:configserver:"
+
   cloud:
     config:
       uri: http://nexus-config-service:8888
@@ -144,12 +142,7 @@ spring:
             - name: RequestSize
               args:
                 maxSize: 10KB
-            # FIX: Removed `AddRequestHeader=X-Forwarded-For, ${request.remoteAddr}`
-            #      SpEL expressions like ${request.remoteAddr} are NOT evaluated in
-            #      YAML filter shortcut args — they are treated as literal strings.
-            #      The gateway populates X-Forwarded-For automatically via the
-            #      XForwardedHeadersFilter which is enabled by default; no manual
-            #      header needed here.
+            - AddRequestHeader=X-Forwarded-For, ${request.remoteAddr}
 
         # ──────────────────────────────────────────────────────
         # ROUTE 4: AI Assistant Service — Authenticated, streaming
@@ -165,11 +158,7 @@ spring:
             - StripPrefix=1
             - name: RequestRateLimiter
               args:
-                # FIX: replenishRate: 0 is invalid — RedisRateLimiter.Config enforces
-                #      @Min(1) on replenishRate. A value of 0 throws a validation
-                #      exception at startup. Use 1 (minimum) to allow the burst of 5
-                #      while keeping sustained rate very low (1 req/s).
-                redis-rate-limiter.replenishRate: 1
+                redis-rate-limiter.replenishRate: 0
                 redis-rate-limiter.burstCapacity: 5
                 redis-rate-limiter.requestedTokens: 1
                 key-resolver: "#{@userIdKeyResolver}"
@@ -214,12 +203,6 @@ spring:
 
         # ──────────────────────────────────────────────────────
         # ROUTE 7: Ledger Service — Authenticated, cacheable reads
-        # FIX: Removed LocalResponseCache filter — it requires the
-        #      spring-cloud-gateway-server-mvc module or an explicit
-        #      cache provider dependency, neither of which is in your
-        #      pom.xml. Using it without the dependency causes a
-        #      NoSuchFilterException at startup. Cache at the service
-        #      level via Redis instead (already available in your stack).
         # ──────────────────────────────────────────────────────
         - id: nexus-ledger-service
           uri: lb://nexus-ledger-service
@@ -237,10 +220,13 @@ spring:
               args:
                 name: ledger-service
                 fallbackUri: forward:/fallback/ledger
+            - name: LocalResponseCache
+              args:
+                size: 1000
+                timeToLive: 5m
 
         # ──────────────────────────────────────────────────────
         # ROUTE 8: Analytics Service — Authenticated, cacheable
-        # FIX: Same as ledger — LocalResponseCache removed.
         # ──────────────────────────────────────────────────────
         - id: nexus-analytics-service
           uri: lb://nexus-analytics-service
@@ -258,6 +244,10 @@ spring:
               args:
                 name: analytics-service
                 fallbackUri: forward:/fallback/analytics
+            - name: LocalResponseCache
+              args:
+                size: 500
+                timeToLive: 1m
 
         # ──────────────────────────────────────────────────────
         # ROUTE 9: Actuator — Internal monitoring only
@@ -267,7 +257,7 @@ spring:
           uri: http://localhost:8080
           predicates:
             - Path=/actuator/**
-            - RemoteAddr=127.0.0.1,172.20.0.0/16
+            - RemoteAddr=127.0.0.1, 172.20.0.0/16
           filters: []
 
         # ──────────────────────────────────────────────────────
@@ -322,7 +312,7 @@ server:
   port: 8080
   netty:
     connection-timeout: 5s
-    h2c-max-content-length: 0
+    h2c-max-content-length: 0  # Disable HTTP/2 max content for streaming
     idle-timeout: 60s
   http2:
     enabled: true
@@ -349,6 +339,7 @@ eureka:
 
 # ══════════════════════════════════════════════════════════════
 # RESILIENCE4J — Circuit Breakers per downstream service
+# Full configuration as per architecture documentation
 # ══════════════════════════════════════════════════════════════
 resilience4j:
   circuitbreaker:
@@ -371,40 +362,57 @@ resilience4j:
           - org.springframework.web.server.ResponseStatusException
 
     instances:
+      # Transaction service — most conservative (financial critical)
       transaction-service:
         base-config: default
         sliding-window-size: 50
         failure-rate-threshold: 50
         slow-call-duration-threshold: 2000ms
         wait-duration-in-open-state: 30s
+
+      # Account service — conservative
       account-service:
         base-config: default
         failure-rate-threshold: 50
         slow-call-duration-threshold: 2000ms
+
+      # Identity service — moderate
       identity-service:
         base-config: default
         failure-rate-threshold: 60
         slow-call-duration-threshold: 3000ms
+
+      # AI assistant — lenient (LLM calls are slow by nature)
       ai-assistant-service:
         base-config: default
         failure-rate-threshold: 60
         slow-call-duration-threshold: 30000ms
         wait-duration-in-open-state: 60s
+
+      # Fraud service — moderate
       fraud-service:
         base-config: default
         failure-rate-threshold: 50
         slow-call-duration-threshold: 30000ms
+
+      # Ledger service
       ledger-service:
         base-config: default
         failure-rate-threshold: 50
         slow-call-duration-threshold: 2000ms
+
+      # Analytics — less critical
       analytics-service:
         base-config: default
         failure-rate-threshold: 70
         slow-call-duration-threshold: 5000ms
+
+      # Notification — less critical
       notification-service:
         base-config: default
         failure-rate-threshold: 70
+
+      # Generic webhook handler
       webhook-handler:
         base-config: default
         failure-rate-threshold: 60
@@ -431,7 +439,7 @@ resilience4j:
         cancel-running-future: true
       ai-assistant-service:
         timeout-duration: 120s
-        cancel-running-future: false
+        cancel-running-future: false  # Don't cancel streaming
       default:
         timeout-duration: 10s
         cancel-running-future: true
@@ -453,57 +461,47 @@ nexus:
         check-timeout-ms: 100
       keyring:
         pubsub-channel: "jwt:keyrotation"
+
+    # Global rate limit (DDoS protection)
     global-rate-limit:
       enabled: true
       requests-per-second: 5000
+
+    # Security headers
     security:
       hsts-max-age: 31536000
       cors:
         allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+
+    # Internal Docker network CIDR
     internal-network: 172.20.0.0/16
 
 # ══════════════════════════════════════════════════════════════
 # OBSERVABILITY — Prometheus + Zipkin
-# FIX: `management.metrics.export.prometheus` is the Spring Boot 2.x
-#      path. In Spring Boot 3.x the correct key is
-#      `management.prometheus.metrics.export.enabled`.
-# FIX: `management.endpoints.web.exposure.include` with a multi-line
-#      comma-separated scalar was valid but fragile — converted to a
-#      proper YAML list for clarity and parser safety.
 # ══════════════════════════════════════════════════════════════
 management:
   endpoints:
     web:
       exposure:
-        include:
-          - health
-          - info
-          - prometheus
-          - metrics
-          - circuitbreakers
-          - ratelimiters
-          - bulkheads
-          - loggers
-          - busrefresh
-          - gateway
+        include: health,info,prometheus,metrics,circuitbreakers,
+          ratelimiters,bulkheads,loggers,busrefresh,gateway
   endpoint:
     health:
       show-details: always
       show-components: always
     gateway:
       enabled: true
-  prometheus:
-    metrics:
-      export:
-        enabled: true
   metrics:
+    export:
+      prometheus:
+        enabled: true
     distribution:
       percentiles-histogram:
         spring.cloud.gateway.requests: true
         http.server.requests: true
       percentiles:
-        spring.cloud.gateway.requests: 0.5,0.9,0.95,0.99
-        http.server.requests: 0.5,0.9,0.95,0.99
+        spring.cloud.gateway.requests: 0.5, 0.9, 0.95, 0.99
+        http.server.requests: 0.5, 0.9, 0.95, 0.99
     tags:
       application: ${spring.application.name}
       environment: ${ENVIRONMENT:local}

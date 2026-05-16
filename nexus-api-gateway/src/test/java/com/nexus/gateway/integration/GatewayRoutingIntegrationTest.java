@@ -178,4 +178,4 @@ class GatewayRoutingIntegrationTest {
                 .withExpiresAt(Date.from(Instant.now().minusSeconds(3600)))
                 .sign(Algorithm.RSA256(null, privateKey));
     }
-}:
+}

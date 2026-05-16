@@ -25,14 +25,34 @@
         <spring-boot.version>3.4.0</spring-boot.version>
         <spring-cloud.version>2024.0.0</spring-cloud.version>
         <resilience4j.version>2.2.0</resilience4j.version>
+
+        <!-- Auth0 JWT — not in any Spring BOM -->
         <java-jwt.version>4.4.0</java-jwt.version>
         <jwks-rsa.version>0.22.1</jwks-rsa.version>
-        <micrometer-tracing.version>1.4.0</micrometer-tracing.version>
+
         <testcontainers.version>1.19.3</testcontainers.version>
+        <wiremock.version>3.13.1</wiremock.version>
+
+        <!-- Core Maven plugin versions to eliminate warnings -->
+        <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
+        <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
     </properties>
 
+    <!--
+        THE DEFENSIVE FIX: Explicitly importing both Spring Boot and Spring Cloud BOMs
+        directly here fixes the missing version errors for all core starters and cloud dependencies.
+    -->
     <dependencyManagement>
         <dependencies>
+            <!-- Spring Boot BOM (Manages core starters, security, data-redis, lombok, jackson, etc.) -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Spring Cloud BOM (Manages Gateway, Config, Bus, Kafka Stream Benders, and Contract) -->
             <dependency>
                 <groupId>org.springframework.cloud</groupId>
                 <artifactId>spring-cloud-dependencies</artifactId>
@@ -46,38 +66,35 @@
     <dependencies>
 
         <!-- ══════════════════════════════════════════════════
-             SPRING CLOUD GATEWAY — Core reactive gateway
-             Built on Netty + Project Reactor (non-blocking)
+             SPRING CLOUD GATEWAY + INFRASTRUCTURE
              ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-gateway</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             SERVICE DISCOVERY — Eureka client for lb:// routing
-             ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             CONFIG CLIENT — Load config from Config Service
-             ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-config</artifactId>
         </dependency>
 
-        <!-- Spring Cloud Bus for config refresh via Kafka -->
+        <!-- SPRING CLOUD BUS + KAFKA BINDER -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-bus-kafka</artifactId>
+            <artifactId>spring-cloud-bus</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-stream-binder-kafka</artifactId>
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
-             RESILIENCE4J — Circuit Breaker + Rate Limiter + Bulkhead
+             RESILIENCE4J — Circuit Breaker (reactive)
              ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
@@ -96,7 +113,6 @@
 
         <!-- ══════════════════════════════════════════════════
              REDIS REACTIVE — Rate limiting + JWT blacklist
-             Lettuce client (non-blocking, Project Reactor)
              ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -107,17 +123,13 @@
             <artifactId>lettuce-core</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             SPRING SECURITY REACTIVE — Security filter chain
-             ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
-             JWT — Auth0 java-jwt for RS256 validation
-             JWKS RSA for public key loading from JWKS endpoint
+             JWT — Auth0 RS256 validation (not in any Spring BOM)
              ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>com.auth0</groupId>
@@ -131,9 +143,7 @@
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
-             OBSERVABILITY
-             Prometheus metrics + Zipkin distributed tracing
-             Micrometer Tracing with Brave bridge
+             OBSERVABILITY — Prometheus + Zipkin + Micrometer
              ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -178,7 +188,7 @@
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
-             TESTING
+             TEST DEPENDENCIES
              ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -195,29 +205,29 @@
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
+
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
             <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
-        <dependency>
-            <groupId>com.redis</groupId>
-            <artifactId>testcontainers-redis</artifactId>
-            <version>2.2.2</version>
-            <scope>test</scope>
-        </dependency>
+
+        <!-- SPRING CLOUD CONTRACT VERIFIER -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-contract-verifier</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- WIREMOCK STANDALONE -->
         <dependency>
-            <groupId>com.github.tomakehurst</groupId>
+            <groupId>org.wiremock</groupId>
             <artifactId>wiremock-standalone</artifactId>
-            <version>3.3.1</version>
+            <version>${wiremock.version}</version>
             <scope>test</scope>
         </dependency>
+
     </dependencies>
 
     <build>
@@ -225,6 +235,7 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>${spring-boot.version}</version>
                 <configuration>
                     <excludes>
                         <exclude>
@@ -238,9 +249,11 @@
                     </jvmArguments>
                 </configuration>
             </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <version>${maven-compiler-plugin.version}</version>
                 <configuration>
                     <release>25</release>
                     <enablePreview>true</enablePreview>
@@ -249,9 +262,11 @@
                     </compilerArgs>
                 </configuration>
             </plugin>
+
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco-maven-plugin.version}</version>
                 <configuration>
                     <rules>
                         <rule>
