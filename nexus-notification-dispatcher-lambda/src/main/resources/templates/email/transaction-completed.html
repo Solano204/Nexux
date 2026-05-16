@@ -1,0 +1,23 @@
+<!-- transaction-completed.html -->
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{_layout :: layout(~{::body-content})}">
+<head><title>Transferencia completada</title></head>
+<body>
+<th:block th:fragment="body-content">
+    <p>Tu transferencia fue procesada exitosamente.</p>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+        <tr>
+            <td style="color:#6b7280;padding:8px 0;">Monto</td>
+            <td style="font-weight:700;text-align:right;"
+                th:text="${currency + ' ' + amount}">MXN 0.00</td>
+        </tr>
+        <tr>
+            <td style="color:#6b7280;padding:8px 0;">Destinatario</td>
+            <td style="text-align:right;"
+                th:text="${targetName ?: 'N/A'}">N/A</td>
+        </tr>
+    </table>
+</th:block>
+</body>
+</html>
