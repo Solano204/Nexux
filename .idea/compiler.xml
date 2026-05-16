@@ -7,10 +7,12 @@
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
         <module name="gateway" />
+        <module name="nexus-auth-lambda" />
       </profile>
     </annotationProcessing>
     <bytecodeTargetLevel>
       <module name="nexus-api-gateway" target="25" />
+      <module name="nexus-risk-scoring-service" target="25" />
     </bytecodeTargetLevel>
   </component>
   <component name="JavacSettings">
