@@ -13,8 +13,10 @@ import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
 import jakarta.annotation.PostConstruct;
+import java.net.MalformedURLException;
 import java.net.URI;
 import java.security.interfaces.RSAPublicKey;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
@@ -56,10 +58,22 @@ public class JwksCache {
 
     @PostConstruct
     public void initialize() {
-        jwkProvider = new JwkProviderBuilder(URI.create(jwksUri).toURL())
-                .cached(10, 24, TimeUnit.HOURS)
-                .rateLimited(10, 1, TimeUnit.MINUTES)
-                .build();
+        // FIX: URI.toURL() declares a checked MalformedURLException that must be
+        //      caught or declared. Wrap it and rethrow as an unchecked
+        //      IllegalStateException so Spring fails fast on misconfiguration
+        //      rather than silently swallowing the error.
+        try {
+            jwkProvider = new JwkProviderBuilder(URI.create(jwksUri).toURL())
+                    .cached(10, 24, TimeUnit.HOURS)
+                    .rateLimited(10, 1, TimeUnit.MINUTES)
+                    .build();
+        } catch (MalformedURLException e) {
+            // This is a fatal misconfiguration — the app cannot validate JWTs
+            // without a valid JWKS endpoint, so fail at startup.
+            throw new IllegalStateException(
+                    "Invalid JWKS URI configured [nexus.gateway.jwt.jwks-uri=" + jwksUri + "]: "
+                            + e.getMessage(), e);
+        }
 
         refreshKeys();
         subscribeToKeyRotationEvents();
@@ -96,9 +110,9 @@ public class JwksCache {
                 "gateway.jwks.refresh", observationRegistry).start();
 
         try {
-            // The JWKS endpoint returns all current public keys
-            // We iterate through available kids and cache them
-            // Auth0 JwkProvider fetches and caches the JWKS document
+            // The JWKS endpoint returns all current public keys.
+            // We iterate through available kids and cache them.
+            // Auth0 JwkProvider fetches and caches the JWKS document.
             for (String kid : fetchAvailableKids()) {
                 try {
                     Jwk jwk = jwkProvider.get(kid);
@@ -136,16 +150,16 @@ public class JwksCache {
                 );
     }
 
-    private java.util.List<String> fetchAvailableKids() {
-        // In production: parse the JWKS document directly to get all kids
-        // For now: use a known kid from environment or fetch the live document
+    private List<String> fetchAvailableKids() {
+        // In production: parse the JWKS document directly to get all kids.
+        // For now: use a known kid from environment or fetch the live document.
         try {
-            // Trigger a fetch of the live JWKS document to get current kids
-            // The JwkProvider internally parses the JWKS JSON
-            return java.util.List.of();
+            // Trigger a fetch of the live JWKS document to get current kids.
+            // The JwkProvider internally parses the JWKS JSON.
+            return List.of();
         } catch (Exception e) {
             log.warn("Could not fetch kid list: {}", e.getMessage());
-            return java.util.List.of();
+            return List.of();
         }
     }
 }
