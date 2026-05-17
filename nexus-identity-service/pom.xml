@@ -24,15 +24,34 @@
         <java.version>25</java.version>
         <spring-boot.version>3.4.0</spring-boot.version>
         <spring-cloud.version>2024.0.0</spring-cloud.version>
-        <spring-ai.version>1.0.0</spring-ai.version>
+        <spring-ai.version>1.0.0-M6</spring-ai.version>
+
         <java-jwt.version>4.4.0</java-jwt.version>
+        <jwks-rsa.version>0.22.1</jwks-rsa.version>
         <flyway.version>10.4.1</flyway.version>
         <aws-sdk.version>2.22.0</aws-sdk.version>
         <testcontainers.version>1.19.3</testcontainers.version>
+        <hypersistence-utils.version>3.8.3</hypersistence-utils.version>
+
+        <!-- FIX: version property added so dependencyManagement entry is valid -->
+        <bouncycastle.version>1.78.1</bouncycastle.version>
+
+        <!-- Maven Plugin Versions -->
+        <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
+        <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <!-- Spring Boot Dependencies BOM -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Spring Cloud Dependencies BOM -->
             <dependency>
                 <groupId>org.springframework.cloud</groupId>
                 <artifactId>spring-cloud-dependencies</artifactId>
@@ -40,6 +59,25 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+
+            <!--
+                FIX 1: version was missing here — Maven had nothing to inherit,
+                so any <dependency> block entry without its own <version> would fail.
+                Added ${bouncycastle.version} to pin it in dependencyManagement.
+
+                bcpkix-jdk18on covers:
+                  org.bouncycastle.cert.*
+                  org.bouncycastle.operator.*
+                  org.bouncycastle.asn1.*   (via bcprov transitive)
+                bcprov-jdk18on is pulled in transitively — no separate entry needed.
+            -->
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bcpkix-jdk18on</artifactId>
+                <version>${bouncycastle.version}</version>
+            </dependency>
+
+            <!-- Spring AI BOM -->
             <dependency>
                 <groupId>org.springframework.ai</groupId>
                 <artifactId>spring-ai-bom</artifactId>
@@ -47,6 +85,7 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- AWS SDK BOM -->
             <dependency>
                 <groupId>software.amazon.awssdk</groupId>
                 <artifactId>bom</artifactId>
@@ -59,9 +98,7 @@
 
     <dependencies>
 
-        <!-- ══════════════════════════════════════════════════
-             SPRING BOOT CORE
-             ══════════════════════════════════════════════════ -->
+        <!-- Spring Boot Core -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -79,9 +116,7 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             DATA ACCESS — PostgreSQL + JPA
-             ══════════════════════════════════════════════════ -->
+        <!-- Data Access — PostgreSQL + JPA -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
@@ -91,6 +126,8 @@
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
+
+        <!-- Flyway Database Migrations -->
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
@@ -102,9 +139,7 @@
             <version>${flyway.version}</version>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             REDIS — JWT blacklist + session cache
-             ══════════════════════════════════════════════════ -->
+        <!-- Redis — JWT blacklist + session cache -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
@@ -114,9 +149,7 @@
             <artifactId>lettuce-core</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             SPRING CLOUD — Config Client + Eureka + Bus
-             ══════════════════════════════════════════════════ -->
+        <!-- Spring Cloud Modules -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-config</artifactId>
@@ -127,20 +160,20 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-bus-kafka</artifactId>
+            <artifactId>spring-cloud-bus</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-stream-binder-kafka</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             KAFKA — Outbox events + SAGA commands consumer
-             ══════════════════════════════════════════════════ -->
+        <!-- Kafka Engine -->
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             JWT — RS256 signing and validation
-             ══════════════════════════════════════════════════ -->
+        <!-- JWT Validation & Issuance -->
         <dependency>
             <groupId>com.auth0</groupId>
             <artifactId>java-jwt</artifactId>
@@ -149,21 +182,22 @@
         <dependency>
             <groupId>com.auth0</groupId>
             <artifactId>jwks-rsa</artifactId>
-            <version>0.22.1</version>
+            <version>${jwks-rsa.version}</version>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             SPRING AI — KYC rejection explanation (Section 3)
-             GPT-4o-mini structured output for rejection codes
-             ══════════════════════════════════════════════════ -->
+        <!-- Spring AI Integration -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-openai-spring-boot-starter</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             AWS SDK v2 — S3 + SQS async clients
-             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>io.hypersistence</groupId>
+            <artifactId>hypersistence-utils-hibernate-63</artifactId>
+            <version>${hypersistence-utils.version}</version>
+        </dependency>
+
+        <!-- AWS SDK Async Ecosystem -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3</artifactId>
@@ -177,9 +211,17 @@
             <artifactId>url-connection-client</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             OBSERVABILITY
-             ══════════════════════════════════════════════════ -->
+        <!--
+            FIX 2: bcpkix-jdk18on was declared in dependencyManagement
+            but never added here — so it was never actually on the classpath.
+            No <version> needed: inherited from dependencyManagement above.
+        -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+        </dependency>
+
+        <!-- Observability Stack -->
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
@@ -198,9 +240,7 @@
             <version>7.4</version>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             UTILITIES
-             ══════════════════════════════════════════════════ -->
+        <!-- Utilities -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
@@ -215,9 +255,7 @@
             <artifactId>commons-lang3</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             TESTING
-             ══════════════════════════════════════════════════ -->
+        <!-- Test Infrastructure Modules -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -233,6 +271,8 @@
             <artifactId>spring-kafka-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- Testcontainers Suite -->
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
@@ -252,12 +292,6 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>com.redis</groupId>
-            <artifactId>testcontainers-redis</artifactId>
-            <version>2.2.2</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>localstack</artifactId>
             <version>${testcontainers.version}</version>
@@ -270,6 +304,7 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>${spring-boot.version}</version>
                 <configuration>
                     <excludes>
                         <exclude>
@@ -286,6 +321,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <version>${maven-compiler-plugin.version}</version>
                 <configuration>
                     <release>25</release>
                     <enablePreview>true</enablePreview>
@@ -299,6 +335,7 @@
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco-maven-plugin.version}</version>
                 <configuration>
                     <rules>
                         <rule>
@@ -320,4 +357,21 @@
             </plugin>
         </plugins>
     </build>
+
+    <repositories>
+        <!-- Standard Central Repository Configuration -->
+        <repository>
+            <id>central</id>
+            <url>https://repo.maven.apache.org/maven2</url>
+        </repository>
+        <!-- Spring Milestones Repository Needed for Spring AI Development Builds -->
+        <repository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
 </project>

@@ -1,5 +1,6 @@
 package com.nexus.identity.infrastructure.persistence;
 
+
 import com.nexus.identity.domain.model.User;
 import com.nexus.identity.domain.model.enums.UserStatus;
 import org.springframework.data.jpa.repository.JpaRepository;

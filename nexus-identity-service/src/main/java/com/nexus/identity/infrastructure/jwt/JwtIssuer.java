@@ -9,7 +9,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.Date;
 import java.util.UUID;
 
@@ -129,11 +131,12 @@ public class JwtIssuer {
         return newToken;
     }
 
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
     private String generateSecureRefreshToken() {
         byte[] bytes = new byte[32]; // 256 bits
-        java.security.SecureRandom.getInstanceStrong()
-                .nextBytes(bytes);
-        return java.util.Base64.getUrlEncoder()
+        SECURE_RANDOM.nextBytes(bytes);
+        return Base64.getUrlEncoder()
                 .withoutPadding()
                 .encodeToString(bytes);
     }

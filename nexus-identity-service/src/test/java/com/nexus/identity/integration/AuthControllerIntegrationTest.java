@@ -22,6 +22,7 @@ import java.util.Map;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.testcontainers.shaded.org.hamcrest.core.StringContains.containsString;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
@@ -80,7 +81,7 @@ class AuthControllerIntegrationTest {
                         .content(objectMapper.writeValueAsString(registerBody)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.userId").exists())
-                .andExpect(jsonPath("$.message").contains("Registration successful"))
+                .andExpect(jsonPath("$.message").value(containsString("Registration successful"))) // ✅
                 .andReturn()
                 .getResponse()
                 .getContentAsString();

@@ -1,5 +1,7 @@
 package com.nexus.identity.unit;
 
+import com.nexus.identity.application.command.DuplicateEmailException;
+import com.nexus.identity.application.command.InvalidCredentialsException;
 import com.nexus.identity.application.command.UserCommandService;
 import com.nexus.identity.domain.model.User;
 import com.nexus.identity.domain.model.enums.UserStatus;

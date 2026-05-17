@@ -8,6 +8,7 @@
         <outputRelativeToContentRoot value="true" />
         <module name="gateway" />
         <module name="identity" />
+        <module name="nexus-identity-service" />
       </profile>
     </annotationProcessing>
     <bytecodeTargetLevel>

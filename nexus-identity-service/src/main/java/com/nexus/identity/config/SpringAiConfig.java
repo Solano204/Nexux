@@ -3,6 +3,7 @@ package com.nexus.identity.config;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -25,13 +26,14 @@ public class SpringAiConfig {
     public ChatClient kycExplainerClient(OpenAiChatModel model) {
         return ChatClient.builder(model)
                 .defaultOptions(OpenAiChatOptions.builder()
-                        .model("gpt-4o-mini")
+                        .model(OpenAiApi.ChatModel.GPT_4_O_MINI.getValue())
                         .temperature(0.3)
-                        .maxTokens(300)
-                        .responseFormat(
-                                new org.springframework.ai.openai.api.OpenAiApi
-                                        .ChatCompletionRequest.ResponseFormat("json_object"))
+                        .maxCompletionTokens(300)
                         .build())
+                .defaultSystem("""
+                    You always respond with valid JSON only.
+                    No preamble, no markdown, no explanation outside the JSON object.
+                    """)
                 .build();
     }
 }

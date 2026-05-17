@@ -25,6 +25,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.StructuredTaskScope;
@@ -33,16 +35,20 @@ import java.util.concurrent.StructuredTaskScope;
  * User Command Service — CQRS Write Side.
  *
  * Handles all state-changing operations:
- * - User registration with Outbox Pattern
- * - Login with BCrypt verification + JWT issuance
- * - Password change with history check
- * - KYC initiation with Structured Concurrency (Java 25)
- * - Session management
- * - SAGA compensation (cancel registration)
+ *   register, login, logout, changePassword,
+ *   requestPasswordReset, confirmPasswordReset,
+ *   initiateKyc, processKycResult,
+ *   terminateSession, cancelRegistration (SAGA)
  *
- * All writes use @Transactional to ensure:
- * domain table write + outbox write = atomic unit
- * Either both succeed or neither does (Outbox Pattern guarantee)
+ * All writes use @Transactional:
+ *   domain write + outbox write = one atomic PostgreSQL transaction.
+ *   Debezium reads the outbox via WAL → publishes to Kafka.
+ *
+ * Java 25 Structured Concurrency:
+ *   StructuredTaskScope.open(Joiner.awaitAllSuccessfulOrThrow())
+ *   replaces the Java 21 preview:
+ *   new StructuredTaskScope.ShutdownOnFailure() + scope.join().throwIfFailed()
+ *   In Java 25 join() itself throws FailedException if any subtask fails.
  */
 @Slf4j
 @Service
@@ -64,13 +70,18 @@ public class UserCommandService {
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
 
-    // Metrics
+    /** Redis TTL for password reset tokens (30 minutes). */
+    private static final Duration PASSWORD_RESET_TOKEN_TTL =
+            Duration.ofMinutes(30);
+
+    // ── Metrics ───────────────────────────────────────────────
     private final Counter registrationSuccessCounter;
     private final Counter registrationFailedCounter;
     private final Counter loginSuccessCounter;
     private final Counter loginFailedCounter;
     private final Counter kycInitiatedCounter;
-    private final Timer bcryptTimer;
+    private final Counter passwordResetRequestCounter;
+    private final Timer   bcryptTimer;
 
     public UserCommandService(
             UserRepository userRepository,
@@ -106,17 +117,19 @@ public class UserCommandService {
         this.objectMapper = objectMapper;
         this.observationRegistry = observationRegistry;
 
-        this.registrationSuccessCounter = Counter.builder("identity.registrations")
+        registrationSuccessCounter = Counter.builder("identity.registrations")
                 .tag("outcome", "success").register(meterRegistry);
-        this.registrationFailedCounter = Counter.builder("identity.registrations")
+        registrationFailedCounter = Counter.builder("identity.registrations")
                 .tag("outcome", "failed").register(meterRegistry);
-        this.loginSuccessCounter = Counter.builder("identity.logins")
+        loginSuccessCounter = Counter.builder("identity.logins")
                 .tag("outcome", "success").register(meterRegistry);
-        this.loginFailedCounter = Counter.builder("identity.logins")
+        loginFailedCounter = Counter.builder("identity.logins")
                 .tag("outcome", "failed").register(meterRegistry);
-        this.kycInitiatedCounter = Counter.builder("identity.kyc.initiations")
+        kycInitiatedCounter = Counter.builder("identity.kyc.initiations")
                 .register(meterRegistry);
-        this.bcryptTimer = Timer.builder("identity.bcrypt.duration")
+        passwordResetRequestCounter = Counter.builder(
+                "identity.password.reset.requests").register(meterRegistry);
+        bcryptTimer = Timer.builder("identity.bcrypt.duration")
                 .description("BCrypt hash/verify duration")
                 .publishPercentiles(0.5, 0.9, 0.95, 0.99)
                 .register(meterRegistry);
@@ -126,34 +139,21 @@ public class UserCommandService {
     // REGISTRATION
     // ══════════════════════════════════════════════════════════
 
-    /**
-     * Registers a new user.
-     *
-     * Atomic transaction:
-     * 1. Validate uniqueness
-     * 2. Hash password with BCrypt
-     * 3. INSERT users row
-     * 4. INSERT outbox row (UserRegistered event)
-     * 5. INSERT audit_log row
-     * 6. INSERT password_history row
-     *
-     * Debezium reads outbox → publishes to Kafka users.registered
-     */
     @Transactional
-    public RegisterResponse register(RegisterRequest request, String ipAddress,
-                                     String userAgent, String traceId) {
+    public RegisterResponse register(RegisterRequest request,
+                                     String ipAddress,
+                                     String userAgent,
+                                     String traceId) {
 
         Observation obs = Observation.createNotStarted(
                 "identity.register", observationRegistry).start();
 
         try {
-            // Domain validation — uniqueness checks
             if (userRepository.existsByEmailIgnoreCaseAndDeletedAtIsNull(
                     request.email())) {
                 registrationFailedCounter.increment();
                 throw new DuplicateEmailException(
-                        "Email already registered: " +
-                                maskEmail(request.email()));
+                        "Email already registered: " + maskEmail(request.email()));
             }
 
             if (userRepository.existsByPhoneNumberAndDeletedAtIsNull(
@@ -163,11 +163,9 @@ public class UserCommandService {
                         "Phone number already registered");
             }
 
-            // BCrypt password hashing (timing tracked by Micrometer)
             String passwordHash = bcryptTimer.record(() ->
                     passwordEncoder.encode(request.password()));
 
-            // Build user aggregate
             User user = User.builder()
                     .userId(UUID.randomUUID())
                     .email(request.email().toLowerCase())
@@ -181,32 +179,20 @@ public class UserCommandService {
                     .build();
 
             userRepository.save(user);
-
-            // Password history (first entry)
             savePasswordHistory(user.getUserId(), passwordHash);
 
-            // Outbox entry — Debezium publishes UserRegistered to Kafka
-            writeOutboxEntry(
-                    "USER",
-                    user.getUserId(),
-                    "UserRegistered",
-                    buildUserRegisteredPayload(user)
-            );
+            writeOutboxEntry("USER", user.getUserId(),
+                    "UserRegistered", buildUserRegisteredPayload(user));
 
-            // Audit log
-            writeAuditLog(
-                    user.getUserId(),
-                    "USER_REGISTERED",
+            writeAuditLog(user.getUserId(), "USER_REGISTERED",
                     ipAddress, userAgent, traceId,
                     Map.of(
                             "email", maskEmail(user.getEmail()),
                             "country", user.getCountry()
-                    )
-            );
+                    ));
 
             registrationSuccessCounter.increment();
             obs.event(Observation.Event.of("registration.success"));
-
             log.info("User registered: userId={} traceId={}",
                     user.getUserId(), traceId);
 
@@ -232,20 +218,11 @@ public class UserCommandService {
     // LOGIN
     // ══════════════════════════════════════════════════════════
 
-    /**
-     * Authenticates a user and issues JWT + refresh token.
-     *
-     * Security measures:
-     * - Redis failed attempt check (fast pre-rejection for brute force)
-     * - BCrypt timing-safe comparison (300ms — makes brute force slow)
-     * - Account status check (SUSPENDED, LOCKED)
-     * - Outbox event for risk scoring (LoginSuccessful with IP/device)
-     * - Constant-time response for wrong password vs unknown email
-     *   (prevents user enumeration via timing)
-     */
     @Transactional
-    public LoginResponse login(LoginRequest request, String ipAddress,
-                               String userAgent, String traceId) {
+    public LoginResponse login(LoginRequest request,
+                               String ipAddress,
+                               String userAgent,
+                               String traceId) {
 
         Observation obs = Observation.createNotStarted(
                         "identity.login", observationRegistry)
@@ -255,8 +232,8 @@ public class UserCommandService {
         try {
             String email = request.email().toLowerCase();
 
-            // Fast pre-rejection: Redis failed attempt counter
-            int redisFailures = sessionCacheRepository.getFailedAttempts(email);
+            int redisFailures =
+                    sessionCacheRepository.getFailedAttempts(email);
             if (redisFailures >= 5) {
                 loginFailedCounter.increment();
                 obs.event(Observation.Event.of("login.rate_limited"));
@@ -264,12 +241,10 @@ public class UserCommandService {
                         "Too many failed attempts. Try again later.");
             }
 
-            // Load user — deliberately vague error message
             Optional<User> userOpt = userRepository
                     .findByEmailIgnoreCaseAndDeletedAtIsNull(email);
 
-            // BCrypt hash verification — always run even if user not found
-            // (prevents timing attack that reveals whether email exists)
+            // Always BCrypt — prevents timing-based user enumeration
             String hashToCompare = userOpt
                     .map(User::getPasswordHash)
                     .orElse("$2a$12$dummy.hash.for.timing.safety.xxxxx");
@@ -278,12 +253,11 @@ public class UserCommandService {
                     passwordEncoder.matches(request.password(), hashToCompare));
 
             if (userOpt.isEmpty() || !passwordMatches) {
-                // Handle failed attempt tracking
                 userOpt.ifPresent(u -> {
                     u.incrementFailedLoginAttempts();
                     if (u.getFailedLoginAttempts() >= 5) {
                         u.lockAccount(Instant.now()
-                                .plus(java.time.Duration.ofMinutes(15)));
+                                .plus(Duration.ofMinutes(15)));
                     }
                     userRepository.save(u);
                 });
@@ -292,24 +266,20 @@ public class UserCommandService {
 
                 writeAuditLog(
                         userOpt.map(User::getUserId).orElse(null),
-                        "LOGIN_FAILED",
-                        ipAddress, userAgent, traceId,
+                        "LOGIN_FAILED", ipAddress, userAgent, traceId,
                         Map.of(
                                 "email", maskEmail(email),
                                 "reason", "INVALID_CREDENTIALS"
-                        )
-                );
+                        ));
 
                 loginFailedCounter.increment();
                 obs.event(Observation.Event.of("login.invalid_credentials"));
-
-                throw new InvalidCredentialsException(
-                        "Invalid credentials"); // Deliberately vague
+                // Deliberately vague: same message for wrong pw + unknown email
+                throw new InvalidCredentialsException("Invalid credentials");
             }
 
             User user = userOpt.get();
 
-            // Account status checks
             if (user.isAccountLocked()) {
                 loginFailedCounter.increment();
                 obs.event(Observation.Event.of("login.account_locked"));
@@ -324,16 +294,13 @@ public class UserCommandService {
                         "Account suspended. Contact support.");
             }
 
-            // Successful login — reset failed attempts
             user.resetFailedLoginAttempts();
             userRepository.save(user);
             sessionCacheRepository.resetFailedAttempts(email);
 
-            // Issue JWT + refresh token
-            JwtIssuer.TokenPair tokenPair = jwtIssuer.issueTokens(
-                    user, request.deviceFingerprint());
+            JwtIssuer.TokenPair tokenPair =
+                    jwtIssuer.issueTokens(user, request.deviceFingerprint());
 
-            // Store session
             Session session = Session.builder()
                     .sessionId(UUID.randomUUID())
                     .userId(user.getUserId())
@@ -341,50 +308,35 @@ public class UserCommandService {
                     .deviceFingerprint(request.deviceFingerprint())
                     .ipAddress(ipAddress)
                     .userAgent(userAgent)
-                    .expiresAt(tokenPair.expiresAt()
-                            .plus(java.time.Duration.ofDays(30))) // Refresh token duration
+                    .expiresAt(tokenPair.expiresAt().plus(Duration.ofDays(30)))
                     .build();
 
-            // BCrypt the refresh token for storage
-            String refreshTokenHash = passwordEncoder.encode(
-                    tokenPair.refreshToken());
-            session.setRefreshTokenHash(refreshTokenHash);
+            session.setRefreshTokenHash(
+                    passwordEncoder.encode(tokenPair.refreshToken()));
 
             sessionRepository.save(session);
-
-            // Invalidate session cache
             sessionCacheRepository.invalidate(user.getUserId());
 
-            // Audit log + outbox events
-            writeAuditLog(
-                    user.getUserId(),
-                    "LOGIN_SUCCESS",
+            writeAuditLog(user.getUserId(), "LOGIN_SUCCESS",
                     ipAddress, userAgent, traceId,
                     Map.of(
                             "sessionId", session.getSessionId().toString(),
                             "deviceFingerprint",
                             truncate(request.deviceFingerprint(), 20)
-                    )
-            );
+                    ));
 
-            writeOutboxEntry(
-                    "USER",
-                    user.getUserId(),
-                    "LoginSuccessful",
-                    buildLoginSuccessPayload(user, session, ipAddress)
-            );
+            writeOutboxEntry("USER", user.getUserId(), "LoginSuccessful",
+                    buildLoginSuccessPayload(user, session, ipAddress));
 
             loginSuccessCounter.increment();
             obs.event(Observation.Event.of("login.success"));
-
             log.info("Login successful: userId={} sessionId={} traceId={}",
                     user.getUserId(), session.getSessionId(), traceId);
 
             return new LoginResponse(
                     tokenPair.accessToken(),
                     tokenPair.refreshToken(),
-                    900L,
-                    "Bearer",
+                    900L, "Bearer",
                     user.getUserId().toString(),
                     user.getRoles()
             );
@@ -399,28 +351,22 @@ public class UserCommandService {
     // ══════════════════════════════════════════════════════════
 
     @Transactional
-    public void logout(UUID userId, String jti, Instant tokenExpiresAt,
+    public void logout(UUID userId, String jti,
+                       Instant tokenExpiresAt,
                        String ipAddress, String traceId) {
 
-        // Find and deactivate session
-        Optional<Session> session = sessionRepository
-                .findByJtiAndIsActiveTrue(UUID.fromString(jti));
+        sessionRepository.findByJtiAndIsActiveTrue(UUID.fromString(jti))
+                .ifPresent(s -> {
+                    s.deactivate();
+                    sessionRepository.save(s);
+                });
 
-        session.ifPresent(s -> {
-            s.deactivate();
-            sessionRepository.save(s);
-        });
-
-        // Blacklist the JWT immediately
         blacklistRepository.blacklist(jti, tokenExpiresAt);
         blacklistRepository.publishRevocationEvent(jti);
-
-        // Invalidate Redis session cache
         sessionCacheRepository.invalidate(userId);
 
-        // Audit log
-        writeAuditLog(userId, "LOGOUT", ipAddress, null, null,
-                Map.of("jti", jti));
+        writeAuditLog(userId, "LOGOUT", ipAddress,
+                null, null, Map.of("jti", jti));
 
         log.info("Logout: userId={} jti={}", userId, jti);
     }
@@ -429,18 +375,6 @@ public class UserCommandService {
     // KYC INITIATION — Java 25 Structured Concurrency
     // ══════════════════════════════════════════════════════════
 
-    /**
-     * Initiates KYC verification flow.
-     *
-     * Uses Java 25 Structured Concurrency (ShutdownOnFailure):
-     * - Operation A: Check Redis KYC retry counter (fast)
-     * - Operation B: Upload document to AWS S3 (slow, I/O)
-     *
-     * If EITHER fails → both cancelled, scope closed, exception thrown.
-     * PostgreSQL write only happens AFTER both succeed.
-     *
-     * This prevents consuming a retry attempt on S3 failure.
-     */
     @Transactional
     public KycInitiationResponse initiateKyc(
             UUID userId, MultipartFile document,
@@ -453,39 +387,36 @@ public class UserCommandService {
         try {
             UUID verificationId = UUID.randomUUID();
 
-            // Parallel operations with Structured Concurrency
             String s3Path;
-            try (var scope =
-                         new StructuredTaskScope.ShutdownOnFailure()) {
+            try (var scope = StructuredTaskScope.open(
+                    StructuredTaskScope.Joiner
+                            .<Object>awaitAllSuccessfulOrThrow())) {
 
-                // Task A: Check retry limit in Redis
+                // Task A: Redis retry count check (fast ~2ms)
                 StructuredTaskScope.Subtask<Integer> retryCheckTask =
                         scope.fork(() -> {
                             int retries = sessionCacheRepository
                                     .getKycRetryCount(userId);
                             if (retries >= 3) {
                                 throw new KycRetryLimitExceededException(
-                                        "KYC attempt limit (3) reached in 30 days. " +
-                                                "Contact support.");
+                                        "KYC attempt limit (3) reached in 30 days.");
                             }
                             return retries;
                         });
 
-                // Task B: Upload document to S3
+                // Task B: S3 document upload (slow ~500ms–2s)
                 StructuredTaskScope.Subtask<String> uploadTask =
                         scope.fork(() -> s3Uploader.uploadKycDocument(
                                 userId, verificationId, documentType, document));
 
-                // Wait for both — throws if either fails
-                scope.join().throwIfFailed();
+                // Blocks; throws FailedException if either task fails
+                scope.join();
 
                 s3Path = uploadTask.get();
-
                 log.info("KYC pre-checks passed: userId={} retries={}",
                         userId, retryCheckTask.get());
             }
 
-            // Both operations succeeded — persist to DB
             KycVerification verification = KycVerification.builder()
                     .verificationId(verificationId)
                     .userId(userId)
@@ -493,35 +424,29 @@ public class UserCommandService {
                             kycRepository.countAttemptsByUserId(userId) + 1)
                     .documentType(documentType)
                     .documentS3Path(s3Path)
-                    .documentS3Bucket(
-                            System.getenv().getOrDefault(
-                                    "KYC_DOCUMENTS_BUCKET", "nexus-kyc-documents"))
+                    .documentS3Bucket(System.getenv().getOrDefault(
+                            "KYC_DOCUMENTS_BUCKET", "nexus-kyc-documents"))
                     .build();
 
             kycRepository.save(verification);
 
-            // Update user status to KYC_IN_PROGRESS
             userRepository.findByUserIdAndDeletedAtIsNull(userId)
                     .ifPresent(u -> {
                         u.setStatus(UserStatus.KYC_IN_PROGRESS);
                         userRepository.save(u);
                     });
 
-            // Outbox event for audit
             writeOutboxEntry("USER", userId, "KycInitiated",
                     buildKycInitiatedPayload(userId, verificationId,
                             documentType, s3Path));
 
-            // SQS publish to trigger Rekognition Lambda
             sqsPublisher.publishKycDocumentForAnalysis(
                     userId, verificationId, s3Path, documentType);
 
-            // Increment retry counter AFTER successful initiation
             sessionCacheRepository.incrementKycRetryCount(userId);
 
-            // Audit log
-            writeAuditLog(userId, "KYC_INITIATED", ipAddress, null,
-                    traceId, Map.of(
+            writeAuditLog(userId, "KYC_INITIATED", ipAddress, null, traceId,
+                    Map.of(
                             "verificationId", verificationId.toString(),
                             "documentType", documentType,
                             "attemptNumber", verification.getAttemptNumber()
@@ -529,13 +454,13 @@ public class UserCommandService {
 
             kycInitiatedCounter.increment();
             obs.event(Observation.Event.of("kyc.initiated"));
-
             log.info("KYC initiated: userId={} verificationId={} traceId={}",
                     userId, verificationId, traceId);
 
             return new KycInitiationResponse(
                     verificationId.toString(),
-                    "KYC verification initiated. You will be notified when complete."
+                    "KYC verification initiated. " +
+                            "You will be notified when complete."
             );
 
         } finally {
@@ -544,7 +469,7 @@ public class UserCommandService {
     }
 
     // ══════════════════════════════════════════════════════════
-    // KYC RESULT PROCESSING (called by AI KYC Service)
+    // KYC RESULT PROCESSING
     // ══════════════════════════════════════════════════════════
 
     @Transactional
@@ -572,15 +497,14 @@ public class UserCommandService {
             verification.setCompletedAt(Instant.now());
 
             if (result.approved()) {
-                // KYC APPROVED
                 verification.setFinalDecision(KycDecision.APPROVED);
                 user.approveKyc();
 
                 writeOutboxEntry("USER", userId, "IdentityVerified",
                         buildIdentityVerifiedPayload(userId, verificationId));
 
-                writeAuditLog(userId, "KYC_APPROVED", null, null,
-                        traceId, Map.of(
+                writeAuditLog(userId, "KYC_APPROVED", null, null, traceId,
+                        Map.of(
                                 "verificationId", verificationId.toString(),
                                 "documentType", verification.getDocumentType()
                         ));
@@ -590,33 +514,25 @@ public class UserCommandService {
                         userId, verificationId);
 
             } else {
-                // KYC REJECTED
                 verification.setFinalDecision(KycDecision.REJECTED);
                 verification.setFailureReasons(result.failureReasons());
 
                 int attempts = kycRepository.countAttemptsByUserId(userId);
                 boolean permanent = attempts >= 3;
 
-                if (permanent) {
-                    user.permanentlyRejectKyc();
-                } else {
-                    user.rejectKyc();
-                }
+                if (permanent) user.permanentlyRejectKyc();
+                else user.rejectKyc();
 
-                // Spring AI: translate technical codes → user message
                 String userMessage = rejectionExplainer
                         .explain(result.failureReasons(), "es");
 
                 writeOutboxEntry("USER", userId, "IdentityRejected",
                         buildIdentityRejectedPayload(
-                                userId, verificationId,
-                                result.failureReasons(),
-                                attempts, 3 - attempts,
-                                userMessage, permanent
-                        ));
+                                userId, verificationId, result.failureReasons(),
+                                attempts, 3 - attempts, userMessage, permanent));
 
-                writeAuditLog(userId, "KYC_REJECTED", null, null,
-                        traceId, Map.of(
+                writeAuditLog(userId, "KYC_REJECTED", null, null, traceId,
+                        Map.of(
                                 "verificationId", verificationId.toString(),
                                 "failureReasons", result.failureReasons(),
                                 "isPermanent", permanent
@@ -640,14 +556,15 @@ public class UserCommandService {
     // ══════════════════════════════════════════════════════════
 
     @Transactional
-    public void changePassword(UUID userId, ChangePasswordRequest request,
-                               UUID currentSessionId, String ipAddress,
+    public void changePassword(UUID userId,
+                               ChangePasswordRequest request,
+                               UUID currentSessionId,
+                               String ipAddress,
                                String traceId) {
 
         User user = userRepository.findByUserIdAndDeletedAtIsNull(userId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        // Verify current password
         boolean valid = bcryptTimer.record(() ->
                 passwordEncoder.matches(request.currentPassword(),
                         user.getPasswordHash()));
@@ -660,7 +577,6 @@ public class UserCommandService {
                     "Current password is incorrect");
         }
 
-        // Check password history (last 5)
         List<PasswordHistory> history = passwordHistoryRepository
                 .findTop5ByUserIdOrderByCreatedAtDesc(userId);
 
@@ -673,19 +589,15 @@ public class UserCommandService {
                     "Cannot reuse one of your last 5 passwords");
         }
 
-        // Hash new password and update
         String newHash = bcryptTimer.record(() ->
                 passwordEncoder.encode(request.newPassword()));
 
         user.setPasswordHash(newHash);
         userRepository.save(user);
-
-        // Save to history
         savePasswordHistory(userId, newHash);
 
-        // Invalidate ALL other sessions (security: password change = logout everywhere)
-        List<Session> activeSessions = sessionRepository
-                .findActiveSessionsForUser(userId);
+        List<Session> activeSessions =
+                sessionRepository.findActiveSessionsForUser(userId);
 
         activeSessions.stream()
                 .filter(s -> !s.getSessionId().equals(currentSessionId))
@@ -700,23 +612,225 @@ public class UserCommandService {
         sessionRepository.saveAll(activeSessions);
         sessionCacheRepository.invalidate(userId);
 
-        // Outbox + audit
         writeOutboxEntry("USER", userId, "PasswordChanged",
                 objectMapper.createObjectNode()
                         .put("userId", userId.toString())
                         .put("changedAt", Instant.now().toString()));
 
-        writeAuditLog(userId, "PASSWORD_CHANGED", ipAddress, null,
-                traceId, Map.of(
-                        "sessionsRevoked", activeSessions.size() - 1
-                ));
+        writeAuditLog(userId, "PASSWORD_CHANGED", ipAddress, null, traceId,
+                Map.of("sessionsRevoked", activeSessions.size() - 1));
 
         log.info("Password changed: userId={} sessionsRevoked={}",
                 userId, activeSessions.size() - 1);
     }
 
     // ══════════════════════════════════════════════════════════
-    // SAGA COMPENSATION — CancelUserRegistrationCommand
+    // PASSWORD RESET — REQUEST
+    // ══════════════════════════════════════════════════════════
+
+    /**
+     * Initiates a password reset flow for the given email.
+     *
+     * Security design (all three below combine to prevent user enumeration):
+     *   1. AuthController always returns HTTP 200 regardless of outcome.
+     *   2. This method never throws for "email not found" — it logs and returns.
+     *   3. The method IS allowed to throw for infrastructure failures (S3, Redis,
+     *      DB) because AuthController suppresses all exceptions in its try-catch.
+     *
+     * Token:   256-bit cryptographically random, URL-safe base64 (~43 chars).
+     * Storage: Redis key=pwreset:{token}, value=userId.toString(), TTL=30 min.
+     * Delivery: outbox PasswordResetRequested event → notification-service
+     *           sends the email. This service never calls SMTP directly.
+     */
+    @Transactional
+    public void requestPasswordReset(String email) {
+        Observation obs = Observation.createNotStarted(
+                "identity.password.reset.request", observationRegistry).start();
+
+        try {
+            String normalizedEmail = email.toLowerCase().trim();
+
+            Optional<User> userOpt = userRepository
+                    .findByEmailIgnoreCaseAndDeletedAtIsNull(normalizedEmail);
+
+            if (userOpt.isEmpty()) {
+                // Silently ignore — never reveal whether email is registered
+                log.debug("Password reset for unknown email: {}",
+                        maskEmail(normalizedEmail));
+                obs.event(Observation.Event.of(
+                        "password.reset.unknown_email"));
+                return;
+            }
+
+            User user = userOpt.get();
+
+            // 256-bit token
+            byte[] tokenBytes = new byte[32];
+            SecureRandom.getInstanceStrong().nextBytes(tokenBytes);
+            String resetToken = Base64.getUrlEncoder()
+                    .withoutPadding()
+                    .encodeToString(tokenBytes);
+
+            // Store in Redis (one-time, 30-minute TTL)
+            sessionCacheRepository.storePasswordResetToken(
+                    resetToken, user.getUserId(), PASSWORD_RESET_TOKEN_TTL);
+
+            // Outbox → notification-service sends the email
+            ObjectNode payload = objectMapper.createObjectNode()
+                    .put("userId",    user.getUserId().toString())
+                    .put("email",     user.getEmail())
+                    .put("resetToken", resetToken)
+                    .put("expiresAt",
+                            Instant.now().plus(PASSWORD_RESET_TOKEN_TTL).toString())
+                    .put("requestedAt", Instant.now().toString());
+
+            writeOutboxEntry("USER", user.getUserId(),
+                    "PasswordResetRequested", payload);
+
+            writeAuditLog(user.getUserId(), "PASSWORD_RESET_REQUESTED",
+                    null, null, null,
+                    Map.of("email", maskEmail(normalizedEmail)));
+
+            passwordResetRequestCounter.increment();
+            obs.event(Observation.Event.of("password.reset.requested"));
+            log.info("Password reset requested: userId={} email={}",
+                    user.getUserId(), maskEmail(normalizedEmail));
+
+        } catch (Exception e) {
+            obs.error(e);
+            log.error("Password reset request error: email={} {}",
+                    maskEmail(email), e.getMessage(), e);
+            throw new RuntimeException("Password reset request failed", e);
+        } finally {
+            obs.stop();
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // PASSWORD RESET — CONFIRM
+    // ══════════════════════════════════════════════════════════
+
+    /**
+     * Confirms a password reset using the one-time token.
+     *
+     * Steps:
+     *   1. Validate token in Redis (exists + not expired)
+     *   2. Load user by userId stored in Redis value
+     *   3. Check new password against last 5 (reuse prevention)
+     *   4. BCrypt hash + update user row
+     *   5. Add to password history
+     *   6. Revoke ALL sessions (full re-auth required after reset)
+     *   7. Delete token from Redis (one-time use enforced)
+     *   8. Outbox PasswordResetCompleted + audit log
+     */
+    @Transactional
+    public void confirmPasswordReset(String token, String newPassword) {
+        Observation obs = Observation.createNotStarted(
+                "identity.password.reset.confirm", observationRegistry).start();
+
+        try {
+            UUID userId = sessionCacheRepository
+                    .resolvePasswordResetToken(token)
+                    .orElseThrow(() ->
+                            new InvalidPasswordResetTokenException(
+                                    "Password reset token is invalid or has expired"));
+
+            User user = userRepository.findByUserIdAndDeletedAtIsNull(userId)
+                    .orElseThrow(() ->
+                            new UserNotFoundException("User not found"));
+
+            List<PasswordHistory> history = passwordHistoryRepository
+                    .findTop5ByUserIdOrderByCreatedAtDesc(userId);
+
+            boolean reused = history.stream().anyMatch(ph ->
+                    passwordEncoder.matches(newPassword, ph.getPasswordHash()));
+
+            if (reused) {
+                throw new PasswordReusedException(
+                        "Cannot reuse one of your last 5 passwords");
+            }
+
+            String newHash = bcryptTimer.record(() ->
+                    passwordEncoder.encode(newPassword));
+
+            user.setPasswordHash(newHash);
+            userRepository.save(user);
+            savePasswordHistory(userId, newHash);
+
+            // Revoke every active session — password reset = full logout
+            List<Session> sessions =
+                    sessionRepository.findActiveSessionsForUser(userId);
+
+            sessions.forEach(s -> {
+                s.deactivate();
+                blacklistRepository.blacklist(
+                        s.getJti().toString(), s.getExpiresAt());
+                blacklistRepository.publishRevocationEvent(
+                        s.getJti().toString());
+            });
+
+            sessionRepository.saveAll(sessions);
+            sessionCacheRepository.invalidate(userId);
+
+            // Burn the token (one-time use)
+            sessionCacheRepository.deletePasswordResetToken(token);
+
+            writeOutboxEntry("USER", userId, "PasswordResetCompleted",
+                    objectMapper.createObjectNode()
+                            .put("userId", userId.toString())
+                            .put("completedAt", Instant.now().toString()));
+
+            writeAuditLog(userId, "PASSWORD_RESET_COMPLETED",
+                    null, null, null,
+                    Map.of("sessionsRevoked", sessions.size()));
+
+            obs.event(Observation.Event.of("password.reset.confirmed"));
+            log.info("Password reset confirmed: userId={} sessionsRevoked={}",
+                    userId, sessions.size());
+
+        } catch (InvalidPasswordResetTokenException
+                 | PasswordReusedException e) {
+            obs.event(Observation.Event.of("password.reset.failed"));
+            throw e;
+        } catch (Exception e) {
+            obs.error(e);
+            throw e;
+        } finally {
+            obs.stop();
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // SESSION MANAGEMENT
+    // ══════════════════════════════════════════════════════════
+
+    /**
+     * Terminates a specific session (user-initiated from device list).
+     * Gateway enforces that X-User-Id header matches the requesting user;
+     * this method adds a second check to prevent cross-user termination.
+     */
+    @Transactional
+    public void terminateSession(UUID userId, UUID sessionId) {
+        sessionRepository.findById(sessionId).ifPresent(session -> {
+            if (!session.getUserId().equals(userId)) {
+                throw new UnauthorizedException(
+                        "Cannot terminate another user's session");
+            }
+            session.deactivate();
+            blacklistRepository.blacklist(
+                    session.getJti().toString(), session.getExpiresAt());
+            blacklistRepository.publishRevocationEvent(
+                    session.getJti().toString());
+            sessionRepository.save(session);
+            sessionCacheRepository.invalidate(userId);
+
+            log.info("Session terminated: userId={} sessionId={}",
+                    userId, sessionId);
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // SAGA COMPENSATION
     // ══════════════════════════════════════════════════════════
 
     @Transactional
@@ -728,10 +842,8 @@ public class UserCommandService {
 
         userRepository.findByUserIdAndDeletedAtIsNull(userId)
                 .ifPresent(user -> {
-
-                    // Idempotency: already cancelled?
                     if (user.getStatus() == UserStatus.REGISTRATION_CANCELLED) {
-                        log.info("Registration already cancelled: userId={}",
+                        log.info("Already cancelled (idempotent): userId={}",
                                 userId);
                         return;
                     }
@@ -739,9 +851,8 @@ public class UserCommandService {
                     user.cancelRegistration();
                     userRepository.save(user);
 
-                    // Revoke all active sessions
-                    List<Session> sessions = sessionRepository
-                            .findActiveSessionsForUser(userId);
+                    List<Session> sessions =
+                            sessionRepository.findActiveSessionsForUser(userId);
                     sessions.forEach(s -> {
                         s.deactivate();
                         blacklistRepository.blacklist(
@@ -750,7 +861,6 @@ public class UserCommandService {
                     sessionRepository.saveAll(sessions);
                     sessionCacheRepository.invalidate(userId);
 
-                    // Outbox event
                     writeOutboxEntry("USER", userId,
                             "UserRegistrationCancelled",
                             objectMapper.createObjectNode()
@@ -768,16 +878,19 @@ public class UserCommandService {
     // PRIVATE HELPERS
     // ══════════════════════════════════════════════════════════
 
-    private void writeOutboxEntry(String aggregateType, UUID aggregateId,
-                                  String eventType, ObjectNode payload) {
-        outboxRepository.save(OutboxEntry.of(
-                aggregateType, aggregateId, eventType, payload));
+    private void writeOutboxEntry(String aggregateType,
+                                  UUID aggregateId,
+                                  String eventType,
+                                  ObjectNode payload) {
+        outboxRepository.save(
+                OutboxEntry.of(aggregateType, aggregateId, eventType, payload));
     }
 
     @Transactional
     public void writeAuditLog(UUID userId, String eventType,
                               String ipAddress, String userAgent,
-                              String traceId, Map<String, Object> details) {
+                              String traceId,
+                              Map<String, Object> details) {
         AuditLog entry = AuditLog.builder()
                 .auditId(UUID.randomUUID())
                 .userId(userId)
@@ -786,8 +899,7 @@ public class UserCommandService {
                 .userAgent(userAgent)
                 .traceId(traceId)
                 .details(details != null
-                        ? objectMapper.valueToTree(details)
-                        : null)
+                        ? objectMapper.valueToTree(details) : null)
                 .build();
         auditRepository.save(entry);
     }
@@ -802,22 +914,23 @@ public class UserCommandService {
 
     private ObjectNode buildUserRegisteredPayload(User user) {
         return objectMapper.createObjectNode()
-                .put("userId", user.getUserId().toString())
-                .put("email", user.getEmail())
-                .put("fullName", user.getFullName())
+                .put("userId",      user.getUserId().toString())
+                .put("email",       user.getEmail())
+                .put("fullName",    user.getFullName())
                 .put("phoneNumber", user.getPhoneNumber())
-                .put("country", user.getCountry())
-                .put("createdAt", user.getCreatedAt().toString());
+                .put("country",     user.getCountry())
+                .put("createdAt",   user.getCreatedAt().toString());
     }
 
-    private ObjectNode buildLoginSuccessPayload(User user, Session session,
+    private ObjectNode buildLoginSuccessPayload(User user,
+                                                Session session,
                                                 String ipAddress) {
         return objectMapper.createObjectNode()
-                .put("userId", user.getUserId().toString())
-                .put("sessionId", session.getSessionId().toString())
-                .put("ipAddress", ipAddress)
+                .put("userId",            user.getUserId().toString())
+                .put("sessionId",         session.getSessionId().toString())
+                .put("ipAddress",         ipAddress)
                 .put("deviceFingerprint", session.getDeviceFingerprint())
-                .put("loginAt", Instant.now().toString());
+                .put("loginAt",           Instant.now().toString());
     }
 
     private ObjectNode buildKycInitiatedPayload(UUID userId,
@@ -825,19 +938,19 @@ public class UserCommandService {
                                                 String documentType,
                                                 String s3Path) {
         return objectMapper.createObjectNode()
-                .put("userId", userId.toString())
-                .put("verificationId", verificationId.toString())
-                .put("documentType", documentType)
-                .put("s3Path", s3Path)
-                .put("initiatedAt", Instant.now().toString());
+                .put("userId",          userId.toString())
+                .put("verificationId",  verificationId.toString())
+                .put("documentType",    documentType)
+                .put("s3Path",          s3Path)
+                .put("initiatedAt",     Instant.now().toString());
     }
 
     private ObjectNode buildIdentityVerifiedPayload(UUID userId,
                                                     UUID verificationId) {
         return objectMapper.createObjectNode()
-                .put("userId", userId.toString())
+                .put("userId",         userId.toString())
                 .put("verificationId", verificationId.toString())
-                .put("verifiedAt", Instant.now().toString());
+                .put("verifiedAt",     Instant.now().toString());
     }
 
     private ObjectNode buildIdentityRejectedPayload(
@@ -846,18 +959,17 @@ public class UserCommandService {
             String userMessage, boolean permanent) {
 
         var node = objectMapper.createObjectNode()
-                .put("userId", userId.toString())
-                .put("verificationId", verificationId.toString())
-                .put("attempt", attempt)
+                .put("userId",            userId.toString())
+                .put("verificationId",    verificationId.toString())
+                .put("attempt",           attempt)
                 .put("attemptsRemaining", remaining)
-                .put("userMessage", userMessage)
-                .put("isPermanent", permanent)
-                .put("rejectedAt", Instant.now().toString());
+                .put("userMessage",       userMessage)
+                .put("isPermanent",       permanent)
+                .put("rejectedAt",        Instant.now().toString());
 
         var reasonsArray = objectMapper.createArrayNode();
         reasons.forEach(reasonsArray::add);
         node.set("failureReasons", reasonsArray);
-
         return node;
     }
 
@@ -866,8 +978,7 @@ public class UserCommandService {
         String[] parts = email.split("@");
         String local = parts[0];
         return (local.length() > 1
-                ? local.charAt(0) + "***"
-                : "***")
+                ? local.charAt(0) + "***" : "***")
                 + "@" + parts[1];
     }
 

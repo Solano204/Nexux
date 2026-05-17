@@ -1,5 +1,6 @@
 package com.nexus.identity.infrastructure.aws;
 
+import com.nexus.identity.application.command.DocumentUploadException;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;

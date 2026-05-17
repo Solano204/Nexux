@@ -1,5 +1,6 @@
 package com.nexus.identity.domain.model;
 
+import com.nexus.identity.domain.model.enums.UserStatus;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.JdbcTypeCode;

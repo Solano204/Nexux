@@ -1,5 +1,6 @@
 package com.nexus.identity.application.query;
 
+import com.nexus.identity.application.command.UserNotFoundException;
 import com.nexus.identity.domain.model.KycVerification;
 import com.nexus.identity.domain.model.Session;
 import com.nexus.identity.domain.model.User;

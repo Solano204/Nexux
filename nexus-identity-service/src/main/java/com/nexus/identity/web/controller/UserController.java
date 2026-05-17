@@ -1,5 +1,6 @@
 package com.nexus.identity.web.controller;
 
+import com.nexus.identity.application.command.UnauthorizedException;
 import com.nexus.identity.application.command.UserCommandService;
 import com.nexus.identity.application.query.UserQueryService;
 import com.nexus.identity.web.dto.request.*;

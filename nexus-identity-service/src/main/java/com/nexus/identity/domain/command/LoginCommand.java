@@ -1,4 +1,13 @@
 package com.nexus.identity.domain.command;
 
-public class LoginCommand {
-}
+/**
+ * LoginCommand — authenticates a user by email + password.
+ */
+public record LoginCommand(
+        String email,
+        String password,
+        String deviceFingerprint,
+        String ipAddress,
+        String userAgent,
+        String traceId
+) {}
