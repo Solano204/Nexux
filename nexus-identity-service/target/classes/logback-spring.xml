@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <springProperty name="appName"
+                    source="spring.application.name"
+                    defaultValue="nexus-identity-service"/>
+
+    <appender name="CONSOLE"
+              class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <pattern>
+                %d{yyyy-MM-dd HH:mm:ss.SSS}
+                [%thread]
+                %-5level
+                traceId=%X{traceId:-no-trace}
+                spanId=%X{spanId:-no-span}
+                service=${appName}
+                %logger{36}
+                - %msg%n
+            </pattern>
+        </encoder>
+    </appender>
+
+    <!-- LOKI appender — sends structured logs to Loki -->
+    <appender name="LOKI"
+              class="com.github.loki4j.logback.Loki4jAppender">
+        <http>
+            <url>${LOKI_URL:http://nexus-loki:3100/loki/api/v1/push}</url>
+        </http>
+        <format>
+            <label>
+                <pattern>
+                    service=${appName},level=%level,
+                    traceId=%X{traceId:-no-trace}
+                </pattern>
+            </label>
+            <message class="com.github.loki4j.logback.JsonLayout">
+                <pattern>
+                    %d{yyyy-MM-dd HH:mm:ss.SSS}
+                    traceId=%X{traceId:-no-trace}
+                    spanId=%X{spanId:-no-span}
+                    [%thread] %-5level %logger{36} - %msg%n
+                </pattern>
+            </message>
+        </format>
+    </appender>
+
+    <appender name="ASYNC_LOKI"
+              class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="LOKI"/>
+        <queueSize>10000</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+    </appender>
+
+    <logger name="com.nexus.identity" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_LOKI"/>
+    </logger>
+
+    <logger name="org.springframework.security" level="WARN"/>
+    <logger name="org.hibernate" level="WARN"/>
+    <logger name="com.amazonaws" level="WARN"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_LOKI"/>
+    </root>
+
+</configuration>

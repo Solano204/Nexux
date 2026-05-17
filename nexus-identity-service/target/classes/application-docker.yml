@@ -1,0 +1,114 @@
+# ══════════════════════════════════════════════════════════════
+# nexus-identity-service — DOCKER profile
+# Active when: SPRING_PROFILES_ACTIVE=docker
+# Set by Dockerfile ENTRYPOINT: -Dspring.profiles.active=docker
+# ══════════════════════════════════════════════════════════════
+
+spring:
+  cloud:
+    config:
+      uri: http://nexus-config-service:8888
+      enabled: true
+      fail-fast: true
+      retry:
+        max-attempts: 10
+        initial-interval: 2000
+        max-interval: 10000
+        multiplier: 1.5
+    bus:
+      enabled: true
+
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5432/nexus_identity}
+    username: ${POSTGRES_USER:nexus}
+    password: ${POSTGRES_PASSWORD:}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      pool-name: nexus-identity-docker-pool
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    validate-on-migrate: true
+
+  data:
+    redis:
+      host: nexus-redis
+      port: 6379
+      password: ${REDIS_PASSWORD:}
+      timeout: 100ms
+
+  kafka:
+    bootstrap-servers: nexus-kafka:9092
+    consumer:
+      group-id: identity-service-saga-commands
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      isolation-level: read_committed
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.3
+
+server:
+  port: 8083
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://nexus-discovery-service:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+    health-check-url-path: /actuator/health
+
+nexus:
+  jwt:
+    keystore:
+      path: ${JWT_KEYSTORE_PATH:/app/keys/nexus-identity.jks}
+      password: ${JWT_KEYSTORE_PASSWORD:changeme}
+    access-token-expiry-seconds: 900
+    issuer: nexus-identity-service
+    audience: nexus-platform
+    key:
+      rotation-days: 90
+      rotation-check-hours: 24
+
+  aws:
+    region: ${AWS_REGION:us-east-1}
+    endpoint-override: ${AWS_ENDPOINT_OVERRIDE:}
+    access-key-id: ${AWS_ACCESS_KEY_ID:}
+    secret-access-key: ${AWS_SECRET_ACCESS_KEY:}
+    kyc-bucket: ${KYC_DOCUMENTS_BUCKET:nexus-kyc-documents}
+    kyc-queue-url: ${KYC_SQS_QUEUE_URL:}
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://nexus-zipkin:9411/api/v2/spans
+
+logging:
+  level:
+    com.nexus.identity: INFO
+    org.springframework.security: WARN
+    org.hibernate: WARN
