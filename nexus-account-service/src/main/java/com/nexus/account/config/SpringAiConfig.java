@@ -1,36 +1,39 @@
 package com.nexus.account.config;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.*;
+import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
+import org.springframework.ai.chat.client.advisor.RetrievalAugmentationAdvisor;
+import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
+import org.springframework.ai.chat.client.advisor.VectorStoreChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.InMemoryChatMemory;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.OpenAiEmbeddingModel;
-import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
 import org.springframework.ai.rag.generation.augmentation.ContextualQueryAugmenter;
-import org.springframework.ai.rag.postprocessing.RerankPostProcessor;
-import org.springframework.ai.rag.query.expansion.MultiQueryExpander;
-import org.springframework.ai.rag.query.retrieval.VectorStoreDocumentRetriever;
+import org.springframework.ai.rag.preretrieval.query.expansion.MultiQueryExpander;
+import org.springframework.ai.rag.retrieval.search.VectorStoreDocumentRetriever;
 import org.springframework.ai.vectorstore.PgVectorStore;
-import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Spring AI Configuration — Account Advisor.
+ * SpringAiConfig — Account Advisor RAG pipeline.
  *
  * Implements the Advanced RAG pipeline from Section 10:
- * - Domain synonym transformation for financial terms
  * - Multi-query expansion (4 paraphrases)
- * - pgvector similarity search (top 20)
- * - Cohere reranking (top 8)
- * - Neighbor stitch (temporal context)
- * - Citation headers
+ * - pgvector similarity search (top 20, cosine distance)
+ * - Contextual query augmentation (allows empty context)
  *
  * Hybrid memory from Section 7:
- * - JDBC window memory (last 5 exchanges)
+ * - In-memory window memory (last 5 exchanges per session)
  * - pgvector semantic memory (relevant past sessions)
+ *
+ * Spring AI version: 1.0.0-M6
+ * Package mappings verified against official 1.0.0-M6 javadoc:
+ * - RetrievalAugmentationAdvisor → org.springframework.ai.chat.client.advisor
+ * - VectorStoreDocumentRetriever → org.springframework.ai.rag.retrieval.search
+ * - MultiQueryExpander → org.springframework.ai.rag.preretrieval.query.expansion
+ * - ContextualQueryAugmenter → org.springframework.ai.rag.generation.augmentation
  */
 @Configuration
 public class SpringAiConfig {
@@ -58,15 +61,7 @@ public class SpringAiConfig {
                                         .vectorStore(transactionVectorStore)
                                         .topK(20)
                                         .similarityThreshold(0.65)
-                                        // Security: user only sees their own transactions
-                                        // filterExpression is set dynamically per request
                                         .build())
-                        .documentPostProcessors(
-                                // Cohere reranker — top 8 most relevant
-                                new RerankPostProcessor(8),
-                                // Citation headers for transaction references
-                                new CitationHeaderPostProcessor()
-                        )
                         .queryAugmenter(
                                 ContextualQueryAugmenter.builder()
                                         .allowEmptyContext(true)
@@ -85,18 +80,18 @@ public class SpringAiConfig {
 
         return ChatClient.builder(chatModel)
                 .defaultSystem("""
-                You are a personal financial advisor for Nexus Bank.
-                You have access to this user's actual transaction history.
+                    You are a personal financial advisor for Nexus Bank.
+                    You have access to this user's actual transaction history.
 
-                Rules:
-                - Give specific, quantified advice based on the provided data
-                - Always cite specific transactions when making recommendations
-                - Use MXN currency with 2 decimal places
-                - Be encouraging and constructive, never judgmental
-                - If asked about savings goals, reference any goals from memory
-                - Always recommend setting up automatic savings when applicable
-                - Respond in the same language as the user's question
-                """)
+                    Rules:
+                    - Give specific, quantified advice based on the provided data
+                    - Always cite specific transactions when making recommendations
+                    - Use MXN currency with 2 decimal places
+                    - Be encouraging and constructive, never judgmental
+                    - If asked about savings goals, reference any goals from memory
+                    - Always recommend setting up automatic savings when applicable
+                    - Respond in the same language as the user's question
+                    """)
                 .defaultOptions(OpenAiChatOptions.builder()
                         .model("gpt-4o-mini")
                         .temperature(0.7)
@@ -104,7 +99,7 @@ public class SpringAiConfig {
                         .build())
                 .defaultAdvisors(
                         new SimpleLoggerAdvisor(),
-                        windowMemory,        // Section 7: JDBC window
+                        windowMemory,        // Section 7: window memory
                         semanticMemory,      // Section 7: pgvector semantic
                         ragAdvisor           // Section 10: Advanced RAG
                 )
@@ -114,28 +109,5 @@ public class SpringAiConfig {
     @Bean
     public ChatMemory accountAdvisorChatMemory() {
         return new InMemoryChatMemory();
-    }
-
-    /**
-     * Simple citation header post-processor.
-     * Prepends [account: X, date: Y, category: Z] to each document.
-     */
-    static class CitationHeaderPostProcessor implements
-            org.springframework.ai.rag.postprocessing.DocumentPostProcessor {
-
-        @Override
-        public List<org.springframework.ai.document.Document> process(
-                List<org.springframework.ai.document.Document> docs) {
-            return docs.stream().map(doc -> {
-                var metadata = doc.getMetadata();
-                String header = String.format("[account: %s, date: %s, " +
-                                "category: %s] ",
-                        metadata.getOrDefault("accountId", "unknown"),
-                        metadata.getOrDefault("date", "unknown"),
-                        metadata.getOrDefault("category", "unknown"));
-                return new org.springframework.ai.document.Document(
-                        header + doc.getContent(), doc.getMetadata());
-            }).toList();
-        }
     }
 }

@@ -2,6 +2,10 @@ package com.nexus.account.application.command;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.nexus.account.domain.exception.AccountFrozenException;
+import com.nexus.account.domain.exception.AccountingIntegrityException;
+import com.nexus.account.domain.exception.DailyLimitExceededException;
+import com.nexus.account.domain.exception.InsufficientFundsException;
 import com.nexus.account.domain.model.*;
 import com.nexus.account.domain.model.enums.*;
 import com.nexus.account.infrastructure.mongodb.AccountAnalyticsDocument;
@@ -11,6 +15,7 @@ import com.nexus.account.infrastructure.redis.*;
 import com.nexus.account.web.dto.request.*;
 import com.nexus.account.web.dto.response.*;
 import io.micrometer.core.instrument.*;
+import io.micrometer.core.instrument.Timer;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.tracing.Tracer;
@@ -22,7 +27,10 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.StructuredTaskScope;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Account Command Service — CQRS Write Side.
@@ -124,25 +132,26 @@ public class AccountCommandService {
     }
 
     // ══════════════════════════════════════════════════════════
-    // ACCOUNT CREATION — Java 25 Structured Concurrency
+    // ACCOUNT CREATION — CompletableFuture parallel tasks
     // ══════════════════════════════════════════════════════════
 
     /**
      * Creates checking + savings accounts for a newly KYC-approved user.
      *
-     * Uses Java 25 Structured Concurrency (ShutdownOnFailure):
-     * - Operation A: PostgreSQL account records (2 accounts, 1 transaction)
-     * - Operation B: MongoDB analytics documents (both accounts)
-     * - Operation C: Redis balance cache warm-up
+     * Runs three tasks in parallel using CompletableFuture (allOf, fail-fast):
+     * - Task A: PostgreSQL account records (2 accounts, 1 transaction)
+     * - Task B: MongoDB analytics documents (both accounts)
+     * - Task C: Redis balance cache warm-up
      *
-     * If ANY operation fails → all are rolled back.
+     * If ANY task fails, the exception is rethrown and the caller is
+     * responsible for compensating (e.g. via SAGA rollback).
      */
     public List<AccountCreatedResponse> createDefaultAccounts(
             UUID userId, String currency, String traceId)
             throws Exception {
 
         Observation obs = Observation.createNotStarted(
-                "account.create.structured", observationRegistry).start();
+                "account.create.parallel", observationRegistry).start();
 
         try {
             Account checking = buildDefaultAccount(
@@ -150,31 +159,45 @@ public class AccountCommandService {
             Account savings = buildDefaultAccount(
                     userId, AccountType.SAVINGS, currency);
 
-            List<Account> createdAccounts;
+            // Use a virtual-thread executor when available (Java 21+),
+            // otherwise fall back to a cached thread pool.
+            ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
-            try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
+            // Task A: PostgreSQL write (two accounts, atomic transaction)
+            CompletableFuture<List<Account>> pgTask = CompletableFuture
+                    .supplyAsync(() ->
+                                    saveAccountsTransactionally(checking, savings, traceId),
+                            executor);
 
-                // Task A: PostgreSQL write (two accounts, atomic transaction)
-                var pgTask = scope.fork(() ->
-                        saveAccountsTransactionally(checking, savings, traceId));
+            // Task B: MongoDB analytics init
+            CompletableFuture<Void> mongoTask = CompletableFuture
+                    .runAsync(() -> {
+                        initAnalyticsDocument(checking.getAccountId(), userId);
+                        initAnalyticsDocument(savings.getAccountId(), userId);
+                    }, executor);
 
-                // Task B: MongoDB analytics init
-                var mongoTask = scope.fork(() -> {
-                    initAnalyticsDocument(checking.getAccountId(), userId);
-                    initAnalyticsDocument(savings.getAccountId(), userId);
-                    return null;
-                });
+            // Task C: Redis cache warm-up
+            CompletableFuture<Void> redisTask = CompletableFuture
+                    .runAsync(() -> {
+                        warmBalanceCache(checking);
+                        warmBalanceCache(savings);
+                    }, executor);
 
-                // Task C: Redis cache warm-up
-                var redisTask = scope.fork(() -> {
-                    warmBalanceCache(checking);
-                    warmBalanceCache(savings);
-                    return null;
-                });
-
-                scope.join().throwIfFailed();
-                createdAccounts = pgTask.get();
+            // Wait for all three; any failure surfaces immediately.
+            try {
+                CompletableFuture
+                        .allOf(pgTask, mongoTask, redisTask)
+                        .join();   // throws CompletionException on any failure
+            } catch (CompletionException ce) {
+                // Unwrap so callers see the original exception type.
+                Throwable cause = ce.getCause();
+                if (cause instanceof Exception e) throw e;
+                throw ce;
+            } finally {
+                executor.shutdown();
             }
+
+            List<Account> createdAccounts = pgTask.get();
 
             obs.event(Observation.Event.of("accounts.created.success"));
             log.info("Created {} default accounts for userId={} traceId={}",
@@ -328,15 +351,14 @@ public class AccountCommandService {
             obs.event(Observation.Event.of("reservation.daily_limit"));
             return BalanceOperationResult.failure(
                     "DAILY_LIMIT_EXCEEDED", e.getMessage());
-        } catch (org.springframework.dao.CannotAcquireLockException |
-                 java.sql.SQLException e) {
+        } catch (org.springframework.dao.CannotAcquireLockException e) {
             lockTimeoutCounter.increment();
             obs.event(Observation.Event.of("reservation.lock_timeout"));
             log.warn("Lock timeout for accountId={}: {}",
                     accountId, e.getMessage());
             return BalanceOperationResult.failure(
                     "LOCK_TIMEOUT", "Could not acquire account lock");
-        } catch (AccountingIntegrityException e) {
+        }catch (AccountingIntegrityException e) {
             negativePrevention.increment();
             obs.error(e);
             log.error("CRITICAL accounting integrity violation: {}",

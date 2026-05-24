@@ -1,7 +1,7 @@
 package com.nexus.account.web.controller;
 
-import com.nexus.account.application.command.AccountCommandService;
 import com.nexus.account.application.query.AccountQueryService;
+import com.nexus.account.domain.exception.UnauthorizedException;
 import com.nexus.account.web.dto.response.*;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -18,11 +18,13 @@ import java.util.UUID;
 /**
  * Account Controller — User-facing account management endpoints.
  *
- * GET /api/v1/accounts          — List user's accounts
- * GET /api/v1/accounts/{id}     — Account details
- * GET /api/v1/accounts/{id}/balance  — Balance (Redis-only)
- * GET /api/v1/accounts/{id}/events   — Event history
+ * GET /api/v1/accounts              — List user's accounts
+ * GET /api/v1/accounts/{id}         — Account details
+ * GET /api/v1/accounts/{id}/balance — Balance (Redis-only, fast)
+ * GET /api/v1/accounts/{id}/events  — Event history (paginated)
  * GET /api/v1/accounts/{id}/analytics — MongoDB analytics
+ *
+ * Authentication: X-User-Id header (set by API Gateway after JWT validation)
  */
 @RestController
 @RequestMapping("/api/v1/accounts")

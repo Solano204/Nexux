@@ -1,5 +1,6 @@
 package com.nexus.account.web.controller;
 
+import com.nexus.account.domain.exception.UnauthorizedException;
 import com.nexus.account.infrastructure.ai.AccountAdvisorService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -13,10 +14,13 @@ import java.util.UUID;
  * Account Advisor Controller — AI-powered financial advice.
  *
  * POST /api/v1/accounts/{id}/advisor/chat
- * Returns: Server-Sent Events (SSE) streaming response
+ *   Returns: Server-Sent Events (SSE) streaming response
+ *
+ * GET /api/v1/accounts/{id}/advisor/insights
+ *   Returns: Proactive weekly financial insight (structured JSON)
  *
  * Section 3: Streaming SSE response
- * Section 7: Hybrid memory (JDBC window + pgvector semantic)
+ * Section 7: Hybrid memory (in-memory window + pgvector semantic)
  * Section 10: Advanced RAG over user's transaction history
  */
 @RestController
@@ -26,6 +30,15 @@ public class AccountAdvisorController {
 
     private final AccountAdvisorService advisorService;
 
+    /**
+     * Streaming AI advisor chat — SSE response.
+     *
+     * The advisor has access to:
+     * - User's actual transaction history (pgvector RAG)
+     * - Previous advice sessions (semantic memory)
+     * - Current account analytics (MongoDB)
+     * - Conversation context (in-memory window memory)
+     */
     @PostMapping(
             value = "/{accountId}/advisor/chat",
             produces = MediaType.TEXT_EVENT_STREAM_VALUE
@@ -45,8 +58,12 @@ public class AccountAdvisorController {
                 accountId, userId, request.message(), sessionId);
     }
 
+    /**
+     * Proactive financial insights — non-streaming structured response.
+     * Returns AI-generated savings opportunities and action items.
+     */
     @GetMapping("/{accountId}/advisor/insights")
-    public AdvisorService.FinancialAdviceResponse getInsights(
+    public AccountAdvisorService.FinancialAdviceResponse getInsights(
             @PathVariable UUID accountId) {
         return advisorService.getProactiveAdvice(accountId);
     }

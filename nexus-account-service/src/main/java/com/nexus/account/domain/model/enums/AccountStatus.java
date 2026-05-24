@@ -1,4 +1,7 @@
 package com.nexus.account.domain.model.enums;
-
-public class AccountStatus {
+public enum AccountStatus {
+    PENDING_ACTIVATION,
+    ACTIVE,
+    FROZEN,
+    CLOSED
 }

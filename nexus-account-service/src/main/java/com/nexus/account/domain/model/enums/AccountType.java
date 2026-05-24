@@ -1,4 +1,6 @@
 package com.nexus.account.domain.model.enums;
-
-public class AccountType {
+public enum AccountType {
+    CHECKING,
+    SAVINGS,
+    INVESTMENT
 }

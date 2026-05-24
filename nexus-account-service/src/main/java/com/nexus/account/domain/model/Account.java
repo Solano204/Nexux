@@ -1,5 +1,6 @@
 package com.nexus.account.domain.model;
 
+import com.nexus.account.domain.event.*;
 import com.nexus.account.domain.exception.*;
 import com.nexus.account.domain.model.enums.AccountStatus;
 import com.nexus.account.domain.model.enums.AccountType;

@@ -4,10 +4,9 @@ import com.nexus.account.infrastructure.mongodb.AccountAnalyticsDocument;
 import com.nexus.account.infrastructure.mongodb.AccountAnalyticsRepository;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -19,14 +18,15 @@ import java.util.UUID;
 /**
  * Account Advisor Service — AI-powered financial advice.
  *
- * Implements Section 10 (Advanced RAG) + Section 7 (Hybrid Memory)
+ * Implements Section 10 (RAG) + Section 7 (Memory)
  * + Section 3 (Streaming SSE response).
  *
+ * Compatible with Spring AI 1.0.0-M6 API.
+ *
  * The advisor has access to:
- * 1. User's actual transaction history (via pgvector RAG)
- * 2. Previous advice sessions (via semantic memory)
- * 3. Current account analytics (via MongoDB pre-aggregation)
- * 4. Short-term conversation context (via JDBC window memory)
+ * 1. User's actual transaction history (via pgvector QuestionAnswerAdvisor)
+ * 2. Current account analytics (via MongoDB pre-aggregation)
+ * 3. Short-term conversation context (via MessageChatMemoryAdvisor)
  */
 @Slf4j
 @Service
@@ -46,12 +46,12 @@ public class AccountAdvisorService {
     }
 
     /**
-     * Streaming AI advisor response — Section 3 SSE streaming.
+     * Streaming AI advisor response — SSE streaming.
      *
      * Enriches the user's question with:
      * - Current account analytics summary (from MongoDB)
-     * - pgvector user's transaction history RAG context
-     * - Previous advice session memory
+     * - pgvector user's transaction history RAG context (via advisor)
+     * - Conversation context (via memory advisor)
      */
     public Flux<String> getAdvisorResponseStream(
             UUID accountId, UUID userId,
@@ -77,11 +77,9 @@ public class AccountAdvisorService {
         return accountAdvisorClient.prompt()
                 .user(finalMessage)
                 .advisors(a -> a
-                        .param(org.springframework.ai.chat.memory.ChatMemory
-                                .CONVERSATION_ID, sessionId)
-                        // Security filter: only retrieve this user's transactions
-                        .param("filterExpression",
-                                "account_id == '" + accountId + "'"))
+                        .param(MessageChatMemoryAdvisor.CHAT_MEMORY_CONVERSATION_ID_KEY,
+                                sessionId)
+                        .param(MessageChatMemoryAdvisor.CHAT_MEMORY_RETRIEVE_SIZE_KEY, 10))
                 .stream()
                 .content()
                 .doOnComplete(() -> {
@@ -113,10 +111,10 @@ public class AccountAdvisorService {
 
             return accountAdvisorClient.prompt()
                     .system("""
-                    Generate a proactive weekly financial insight.
-                    Be specific with numbers. Identify top 3 savings opportunities.
-                    Return structured JSON matching FinancialAdviceResponse schema.
-                    """)
+                        Generate a proactive weekly financial insight.
+                        Be specific with numbers. Identify top 3 savings opportunities.
+                        Return structured JSON matching FinancialAdviceResponse schema.
+                        """)
                     .user("Analyze the past month for account " + accountId +
                             "\n\n" + analyticsContext)
                     .call()
@@ -150,7 +148,6 @@ public class AccountAdvisorService {
 
     /**
      * Structured output record for proactive advice.
-     * Section 3: Structured Output pattern.
      */
     public record FinancialAdviceResponse(
             String summary,

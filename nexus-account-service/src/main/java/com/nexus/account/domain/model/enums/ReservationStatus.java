@@ -1,4 +1,7 @@
 package com.nexus.account.domain.model.enums;
-
-public class ReservationStatus {
+public enum ReservationStatus {
+    ACTIVE,
+    RELEASED,
+    FINALIZED,
+    RELEASED_BY_EXPIRY
 }
