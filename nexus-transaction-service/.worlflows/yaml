@@ -1,0 +1,133 @@
+name: Nexus Transaction Service Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'nexus-transaction-service/**'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'nexus-transaction-service/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SERVICE_NAME: nexus-transaction-service
+  JAVA_VERSION: '25'
+  DOCKER_IMAGE: nexusplatform/nexus-transaction-service
+
+jobs:
+
+  unit-tests:
+    name: Unit Tests (State Machine + SAGA Logic)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-transaction-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+      - name: Run Unit Tests
+        run: |
+          mvn test -Dgroups="unit" \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            --no-transfer-progress
+      - uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Unit Tests — ${{ env.SERVICE_NAME }}
+          path: nexus-transaction-service/target/surefire-reports/*.xml
+          reporter: java-junit
+      - uses: actions/cache/save@v4
+        with:
+          path: nexus-transaction-service/target
+          key: compiled-transaction-${{ github.sha }}
+
+  integration-tests:
+    name: Integration Tests (Kafka Streams + ES)
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-transaction-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+      - uses: actions/cache/restore@v4
+        with:
+          path: nexus-transaction-service/target
+          key: compiled-transaction-${{ github.sha }}
+      - name: Run Integration Tests
+        run: |
+          mvn test -Dgroups="integration" \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            --no-transfer-progress
+        env:
+          TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: /var/run/docker.sock
+      - uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Integration Tests — ${{ env.SERVICE_NAME }}
+          path: nexus-transaction-service/target/surefire-reports/*.xml
+          reporter: java-junit
+
+  docker-build:
+    name: Docker Build + Push
+    needs: [unit-tests, integration-tests]
+    if: |
+      always() && !failure() && !cancelled() &&
+      (github.ref == 'refs/heads/main' ||
+       github.ref == 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-transaction-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+      - run: mvn package -DskipTests --no-transfer-progress
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+      - uses: docker/build-push-action@v5
+        with:
+          context: nexus-transaction-service
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-staging:
+    name: Deploy to Staging
+    needs: docker-build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Deploy
+        run: echo "Deploying ${{ env.SERVICE_NAME }}:${{ github.sha }}"

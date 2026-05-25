@@ -7,18 +7,20 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.factory.AbstractGatewayFilterFactory;
+import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.server.reactive.ServerHttpRequestDecorator;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
 /**
@@ -81,15 +83,23 @@ public class WebhookHmacFilter
                             }
 
                             // Rebuild request with body (already consumed)
+                            // Create a DataBuffer from the body bytes
+                            DataBuffer bodyDataBuffer = exchange.getResponse()
+                                    .bufferFactory()
+                                    .wrap(bodyBytes);
+
+                            // Use ServerHttpRequestDecorator to override the body
+                            ServerHttpRequestDecorator decoratedRequest =
+                                    new ServerHttpRequestDecorator(exchange.getRequest()) {
+                                        @Override
+                                        public Flux<DataBuffer> getBody() {
+                                            return Flux.just(bodyDataBuffer);
+                                        }
+                                    };
+
+                            // Mutate exchange with the decorated request
                             ServerWebExchange mutatedExchange = exchange.mutate()
-                                    .request(r -> r.body(
-                                            org.springframework.core.io.buffer.DataBufferUtils
-                                                    .fromInputStream(
-                                                            () -> new java.io.ByteArrayInputStream(bodyBytes),
-                                                            exchange.getResponse().bufferFactory(),
-                                                            bodyBytes.length
-                                                    )
-                                    ))
+                                    .request(decoratedRequest)
                                     .build();
 
                             return chain.filter(mutatedExchange);

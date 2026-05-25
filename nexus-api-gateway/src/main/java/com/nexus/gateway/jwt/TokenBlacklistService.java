@@ -1,151 +1,93 @@
 package com.nexus.gateway.jwt;
 
-import com.auth0.jwk.JwkProvider;
-import com.auth0.jwk.JwkProviderBuilder;
-import com.auth0.jwk.Jwk;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
-import jakarta.annotation.PostConstruct;
-import java.net.URI;
-import java.security.interfaces.RSAPublicKey;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
+import java.time.Duration;
 
 /**
- * JWKS Cache — Caches RSA public keys from Identity Service JWKS endpoint.
+ * Token Blacklist Service — Redis-backed JWT revocation.
  *
- * Key ring pattern: holds BOTH current AND previous key to survive rotation.
- * Subscribes to Redis pubsub channel jwt:keyrotation for immediate refresh.
+ * Architecture decision: Redis EXISTS check on EVERY authenticated request.
+ * Latency: 2-5ms per check (acceptable for financial security).
  *
- * Cache strategy:
- * - In-memory ConcurrentHashMap for sub-millisecond lookup
- * - Scheduled refresh every 60 minutes
- * - Immediate refresh on Redis keyrotation notification
- * - Key not found triggers synchronous refresh before failing
+ * Failure mode: If Redis is unreachable for >100ms, proceeds WITHOUT
+ * revocation check (availability over absolute security during outage).
+ * This is logged as WARN for monitoring.
+ *
+ * Redis key pattern: jwt:blacklist:{jti}
+ * TTL: set equal to remaining token validity (auto-expires when token expires)
  */
 @Slf4j
-@Component
-public class JwksCache {
-
-    @Value("${nexus.gateway.jwt.jwks-uri}")
-    private String jwksUri;
-
-    @Value("${nexus.gateway.jwt.refresh-interval-minutes:60}")
-    private int refreshIntervalMinutes;
-
-    private final ConcurrentHashMap<String, RSAPublicKey> keyRing =
-            new ConcurrentHashMap<>();
+@Service
+@RequiredArgsConstructor
+public class TokenBlacklistService {
 
     private final ReactiveStringRedisTemplate redisTemplate;
     private final ObservationRegistry observationRegistry;
-    private JwkProvider jwkProvider;
 
-    public JwksCache(
-            ReactiveStringRedisTemplate redisTemplate,
-            ObservationRegistry observationRegistry) {
-        this.redisTemplate = redisTemplate;
-        this.observationRegistry = observationRegistry;
-    }
+    @Value("${nexus.gateway.jwt.blacklist.redis-key-prefix:jwt:blacklist:}")
+    private String keyPrefix;
 
-    @PostConstruct
-    public void initialize() {
-        jwkProvider = new JwkProviderBuilder(URI.create(jwksUri).toURL())
-                .cached(10, 24, TimeUnit.HOURS)
-                .rateLimited(10, 1, TimeUnit.MINUTES)
-                .build();
+    @Value("${nexus.gateway.jwt.blacklist.check-timeout-ms:100}")
+    private long checkTimeoutMs;
 
-        refreshKeys();
-        subscribeToKeyRotationEvents();
-        log.info("JWKS cache initialized from: {}", jwksUri);
+    /**
+     * Checks if a JWT is blacklisted (revoked).
+     *
+     * @param jti JWT ID from the token's jti claim
+     * @return Mono<true> if token IS blacklisted (revoked — should be rejected)
+     *         Mono<false> if token is NOT blacklisted (valid — proceed)
+     */
+    public Mono<Boolean> isBlacklisted(String jti) {
+        String redisKey = keyPrefix + jti;
+
+        Observation obs = Observation.createNotStarted(
+                "gateway.jwt.blacklist.check", observationRegistry).start();
+
+        return redisTemplate.hasKey(redisKey)
+                .timeout(Duration.ofMillis(checkTimeoutMs))
+                .doOnNext(blacklisted -> {
+                    if (blacklisted) {
+                        log.warn("Blacklisted token rejected: jti={}", jti);
+                        obs.event(Observation.Event.of("blacklist.hit"));
+                    } else {
+                        obs.event(Observation.Event.of("blacklist.miss"));
+                    }
+                })
+                .onErrorResume(ex -> {
+                    // Redis unavailable — log warning and allow request
+                    // Security trade-off: availability over revocation during outage
+                    log.warn(
+                            "REDIS_UNAVAILABLE: JWT revocation check skipped for jti={}. " +
+                                    "Error: {}", jti, ex.getMessage());
+                    obs.event(Observation.Event.of("blacklist.redis_unavailable"));
+                    return Mono.just(false);  // Allow through — do not block users
+                })
+                .doFinally(signal -> obs.stop());
     }
 
     /**
-     * Returns the RSA public key for the given kid.
-     * Attempts synchronous refresh if kid not found in cache.
-     * Returns null if key cannot be found after refresh.
+     * Adds a JWT to the blacklist.
+     * Called by the Identity Service logout flow (not the gateway itself,
+     * but exposing this allows admin operations).
+     *
+     * @param jti JWT ID to blacklist
+     * @param ttl How long to keep the blacklist entry (= remaining token validity)
      */
-    public RSAPublicKey getPublicKey(String kid) {
-        RSAPublicKey key = keyRing.get(kid);
-        if (key != null) {
-            return key;
-        }
-
-        // Kid not in cache — may be a new key after rotation
-        // Attempt immediate refresh
-        log.info("Kid {} not in cache, attempting refresh", kid);
-        refreshKeys();
-
-        return keyRing.get(kid);
-    }
-
-    @Scheduled(fixedDelayString = "${nexus.gateway.jwt.refresh-interval-minutes:60}",
-            timeUnit = TimeUnit.MINUTES)
-    public void scheduledRefresh() {
-        refreshKeys();
-    }
-
-    private void refreshKeys() {
-        Observation obs = Observation.createNotStarted(
-                "gateway.jwks.refresh", observationRegistry).start();
-
-        try {
-            // The JWKS endpoint returns all current public keys
-            // We iterate through available kids and cache them
-            // Auth0 JwkProvider fetches and caches the JWKS document
-            for (String kid : fetchAvailableKids()) {
-                try {
-                    Jwk jwk = jwkProvider.get(kid);
-                    RSAPublicKey publicKey = (RSAPublicKey) jwk.getPublicKey();
-                    keyRing.put(kid, publicKey);
-                    log.debug("Cached public key for kid: {}", kid);
-                } catch (Exception e) {
-                    log.warn("Failed to cache key for kid {}: {}", kid, e.getMessage());
-                }
-            }
-
-            obs.event(Observation.Event.of("jwks.refresh.success"));
-            log.info("JWKS cache refreshed. Keys in ring: {}", keyRing.size());
-
-        } catch (Exception e) {
-            obs.error(e);
-            log.error("JWKS refresh failed: {}", e.getMessage());
-        } finally {
-            obs.stop();
-        }
-    }
-
-    private void subscribeToKeyRotationEvents() {
-        // Subscribe to Redis pubsub channel published by Identity Service
-        // on every key rotation
-        redisTemplate.listenToChannel("jwt:keyrotation")
-                .doOnNext(message -> {
-                    log.info("Key rotation event received, refreshing JWKS cache");
-                    refreshKeys();
-                })
-                .subscribe(
-                        msg -> {},
-                        error -> log.error("Redis pubsub error: {}", error.getMessage()),
-                        () -> log.info("Redis pubsub subscription ended")
-                );
-    }
-
-    private java.util.List<String> fetchAvailableKids() {
-        // In production: parse the JWKS document directly to get all kids
-        // For now: use a known kid from environment or fetch the live document
-        try {
-            // Trigger a fetch of the live JWKS document to get current kids
-            // The JwkProvider internally parses the JWKS JSON
-            return java.util.List.of();
-        } catch (Exception e) {
-            log.warn("Could not fetch kid list: {}", e.getMessage());
-            return java.util.List.of();
-        }
+    public Mono<Void> blacklist(String jti, Duration ttl) {
+        String redisKey = keyPrefix + jti;
+        return redisTemplate.opsForValue()
+                .set(redisKey, "1", ttl)
+                .then()
+                .doOnSuccess(v -> log.info("JWT blacklisted: jti={}", jti))
+                .doOnError(e -> log.error("Failed to blacklist JWT: jti={} error={}",
+                        jti, e.getMessage()));
     }
 }

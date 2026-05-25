@@ -1,8 +1,5 @@
 package com.nexus.gateway.filter;
 
-public class RequestLoggingFilter {
-}
-package com.nexus.gateway.filter;
 
 import io.micrometer.tracing.Tracer;
 import lombok.RequiredArgsConstructor;

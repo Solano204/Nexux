@@ -1,0 +1,102 @@
+# ══════════════════════════════════════════════════════════════
+# nexus-identity-service — TEST profile
+# Used by all @SpringBootTest integration and unit tests
+# ══════════════════════════════════════════════════════════════
+
+spring:
+  cloud:
+    config:
+      enabled: false
+      fail-fast: false
+    bus:
+      enabled: false
+
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    # Overridden by @DynamicPropertySource with Testcontainers PostgreSQL URL
+    url: jdbc:postgresql://localhost:5432/nexus_identity_test
+    username: nexus_test
+    password: nexus_test
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
+      pool-name: nexus-identity-test-pool
+
+  jpa:
+    hibernate:
+      ddl-auto: validate    # Flyway runs migrations, Hibernate validates
+    show-sql: false         # Suppress SQL noise in test output
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    clean-disabled: false   # Allow clean in tests (re-run migrations)
+
+  data:
+    redis:
+      host: localhost        # Overridden by @DynamicPropertySource
+      port: 6379
+      password: test-password
+      timeout: 1000ms        # Generous timeout for CI
+
+  cache:
+    type: redis
+    redis:
+      time-to-live: 30000
+
+  kafka:
+    bootstrap-servers: localhost:9092   # Overridden or embedded Kafka
+    consumer:
+      group-id: identity-test-group
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+
+  ai:
+    openai:
+      api-key: test-key-not-real   # Tests mock the AI client
+
+server:
+  port: 0   # Random port for @SpringBootTest
+
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false
+
+nexus:
+  jwt:
+    keystore:
+      path: /tmp/test-nexus-identity.jks
+      password: test-keystore-password
+    access-token-expiry-seconds: 300
+    issuer: nexus-identity-service
+    audience: nexus-platform
+    key:
+      rotation-days: 90
+      rotation-check-hours: 9999   # Disable rotation in tests
+
+  aws:
+    region: us-east-1
+    endpoint-override: http://localhost:4566  # LocalStack
+    access-key-id: test
+    secret-access-key: test
+    kyc-bucket: nexus-kyc-test
+    kyc-queue-url: http://localhost:4566/000000000000/nexus-kyc-test
+
+management:
+  tracing:
+    enabled: false   # No Zipkin in tests
+
+logging:
+  level:
+    com.nexus.identity: DEBUG
+    org.springframework.security: INFO
+    org.hibernate.SQL: WARN
+    org.testcontainers: WARN

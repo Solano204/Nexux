@@ -1,0 +1,93 @@
+<!-- src/main/resources/logback-spring.xml -->
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <springProperty name="appName"
+                    source="spring.application.name"
+                    defaultValue="nexus-api-gateway"/>
+
+    <springProperty name="logLevel"
+                    source="logging.level.root"
+                    defaultValue="INFO"/>
+
+    <!-- ══════════════════════════════════════════════════════════
+         CONSOLE APPENDER
+         Pattern includes traceId and spanId for Zipkin correlation
+         Every log line linkable to a distributed trace
+         ══════════════════════════════════════════════════════════ -->
+    <appender name="CONSOLE"
+              class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <pattern>
+                %d{yyyy-MM-dd HH:mm:ss.SSS}
+                [%thread]
+                %-5level
+                traceId=%X{traceId:-no-trace}
+                spanId=%X{spanId:-no-span}
+                service=${appName}
+                %logger{36}
+                - %msg%n
+            </pattern>
+        </encoder>
+    </appender>
+
+    <!-- ══════════════════════════════════════════════════════════
+         LOKI APPENDER — Ships logs to Loki for Grafana querying
+         Labels: service, level, traceId
+         ══════════════════════════════════════════════════════════ -->
+    <appender name="LOKI"
+              class="com.github.loki4j.logback.Loki4jAppender">
+        <http>
+            <url>${LOKI_URL:http://nexus-loki:3100/loki/api/v1/push}</url>
+        </http>
+        <format>
+            <label>
+                <pattern>
+                    service=${appName},
+                    level=%level,
+                    traceId=%X{traceId:-no-trace}
+                </pattern>
+            </label>
+            <message class="com.github.loki4j.logback.JsonLayout">
+                <pattern>
+                    %d{yyyy-MM-dd HH:mm:ss.SSS}
+                    traceId=%X{traceId:-no-trace}
+                    spanId=%X{spanId:-no-span}
+                    [%thread]
+                    %-5level
+                    %logger{36}
+                    - %msg%n
+                </pattern>
+            </message>
+        </format>
+    </appender>
+
+    <!-- Async wrapper to avoid blocking Netty event loop threads -->
+    <appender name="ASYNC_LOKI"
+              class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="LOKI"/>
+        <queueSize>10000</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+    </appender>
+
+    <!-- Service-specific loggers -->
+    <logger name="com.nexus.gateway" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_LOKI"/>
+    </logger>
+
+    <!-- Reduce noise from framework loggers -->
+    <logger name="org.springframework.cloud.gateway" level="WARN"/>
+    <logger name="org.springframework.security" level="WARN"/>
+    <logger name="io.netty" level="WARN"/>
+    <logger name="reactor.netty" level="WARN"/>
+    <logger name="io.lettuce" level="WARN"/>
+    <logger name="com.netflix.eureka" level="WARN"/>
+    <logger name="io.github.resilience4j" level="INFO"/>
+
+    <root level="${logLevel}">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_LOKI"/>
+    </root>
+
+</configuration>
