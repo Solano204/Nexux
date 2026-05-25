@@ -8,11 +8,16 @@
         <outputRelativeToContentRoot value="true" />
         <module name="nexus-ledger-service" />
         <module name="gateway" />
+        <module name="nexus-api-gateway" />
       </profile>
     </annotationProcessing>
     <bytecodeTargetLevel>
       <module name="fraud" target="25" />
-      <module name="nexus-api-gateway" target="25" />
+      <module name="nexus-account-service" target="25" />
+      <module name="nexus-financial-platform" target="25" />
+      <module name="nexus-fraud-service" target="25" />
+      <module name="nexus-identity-service" target="25" />
+      <module name="nexus-transaction-service" target="25" />
     </bytecodeTargetLevel>
   </component>
   <component name="JavacSettings">
