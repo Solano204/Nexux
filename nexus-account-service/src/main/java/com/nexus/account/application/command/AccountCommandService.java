@@ -12,7 +12,6 @@ import com.nexus.account.infrastructure.mongodb.AccountAnalyticsDocument;
 import com.nexus.account.infrastructure.mongodb.AccountAnalyticsRepository;
 import com.nexus.account.infrastructure.persistence.*;
 import com.nexus.account.infrastructure.redis.*;
-import com.nexus.account.web.dto.request.*;
 import com.nexus.account.web.dto.response.*;
 import io.micrometer.core.instrument.*;
 import io.micrometer.core.instrument.Timer;
