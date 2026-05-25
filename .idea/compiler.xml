@@ -9,6 +9,16 @@
         <module name="gateway" />
         <module name="fraud" />
       </profile>
+      <profile name="Annotation profile for nexus-api-gateway" enabled="true">
+        <sourceOutputDir name="target/generated-sources/annotations" />
+        <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
+        <outputRelativeToContentRoot value="true" />
+        <processorPath useClasspath="false">
+          <entry name="$MAVEN_REPOSITORY$/org/projectlombok/lombok/1.18.36/lombok-1.18.36.jar" />
+          <entry name="$MAVEN_REPOSITORY$/org/projectlombok/lombok/1.18.36/lombok-1.18.36.jar" />
+        </processorPath>
+        <module name="nexus-api-gateway" />
+      </profile>
       <profile name="Annotation profile for Nexus Financial Platform" enabled="true">
         <sourceOutputDir name="target/generated-sources/annotations" />
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
@@ -16,7 +26,7 @@
         <processorPath useClasspath="false">
           <entry name="$MAVEN_REPOSITORY$/org/projectlombok/lombok/1.18.36/lombok-1.18.36.jar" />
         </processorPath>
-        <module name="nexus-api-gateway" />
+        <module name="nexus-ledger-service" />
         <module name="nexus-transaction-service" />
         <module name="nexus-account-service" />
         <module name="nexus-fraud-service" />

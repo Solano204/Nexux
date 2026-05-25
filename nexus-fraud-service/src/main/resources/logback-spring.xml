@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- ═══ Console appender — plain text for local dev ═══ -->
+    <springProfile name="!docker">
+        <appender name="CONSOLE"
+                  class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>
+                    %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
+                    traceId=%X{traceId} spanId=%X{spanId}
+                    service=nexus-fraud-service %logger{36} - %msg%n
+                </pattern>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <!-- ═══ JSON appender — structured for Loki in Docker ═══ -->
+    <springProfile name="docker">
+        <appender name="JSON_CONSOLE"
+                  class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <customFields>
+                    {"service":"nexus-fraud-service",
+                    "environment":"${ENVIRONMENT:-local}"}
+                </customFields>
+                <includeMdcKeyNames>traceId,spanId</includeMdcKeyNames>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="JSON_CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <!-- Service-specific log levels -->
+    <logger name="com.nexus.fraud" level="INFO"/>
+    <logger name="com.nexus.fraud.agent" level="DEBUG"/>
+    <logger name="org.springframework.ai" level="INFO"/>
+    <logger name="org.apache.kafka" level="WARN"/>
+    <logger name="io.lettuce" level="WARN"/>
+    <logger name="org.hibernate.SQL" level="WARN"/>
+    <logger name="org.flywaydb" level="INFO"/>
+
+</configuration>

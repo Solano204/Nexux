@@ -1,3 +1,7 @@
+-- ══════════════════════════════════════════════════════════════
+-- OUTBOX TABLE — Transactional event staging for Debezium CDC
+-- ══════════════════════════════════════════════════════════════
+
 CREATE TABLE outbox (
     outbox_id       UUID        NOT NULL DEFAULT gen_random_uuid(),
     aggregate_type  VARCHAR(100) NOT NULL,
