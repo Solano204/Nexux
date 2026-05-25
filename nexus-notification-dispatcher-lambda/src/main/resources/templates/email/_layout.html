@@ -1,0 +1,56 @@
+<!-- src/main/resources/templates/email/_layout.html -->
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <title>Nexus Bank</title>
+    <style>
+        body { font-family: -apple-system, Segoe UI, Arial, sans-serif;
+               margin: 0; background: #f3f4f6; }
+        .wrapper { max-width: 600px; margin: 0 auto;
+                   background: #ffffff; border-radius: 8px;
+                   overflow: hidden; }
+        .header { background: #1a1a2e; padding: 20px 24px;
+                  text-align: center; }
+        .logo { color: #ffffff; font-size: 22px;
+                font-weight: 700; letter-spacing: 1px; }
+        .body { padding: 32px 24px; color: #111827;
+                font-size: 15px; line-height: 1.6; }
+        .cta { display: inline-block; margin: 24px 0;
+               padding: 14px 32px; border-radius: 8px;
+               font-weight: 700; font-size: 15px;
+               text-decoration: none; }
+        /* Tone-based CTA colors */
+        .t-POSITIVE   .cta { background: #16a34a; color: #fff; }
+        .t-URGENT     .cta { background: #dc2626; color: #fff; }
+        .t-WARNING    .cta { background: #d97706; color: #fff; }
+        .t-INFORMATIONAL .cta { background: #2563eb; color: #fff; }
+        .t-CELEBRATORY .cta { background: #7c3aed; color: #fff; }
+        .footer { background: #f9fafb; padding: 16px 24px;
+                  font-size: 12px; color: #6b7280;
+                  border-top: 1px solid #e5e7eb; }
+        .footer a { color: #6b7280; }
+    </style>
+</head>
+<body>
+<div th:class="'wrapper t-' + ${tone}">
+    <div class="header">
+        <div class="logo">🏦 Nexus Bank</div>
+    </div>
+    <div class="body">
+        <div th:utext="${bodyContent}"></div>
+        <a th:if="${deepLinkUrl and callToAction}"
+           th:href="${deepLinkUrl}"
+           th:text="${callToAction}"
+           class="cta">Ver en la app</a>
+    </div>
+    <div class="footer">
+        <p>© 2025 Nexus Bank · Ciudad de México, México</p>
+        <p><a th:href="${unsubscribeUrl}">
+            Cancelar notificaciones de este tipo
+        </a></p>
+    </div>
+</div>
+</body>
+</html>

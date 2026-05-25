@@ -1,0 +1,191 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Nexus Notification Dispatcher Lambda.
+  SNS-triggered: receives dispatch requests from Plane A notification service.
+  EMAIL: renders Thymeleaf templates + sends via AWS SES v2.
+  SMS: publishes to E.164 phone numbers via AWS SNS.
+  PUSH: publishes to device endpoint ARNs (APNs/FCM) via AWS SNS.
+  Reports delivery status back to Plane A via nexus-delivery-status SQS queue.
+
+Parameters:
+  FromEmailAddress:
+    Type: String
+    Default: notificaciones@nexusbank.com
+  FromEmailName:
+    Type: String
+    Default: Nexus Bank
+  UnsubscribeBaseUrl:
+    Type: String
+    Default: https://app.nexusbank.com
+  IosPlatformApplicationArn:
+    Type: String
+    Default: ""
+    Description: SNS platform application ARN for APNs (iOS push)
+  AndroidPlatformApplicationArn:
+    Type: String
+    Default: ""
+    Description: SNS platform application ARN for FCM (Android push)
+
+Globals:
+  Function:
+    Runtime: java21
+    MemorySize: 512
+    Timeout: 30
+    Tracing: Active
+    Environment:
+      Variables:
+        AWS_REGION_NAME: !Ref AWS::Region
+        FROM_EMAIL_ADDRESS: !Ref FromEmailAddress
+        FROM_EMAIL_NAME: !Ref FromEmailName
+        UNSUBSCRIBE_BASE_URL: !Ref UnsubscribeBaseUrl
+        DELIVERY_STATUS_QUEUE_URL: !Ref DeliveryStatusQueue
+        SMS_SENDER_ID: "NEXUSBNK"          # Max 11 alphanumeric chars
+        MAX_SMS_LENGTH: "160"
+        SES_CONFIGURATION_SET: nexus-transactional
+        IOS_PLATFORM_APP_ARN: !Ref IosPlatformApplicationArn
+        ANDROID_PLATFORM_APP_ARN: !Ref AndroidPlatformApplicationArn
+        LOG_LEVEL: INFO
+
+Resources:
+
+  # ── Lambda Function ───────────────────────────────────────
+  NotificationDispatcherLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: nexus-notification-dispatcher-lambda
+      Handler: >
+        com.nexus.notification.lambda.NotificationDispatcherHandler::handleRequest
+      CodeUri: target/nexus-notification-dispatcher-lambda-1.0.0.jar
+      AutoPublishAlias: live
+
+      # SnapStart: Thymeleaf templates pre-parsed during snapshot.
+      # Notifications arrive in bursts (morning batch, transaction clusters).
+      # Without SnapStart: 5-15s cold start per burst = delayed notifications.
+      # With SnapStart: ~300ms cold start = notifications delivered on time.
+      SnapStart:
+        ApplyOn: PublishedVersions
+
+      # 50 concurrent: handles large notification blasts without overwhelming SES.
+      # CRITICAL notifications use a separate topic with higher concurrency.
+      ReservedConcurrentExecutions: 50
+
+      Policies:
+        # SES v2: send transactional emails
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendBulkEmail
+              Resource:
+                - !Sub >
+                  arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*
+                - !Sub >
+                  arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/nexus-transactional
+        # SNS: SMS + push delivery
+        - SNSPublishMessagePolicy:
+            TopicName: "*"
+        - Statement:
+            - Effect: Allow
+              Action: sns:Publish
+              Resource: "*"   # Required for direct publish to phone/endpoint
+        # SQS: report delivery status back to Plane A
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt DeliveryStatusQueue.QueueName
+        # X-Ray
+        - AWSXRayDaemonWriteAccess
+
+      Events:
+        # Main notification dispatch topic (EMAIL + SMS + PUSH)
+        NormalPriorityTopic:
+          Type: SNS
+          Properties:
+            Topic: !Ref NotificationDispatchTopic
+            FilterPolicy:
+              channel:
+                - EMAIL
+                - SMS
+                - PUSH
+
+  # ── SNS Topics ────────────────────────────────────────────
+
+  # Main dispatch topic — all channels, NORMAL + HIGH priority
+  NotificationDispatchTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: nexus-notification-dispatch
+      Subscription:
+        # Lambda: deliver to user
+        - Protocol: lambda
+          Endpoint: !GetAtt NotificationDispatcherLambda.Arn
+        # SQS: capture high-severity events in audit trail
+        - Protocol: sqs
+          Endpoint: !GetAtt NotificationAuditQueue.Arn
+          FilterPolicy:
+            eventType:
+              - FRAUD_ALERT
+              - SECURITY_ALERT
+              - ACCOUNT_FROZEN
+              - LOGIN_NEW_DEVICE
+
+  # ── SQS Queues ────────────────────────────────────────────
+
+  # Delivery status queue — consumed by Plane A nexus-notification-service
+  DeliveryStatusQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: nexus-delivery-status
+      VisibilityTimeout: 60
+      MessageRetentionPeriod: 3600   # 1 hour — consumed quickly
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeliveryStatusDLQ.Arn
+        maxReceiveCount: 3
+
+  DeliveryStatusDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: nexus-delivery-status-dlq
+      MessageRetentionPeriod: 86400
+
+  # Audit queue — captures high-severity notifications for compliance
+  NotificationAuditQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: nexus-notification-audit
+      VisibilityTimeout: 120
+      MessageRetentionPeriod: 86400
+
+  # ── SES Configuration Set ─────────────────────────────────
+  SesConfigurationSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: nexus-transactional
+      SendingOptions:
+        SendingEnabled: true
+      ReputationOptions:
+        ReputationMetricsEnabled: true
+      SuppressionOptions:
+        SuppressedReasons:
+          - BOUNCE
+          - COMPLAINT
+
+  # ── CloudWatch Alarms ─────────────────────────────────────
+  HighDeliveryFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: nexus-notification-high-failure-rate
+      Namespace: Nexus/NotificationDispatcher
+      MetricName: DeliveryFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 50
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+
+Outputs:
+  NotificationDispatchTopicArn:
+    Value: !Ref NotificationDispatchTopic
+  DeliveryStatusQueueUrl:
+    Value: !Ref DeliveryStatusQueue
+  LambdaArn:
+    Value: !GetAtt NotificationDispatcherLambda.Arn

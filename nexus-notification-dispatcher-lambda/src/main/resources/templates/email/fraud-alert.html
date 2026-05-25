@@ -1,0 +1,17 @@
+<!-- fraud-alert.html -->
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{_layout :: layout(~{::body-content})}">
+<head><title>Alerta de seguridad</title></head>
+<body>
+<th:block th:fragment="body-content">
+    <p style="color:#dc2626;font-weight:700;">
+        ⚠️ Alerta de seguridad en tu cuenta
+    </p>
+    <p th:text="${alertMessage ?: 'Detectamos actividad inusual en tu cuenta. Revisa tus movimientos recientes.'}">
+        Detectamos actividad inusual.
+    </p>
+    <p>Si no reconoces esta actividad, actúa de inmediato.</p>
+</th:block>
+</body>
+</html>
