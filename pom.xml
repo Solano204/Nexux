@@ -23,6 +23,9 @@
         <module>nexus-api-gateway</module>
         <module>nexus-account-service</module>
         <module>nexus-identity-service</module>
+
+        <module>nexus-transaction-service</module>
+
     </modules>
 
     <properties>

@@ -41,15 +41,19 @@ public class TransactionCommandService {
     public TransactionCommandService(TransactionRepository transactionRepository, OutboxRepository outboxRepository,
                                      TransactionEventProducer eventProducer, ElasticsearchIndexingService searchIndexer,
                                      ObjectMapper objectMapper, ObservationRegistry observationRegistry, Tracer tracer, MeterRegistry meterRegistry) {
-        this.transactionRepository = transactionRepository; this.outboxRepository = outboxRepository;
-        this.eventProducer = eventProducer; this.searchIndexer = searchIndexer;
-        this.objectMapper = objectMapper; this.observationRegistry = observationRegistry; this.tracer = tracer;
-        this.processingTimer = Timer.builder("transaction.processing.time").publishPercentiles(0.5,0.9,0.95,0.99).register(meterRegistry);
+        this.transactionRepository = transactionRepository;
+        this.outboxRepository = outboxRepository;
+        this.eventProducer = eventProducer;
+        this.searchIndexer = searchIndexer;
+        this.objectMapper = objectMapper;
+        this.observationRegistry = observationRegistry;
+        this.tracer = tracer;
+        this.processingTimer = Timer.builder("transaction.processing.time").publishPercentiles(0.5, 0.9, 0.95, 0.99).register(meterRegistry);
         this.initiatedCounter = Counter.builder("transaction.initiated.total").register(meterRegistry);
         this.completedCounter = Counter.builder("transaction.completed.total").register(meterRegistry);
         this.failedCounter = Counter.builder("transaction.failed.total").register(meterRegistry);
         this.fraudRejectedCounter = Counter.builder("transaction.fraud.rejected.total").register(meterRegistry);
-        this.amountSummary = DistributionSummary.builder("transaction.amount.mxn").publishPercentiles(0.5,0.9,0.95,0.99).register(meterRegistry);
+        this.amountSummary = DistributionSummary.builder("transaction.amount.mxn").publishPercentiles(0.5, 0.9, 0.95, 0.99).register(meterRegistry);
     }
 
     @Transactional
@@ -58,8 +62,12 @@ public class TransactionCommandService {
         Observation obs = Observation.createNotStarted("transaction.initiate", observationRegistry).lowCardinalityKeyValue("type", request.transactionType().name()).start();
         try {
             var existing = transactionRepository.findByUserIdAndIdempotencyKey(userId, request.idempotencyKey());
-            if (existing.isPresent()) { obs.event(Observation.Event.of("transaction.idempotent")); return toResponse(existing.get()); }
-            UUID transactionId = UUID.randomUUID(); UUID sagaId = UUID.randomUUID();
+            if (existing.isPresent()) {
+                obs.event(Observation.Event.of("transaction.idempotent"));
+                return toResponse(existing.get());
+            }
+            UUID transactionId = UUID.randomUUID();
+            UUID sagaId = UUID.randomUUID();
             Transaction txn = Transaction.builder().transactionId(transactionId).idempotencyKey(request.idempotencyKey()).userId(userId)
                     .sourceAccountId(request.sourceAccountId()).targetAccountId(request.targetAccountId()).targetAccountNumber(request.targetAccountNumber())
                     .targetUserId(request.targetUserId()).amount(request.amount()).currency(request.currency() != null ? request.currency() : "MXN")
@@ -69,23 +77,33 @@ public class TransactionCommandService {
                     .status(TransactionStatus.INITIATED).sagaId(sagaId).sagaStep("INITIATED").ipAddress(ipAddress).deviceFingerprint(deviceFingerprint).build();
             transactionRepository.save(txn);
             writeOutbox(transactionId, sagaId, "TransactionInitiated", buildInitiatedPayload(txn, traceId));
-            searchIndexer.indexAsync(txn); initiatedCounter.increment(); amountSummary.record(request.amount().doubleValue());
+            searchIndexer.indexAsync(txn);
+            initiatedCounter.increment();
+            amountSummary.record(request.amount().doubleValue());
             log.info("Transaction initiated: txnId={} sagaId={} type={} amount={}", transactionId, sagaId, request.transactionType(), request.amount());
             return toResponse(txn);
-        } finally { timerSample.stop(processingTimer); obs.stop(); }
+        } finally {
+            timerSample.stop(processingTimer);
+            obs.stop();
+        }
     }
 
     @Transactional
     public void processFraudResult(UUID transactionId, UUID sagaId, boolean cleared, BigDecimal score, java.util.List<String> reasons, String traceId) {
         Transaction txn = loadTransaction(transactionId);
         if (cleared) {
-            txn.markFraudCleared(score, reasons); transactionRepository.save(txn);
-            txn.markBalanceReserving(); transactionRepository.save(txn);
+            txn.markFraudCleared(score, reasons);
+            transactionRepository.save(txn);
+            txn.markBalanceReserving();
+            transactionRepository.save(txn);
             writeOutbox(transactionId, sagaId, "BalanceReservationRequested", buildBalanceReservationPayload(txn, traceId));
         } else {
-            txn.markFraudRejected(score, reasons); txn.markFailed("FRAUD_REJECTED"); transactionRepository.save(txn);
+            txn.markFraudRejected(score, reasons);
+            txn.markFailed("FRAUD_REJECTED");
+            transactionRepository.save(txn);
             writeOutbox(transactionId, sagaId, "TransactionFraudRejected", buildFraudRejectedPayload(txn, reasons, traceId));
-            searchIndexer.indexAsync(txn); fraudRejectedCounter.increment();
+            searchIndexer.indexAsync(txn);
+            fraudRejectedCounter.increment();
         }
     }
 
@@ -93,16 +111,20 @@ public class TransactionCommandService {
     public void processBalanceResult(UUID transactionId, UUID sagaId, boolean success, String failureReason, String traceId) {
         Transaction txn = loadTransaction(transactionId);
         if (success) {
-            txn.markBalanceReserved(); transactionRepository.save(txn);
-            txn.markLedgerPosting(); transactionRepository.save(txn);
+            txn.markBalanceReserved();
+            transactionRepository.save(txn);
+            txn.markLedgerPosting();
+            transactionRepository.save(txn);
             writeOutbox(transactionId, sagaId, "LedgerPostingRequested", buildLedgerPostingPayload(txn, traceId));
         } else {
-            txn.markReserveFailed(failureReason); txn.markFailed(failureReason); transactionRepository.save(txn);
+            txn.markReserveFailed(failureReason);
+            txn.markFailed(failureReason);
+            transactionRepository.save(txn);
             writeOutbox(transactionId, sagaId, "TransactionFailed", buildFailedPayload(txn, failureReason, traceId));
-            searchIndexer.indexAsync(txn); failedCounter.increment();
+            searchIndexer.indexAsync(txn);
+            failedCounter.increment();
         }
     }
-
     @Transactional
     public void processLedgerResult(UUID transactionId, UUID sagaId, boolean success, UUID ledgerEntryId, String failureReason, String traceId) {
         Transaction txn = loadTransaction(transactionId);

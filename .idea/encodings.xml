@@ -5,14 +5,11 @@
     <file url="file://$PROJECT_DIR$/nexus-account-service/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/nexus-api-gateway/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/nexus-api-gateway/src/main/resources" charset="UTF-8" />
-<<<<<<< HEAD
-    <file url="file://$PROJECT_DIR$/nexus-transaction-service/src/main/java" charset="UTF-8" />
-    <file url="file://$PROJECT_DIR$/nexus-transaction-service/src/main/resources" charset="UTF-8" />
-=======
     <file url="file://$PROJECT_DIR$/nexus-identity-service/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/nexus-identity-service/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/nexus-transaction-service/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/nexus-transaction-service/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/main/resources" charset="UTF-8" />
->>>>>>> main
   </component>
 </project>
