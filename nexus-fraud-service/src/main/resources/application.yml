@@ -58,7 +58,7 @@ spring:
       ack-mode: manual
 
   # ════════════════════════════════════════════════════════════
-  # SPRING AI — Full configuration (M6 milestone)
+  # SPRING AI — Full configuration
   # ════════════════════════════════════════════════════════════
   ai:
     openai:

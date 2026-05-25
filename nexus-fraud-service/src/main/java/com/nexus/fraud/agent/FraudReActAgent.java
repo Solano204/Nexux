@@ -3,7 +3,6 @@ package com.nexus.fraud.agent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.fraud.domain.model.*;
 import com.nexus.fraud.domain.model.enums.*;
-import com.nexus.fraud.web.dto.FraudAnalysisRequest;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -13,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.*;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.model.tool.*;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
@@ -20,8 +20,6 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.StructuredTaskScope;
-import java.util.concurrent.StructuredTaskScope.Joiner;
-import java.util.concurrent.StructuredTaskScope.Subtask;
 
 /**
  * FraudReActAgent — Plan-then-Act ReAct pattern (Section 11).
@@ -36,11 +34,6 @@ import java.util.concurrent.StructuredTaskScope.Subtask;
  *
  * Max tool call steps: 8 (prevents runaway loops)
  * Outer timeout: 30 seconds (SAGA orchestrator times out at 60s)
- *
- * Java 25 (JEP 505, 5th preview): Structured Concurrency API uses
- * StructuredTaskScope.open(Joiner) static factory method.
- * ShutdownOnFailure/ShutdownOnSuccess subclasses are REMOVED.
- * Use Joiner.allSuccessfulOrThrow() for fail-fast semantics.
  *
  * internalToolExecutionEnabled=false means WE drive the loop,
  * giving precise control over:
@@ -123,7 +116,8 @@ public class FraudReActAgent {
             // ── PHASE 1: PLAN ──────────────────────────────────
             FraudAnalysisPlan plan = executePlanPhase(request);
 
-            rootObservation.event(Observation.Event.of("plan.complete"));
+            rootObservation.event(Observation.Event.of(
+                    "plan.complete"));
             log.info("Fraud plan created: txnId={} steps={} concerns={}",
                     request.transactionId(),
                     plan.steps().size(),
@@ -133,7 +127,8 @@ public class FraudReActAgent {
             List<Message> conversationHistory =
                     executeToolPhase(request, plan);
 
-            rootObservation.event(Observation.Event.of("tools.complete"));
+            rootObservation.event(Observation.Event.of(
+                    "tools.complete"));
 
             // ── PHASE 3: SYNTHESIZE DECISION ────────────────────
             FraudDecision decision = executeSynthesisPhase(
@@ -168,6 +163,9 @@ public class FraudReActAgent {
             log.error("Fraud analysis failed: txnId={} error={}",
                     request.transactionId(), e.getMessage(), e);
 
+            // Safe fallback — never let exception propagate to SAGA
+            // Default to REVIEW to avoid both approving fraud and
+            // blocking legitimate users
             return buildFallbackDecision(request, startTime, e);
 
         } finally {
@@ -223,12 +221,15 @@ public class FraudReActAgent {
                 "fraud.execution", observationRegistry).start();
 
         List<Message> history = new ArrayList<>();
+
+        // Initial user message with transaction context
         history.add(new UserMessage(buildAnalysisPrompt(request)));
 
         int stepCount = 0;
 
         try (Observation.Scope scope = execObs.openScope()) {
 
+            // Group parallel steps and execute sequentially by batch
             List<List<FraudAnalysisPlan.ToolExecutionStep>>
                     executionBatches = groupIntoBatches(plan.steps());
 
@@ -242,10 +243,13 @@ public class FraudReActAgent {
                 }
 
                 if (batch.size() > 1) {
+                    // Parallel execution using Structured Concurrency
                     List<ToolResult> results =
                             executeToolBatchParallel(batch, request, history);
-                    results.forEach(r -> addToolResultToHistory(history, r));
+                    results.forEach(r -> addToolResultToHistory(
+                            history, r));
                 } else {
+                    // Sequential execution
                     ToolResult result = executeToolSingle(
                             batch.get(0), request, history);
                     addToolResultToHistory(history, result);
@@ -253,6 +257,7 @@ public class FraudReActAgent {
 
                 stepCount += batch.size();
 
+                // Ask LLM if it needs additional tools based on results
                 Optional<List<FraudAnalysisPlan.ToolExecutionStep>>
                         additionalSteps = checkForAdditionalTools(
                         history, stepCount, MAX_TOOL_CALL_STEPS);
@@ -272,15 +277,10 @@ public class FraudReActAgent {
 
     /**
      * Execute a batch of tools in parallel using Java 25
-     * Structured Concurrency (JEP 505, 5th preview).
+     * Structured Concurrency.
      *
-     * Java 25 API: StructuredTaskScope.open(Joiner) replaces the
-     * removed ShutdownOnFailure/ShutdownOnSuccess subclasses.
-     *
-     * Joiner.allSuccessfulOrThrow():
-     *   - Waits for ALL subtasks to succeed
-     *   - If ANY subtask fails → cancels scope, join() throws FailedException
-     *   - join() returns Stream<Subtask<ToolResult>>
+     * All tools in the batch run concurrently.
+     * If ANY critical tool fails → ShutdownOnFailure cancels all.
      */
     private List<ToolResult> executeToolBatchParallel(
             List<FraudAnalysisPlan.ToolExecutionStep> batch,
@@ -289,41 +289,25 @@ public class FraudReActAgent {
 
         List<ToolResult> results = new ArrayList<>();
 
-        try (var scope = StructuredTaskScope.open(
-                Joiner.<ToolResult>allSuccessfulOrThrow())) {
+        try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
 
-            // Fork each tool onto its own Virtual Thread
-            for (FraudAnalysisPlan.ToolExecutionStep step : batch) {
-                scope.fork(() ->
-                        executeToolSingle(step, request, history));
-            }
+            List<StructuredTaskScope.Subtask<ToolResult>> tasks =
+                    batch.stream()
+                            .map(step -> scope.fork(() ->
+                                    executeToolSingle(step, request, history)))
+                            .toList();
 
-            // join() blocks until all subtasks complete or one fails
-            // Returns Stream<Subtask<ToolResult>> on success
-            // Throws StructuredTaskScope.FailedException on failure
-            scope.join()
-                    .map(Subtask::get)
-                    .forEach(results::add);
+            scope.join().throwIfFailed();
 
-        } catch (StructuredTaskScope.FailedException e) {
-            log.warn("Parallel tool batch failed (FailedException), " +
-                            "continuing with partial results: {}",
-                    e.getCause() != null
-                            ? e.getCause().getMessage()
-                            : e.getMessage());
+            tasks.forEach(task -> results.add(task.get()));
+
+        } catch (Exception e) {
+            log.warn("Parallel tool batch failed, " +
+                    "continuing with partial results: {}", e.getMessage());
+            // Add failure markers for failed tools
             batch.forEach(step -> results.add(
                     ToolResult.failure(step.toolName(),
-                            "PARALLEL_EXECUTION_FAILED: " +
-                                    (e.getCause() != null
-                                            ? e.getCause().getMessage()
-                                            : e.getMessage()))));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.warn("Parallel tool batch interrupted: {}",
-                    e.getMessage());
-            batch.forEach(step -> results.add(
-                    ToolResult.failure(step.toolName(),
-                            "PARALLEL_EXECUTION_INTERRUPTED")));
+                            "PARALLEL_EXECUTION_FAILED: " + e.getMessage())));
         }
 
         return results;
@@ -340,6 +324,7 @@ public class FraudReActAgent {
 
         Instant toolStart = Instant.now();
 
+        // Named observation per tool — becomes Zipkin child span
         Observation toolObs = Observation.createNotStarted(
                         "fraud.tool." + step.toolName(), observationRegistry)
                 .start();
@@ -349,6 +334,7 @@ public class FraudReActAgent {
             log.debug("Executing tool: {} for txnId={}",
                     step.toolName(), request.transactionId());
 
+            // Use the agentClient with tool calling
             ChatResponse response = agentClient.prompt()
                     .messages(history)
                     .user("Execute tool: " + step.toolName() +
@@ -380,7 +366,8 @@ public class FraudReActAgent {
             log.warn("Tool {} failed: {}", step.toolName(),
                     e.getMessage());
 
-            return ToolResult.failure(step.toolName(), e.getMessage());
+            return ToolResult.failure(step.toolName(),
+                    e.getMessage());
 
         } finally {
             toolObs.stop();
@@ -401,8 +388,10 @@ public class FraudReActAgent {
 
         try (Observation.Scope scope = synthObs.openScope()) {
 
+            // Build synthesis prompt with all evidence
             String synthesisPrompt = buildSynthesisPrompt(request);
 
+            // Add synthesis request to conversation
             List<Message> fullContext =
                     new ArrayList<>(conversationHistory);
             fullContext.add(new UserMessage(synthesisPrompt));
@@ -412,10 +401,12 @@ public class FraudReActAgent {
                     .call()
                     .entity(FraudDecision.class);
 
+            // Enrich with timing data
             Instant completedAt = Instant.now();
             long analysisTimeMs = completedAt.toEpochMilli() -
                     startTime.toEpochMilli();
 
+            // Rebuild with timing (record is immutable)
             FraudDecision enriched = enrichWithTiming(decision,
                     startTime, completedAt, analysisTimeMs);
 
@@ -465,8 +456,7 @@ public class FraudReActAgent {
                 req.transactionType(),
                 req.amount(), req.currency(),
                 req.sourceAccountId(),
-                req.targetAccountId() != null
-                        ? req.targetAccountId() : "external",
+                req.targetAccountId() != null ? req.targetAccountId() : "external",
                 req.sourceIp(),
                 req.deviceFingerprint() != null ? "present" : "absent",
                 req.isKnownDevice(),
@@ -503,16 +493,14 @@ public class FraudReActAgent {
                 req.transactionId(), req.transactionType(),
                 req.amount(), req.currency(),
                 req.sourceAccountId(),
-                req.targetAccountId() != null
-                        ? req.targetAccountId() : "EXTERNAL",
+                req.targetAccountId() != null ? req.targetAccountId() : "EXTERNAL",
                 req.sourceIp(),
                 req.deviceFingerprint() != null ? "present" : "absent",
                 req.userId(),
                 req.accountAgeDays(),
                 req.totalTransactionCount(),
                 req.merchantName() != null ? req.merchantName() : "N/A",
-                req.merchantCategoryCode() != null
-                        ? req.merchantCategoryCode() : "N/A",
+                req.merchantCategoryCode() != null ? req.merchantCategoryCode() : "N/A",
                 formatPreSignals(req.preComputedSignals())
         );
     }
@@ -545,7 +533,7 @@ public class FraudReActAgent {
         Instant now = Instant.now();
         return new FraudDecision(
                 request.transactionId(),
-                FraudDecisionOutcome.REVIEW,
+                FraudDecisionOutcome.REVIEW,  // Safe fallback
                 new BigDecimal("50"),
                 new BigDecimal("0.3"),
                 List.of(new FraudDecision.TriggeringFactor(
@@ -585,7 +573,7 @@ public class FraudReActAgent {
     private FraudAnalysisPlan buildDefaultPlan(
             FraudAnalysisRequest req) {
         return new FraudAnalysisPlan(
-                new ArrayList<>(List.of(
+                List.of(
                         new FraudAnalysisPlan.ToolExecutionStep(
                                 1, "velocity_check_tool",
                                 List.of(req.userId()), true,
@@ -598,7 +586,7 @@ public class FraudReActAgent {
                                 2, "rag_policy_tool",
                                 List.of("general fraud"), false,
                                 "Retrieve policies", "MANDATORY")
-                )),
+                ),
                 "Unable to generate plan, using defaults",
                 List.of("plan_generation_failed"),
                 "Default plan due to planning phase failure"
@@ -608,7 +596,7 @@ public class FraudReActAgent {
     /**
      * Groups sequential steps into batches.
      * Steps marked canRunInParallel=true at the same step number
-     * are grouped together for parallel execution.
+     * are grouped together.
      */
     private List<List<FraudAnalysisPlan.ToolExecutionStep>>
     groupIntoBatches(
@@ -641,8 +629,7 @@ public class FraudReActAgent {
                                         ToolResult result) {
         history.add(new AssistantMessage(
                 "Tool " + result.toolName() + " executed. " +
-                        (result.succeeded()
-                                ? "Result: " + result.content()
+                        (result.succeeded() ? "Result: " + result.content()
                                 : "FAILED: " + result.content())));
     }
 
@@ -650,6 +637,8 @@ public class FraudReActAgent {
     checkForAdditionalTools(List<Message> history,
                             int stepCount, int maxSteps) {
         if (stepCount >= maxSteps - 1) return Optional.empty();
+        // In production: ask LLM if additional tools are needed
+        // For simplicity: always return empty (plan handles it)
         return Optional.empty();
     }
 
@@ -684,7 +673,7 @@ public class FraudReActAgent {
         return s.length() <= max ? s : s.substring(0, max) + "...";
     }
 
-    /** Inner result record for tool execution outcomes. */
+    // Inner result record
     public record ToolResult(
             String toolName, String content,
             long durationMs, boolean succeeded
