@@ -5,12 +5,7 @@
     <option name="originalFiles">
       <list>
         <option value="$PROJECT_DIR$/nexus-api-gateway/pom.xml" />
-<<<<<<< HEAD
-        <option value="$PROJECT_DIR$/nexus-transaction-service/pom.xml" />
-=======
-        <option value="$PROJECT_DIR$/nexus-identity-service/pom.xml" />
-        <option value="$PROJECT_DIR$/pom.xml" />
->>>>>>> main
+        <option value="$PROJECT_DIR$/nexus-fraud-service/pom.xml" />
       </list>
     </option>
   </component>
