@@ -1,0 +1,125 @@
+spring:
+  application:
+    name: nexus-ai-kyc-service
+
+  config:
+    import: "optional:configserver:"
+
+  cloud:
+    config:
+      uri: http://nexus-config-service:8888
+      fail-fast: true
+
+  threads:
+    virtual:
+      enabled: true
+
+  # ════════════════════════════════════════════════════════
+  # POSTGRESQL — Immutable audit trail
+  # ════════════════════════════════════════════════════════
+  datasource:
+    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5432/nexus_kyc}
+    username: ${POSTGRES_USER:nexus}
+    password: ${POSTGRES_PASSWORD:}
+    hikari:
+      maximum-pool-size: 20
+      connection-timeout: 5000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  # ════════════════════════════════════════════════════════
+  # MONGODB — KYC documents and decisions
+  # ════════════════════════════════════════════════════════
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev@nexus-mongodb:27017/nexus_kyc?authSource=admin}
+      auto-index-creation: true
+
+  # ════════════════════════════════════════════════════════
+  # KAFKA — SAGA + domain events
+  # ════════════════════════════════════════════════════════
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    producer:
+      acks: all
+      enable-idempotence: true
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+  # ════════════════════════════════════════════════════════
+  # SPRING AI — Two-stage KYC pipeline
+  # ════════════════════════════════════════════════════════
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o       # Stage 1 default — overridden per bean
+          temperature: 0.0    # Deterministic for document reading
+
+  # Multipart: allow up to 10MB document images
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
+
+server:
+  port: 8091
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+  instance:
+    prefer-ip-address: true
+
+resilience4j:
+  retry:
+    instances:
+      kyc-vision-retry:
+        max-attempts: 3
+        wait-duration: 2s
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - com.nexus.kyc.domain.exception.KycProcessingException
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    distribution:
+      percentiles-histogram:
+        kyc.pipeline.total.duration: true
+        kyc.stage1.extraction.duration: true
+        kyc.stage2.comparison.duration: true
+      percentiles:
+        kyc.pipeline.total.duration: 0.5, 0.9, 0.95, 0.99
+    tags:
+      application: ${spring.application.name}
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+
+logging:
+  level:
+    com.nexus.kyc: INFO
+  pattern:
+    console: >
+      %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
+      traceId=%X{traceId} spanId=%X{spanId}
+      service=nexus-ai-kyc-service %logger{36} - %msg%n
