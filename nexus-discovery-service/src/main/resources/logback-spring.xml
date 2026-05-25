@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- Console appender with structured output -->
+    <appender name="CONSOLE"
+              class="ch.qos.logback.core.ConsoleAppender">
+        <encoder
+                class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>traceId</includeMdcKeyName>
+            <includeMdcKeyName>spanId</includeMdcKeyName>
+            <customFields>
+                {"service":"nexus-discovery-service"}
+            </customFields>
+        </encoder>
+    </appender>
+
+    <!-- Silence Netflix Eureka's verbose internal logging -->
+    <logger name="com.netflix.eureka" level="WARN"/>
+    <logger name="com.netflix.discovery" level="WARN"/>
+    <logger name="com.netflix.loadbalancer" level="WARN"/>
+
+    <!-- Info for our own code + Spring Cloud -->
+    <logger name="com.nexus" level="INFO"/>
+    <logger name="org.springframework.cloud.netflix.eureka"
+            level="INFO"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

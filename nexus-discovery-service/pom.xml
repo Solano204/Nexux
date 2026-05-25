@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.nexus</groupId>
+        <artifactId>nexus-financial-platform</artifactId>
+        <version>1.0.0</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>nexus-discovery-service</artifactId>
+    <name>Nexus Discovery Service</name>
+    <description>
+        Service registry for all 15 Nexus platform services.
+        Spring Cloud Netflix Eureka Server.
+        Services register on startup, heartbeat every 30s.
+        API Gateway uses lb:// URIs resolved via this registry.
+        Client-side load balancing — no external LB required.
+        In-memory registry with local caching on all clients.
+    </description>
+
+    <properties>
+        <java.version>25</java.version>
+        <spring-boot.version>3.4.0</spring-boot.version>
+        <spring-cloud.version>2024.0.0</spring-cloud.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+
+        <!-- ══════════════════════════════════════════════════
+             SPRING CLOUD NETFLIX EUREKA SERVER
+             This single dependency IS the service registry.
+             @EnableEurekaServer activates it.
+             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-server</artifactId>
+        </dependency>
+
+        <!-- ══════════════════════════════════════════════════
+             SPRING CLOUD CONFIG CLIENT
+             Discovery service itself fetches config from the
+             config server (its own port + Eureka settings).
+             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-config</artifactId>
+        </dependency>
+
+        <!-- ══════════════════════════════════════════════════
+             ACTUATOR — health, metrics, info endpoints
+             Health check used by Docker Compose depends_on.
+             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- ══════════════════════════════════════════════════
+             SECURITY — protect Eureka admin endpoints
+             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!-- ══════════════════════════════════════════════════
+             OBSERVABILITY
+             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>7.4</version>
+        </dependency>
+
+        <!-- ══════════════════════════════════════════════════
+             TESTING
+             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <release>25</release>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
