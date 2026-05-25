@@ -3,7 +3,6 @@ package com.nexus.transaction.domain.model;
 import com.nexus.transaction.domain.exception.*;
 import com.nexus.transaction.domain.model.enums.*;
 import io.hypersistence.utils.hibernate.type.array.ListArrayType;
-import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.Type;
@@ -13,18 +12,6 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-/**
- * Transaction — Core domain entity with 16-state lifecycle.
- *
- * State machine is enforced at TWO layers:
- * 1. Application layer: transition() validates before each update
- * 2. Database layer: PostgreSQL trigger rejects invalid transitions
- *
- * This entity represents the authoritative record of a financial
- * transaction from initiation through completion or failure.
- *
- * Pattern: State Machine Pattern — explicit lifecycle with transitions
- */
 @Entity
 @Table(name = "transactions")
 @Getter
@@ -69,10 +56,7 @@ public class Transaction {
     @Column(name = "fee_amount", precision = 20, scale = 4)
     private BigDecimal feeAmount;
 
-    // net_amount is GENERATED ALWAYS in DB — not written by app
-    @Column(name = "net_amount",
-            insertable = false, updatable = false,
-            precision = 20, scale = 4)
+    @Column(name = "net_amount", insertable = false, updatable = false, precision = 20, scale = 4)
     private BigDecimal netAmount;
 
     @Enumerated(EnumType.STRING)
@@ -99,7 +83,6 @@ public class Transaction {
     @Column(nullable = false)
     private TransactionStatus status;
 
-    // Fraud intelligence
     @Column(name = "fraud_score", precision = 5, scale = 4)
     private BigDecimal fraudScore;
 
@@ -113,25 +96,21 @@ public class Transaction {
     @Column(name = "fraud_checked_at")
     private Instant fraudCheckedAt;
 
-    // Ledger reference
     @Column(name = "ledger_entry_id")
     private UUID ledgerEntryId;
 
-    // SAGA tracking
     @Column(name = "saga_id")
     private UUID sagaId;
 
     @Column(name = "saga_step", length = 50)
     private String sagaStep;
 
-    // Request context
     @Column(name = "ip_address")
     private String ipAddress;
 
     @Column(name = "device_fingerprint")
     private String deviceFingerprint;
 
-    // Timing
     @Column(name = "initiated_at", updatable = false)
     private Instant initiatedAt;
 
@@ -170,28 +149,17 @@ public class Transaction {
         updatedAt = Instant.now();
         if (status == null) status = TransactionStatus.INITIATED;
         if (feeAmount == null) feeAmount = BigDecimal.ZERO;
-        if (exchangeRate == null)
-            exchangeRate = BigDecimal.ONE;
+        if (exchangeRate == null) exchangeRate = BigDecimal.ONE;
         if (channel == null) channel = TransactionChannel.API;
     }
 
     @PreUpdate
     void preUpdate() { updatedAt = Instant.now(); }
 
-    // ════════════════════════════════════════════════════════
-    // STATE MACHINE — application-layer enforcement
-    // ════════════════════════════════════════════════════════
-
-    /**
-     * Transitions the transaction to a new state.
-     * Validates the transition is legal before applying.
-     * Database trigger provides the second enforcement layer.
-     */
     public void transition(TransactionStatus newStatus) {
         if (!isValidTransition(this.status, newStatus)) {
             throw new InvalidTransactionStateException(
-                    String.format(
-                            "Invalid transition: %s → %s for txn %s",
+                    String.format("Invalid transition: %s → %s for txn %s",
                             this.status, newStatus, this.transactionId));
         }
         this.status = newStatus;
@@ -203,8 +171,7 @@ public class Transaction {
         this.sagaStep = "FRAUD_CHECKING";
     }
 
-    public void markFraudCleared(BigDecimal score,
-                                 List<String> reasons) {
+    public void markFraudCleared(BigDecimal score, List<String> reasons) {
         transition(TransactionStatus.FRAUD_CLEARED);
         this.fraudScore = score;
         this.fraudDecision = "CLEARED";
@@ -213,8 +180,7 @@ public class Transaction {
         this.sagaStep = "FRAUD_CLEARED";
     }
 
-    public void markFraudRejected(BigDecimal score,
-                                  List<String> reasons) {
+    public void markFraudRejected(BigDecimal score, List<String> reasons) {
         transition(TransactionStatus.FRAUD_REJECTED);
         this.fraudScore = score;
         this.fraudDecision = "REJECTED";
@@ -282,36 +248,27 @@ public class Transaction {
         this.sagaStep = "REVERSED";
     }
 
-    // ─── State machine helpers ────────────────────────────
-
-    private static boolean isValidTransition(
-            TransactionStatus from, TransactionStatus to) {
+    private static boolean isValidTransition(TransactionStatus from, TransactionStatus to) {
         return switch (from) {
-            case INITIATED -> to == TransactionStatus.FRAUD_CHECKING
-                    || to == TransactionStatus.CANCELLED;
-            case FRAUD_CHECKING -> to == TransactionStatus.FRAUD_CLEARED
-                    || to == TransactionStatus.FRAUD_REJECTED;
+            case INITIATED -> to == TransactionStatus.FRAUD_CHECKING || to == TransactionStatus.CANCELLED;
+            case FRAUD_CHECKING -> to == TransactionStatus.FRAUD_CLEARED || to == TransactionStatus.FRAUD_REJECTED;
             case FRAUD_CLEARED -> to == TransactionStatus.BALANCE_RESERVING;
-            case BALANCE_RESERVING ->
-                    to == TransactionStatus.BALANCE_RESERVED
-                            || to == TransactionStatus.RESERVE_FAILED;
+            case BALANCE_RESERVING -> to == TransactionStatus.BALANCE_RESERVED || to == TransactionStatus.RESERVE_FAILED;
             case BALANCE_RESERVED -> to == TransactionStatus.LEDGER_POSTING;
-            case LEDGER_POSTING -> to == TransactionStatus.LEDGER_POSTED
-                    || to == TransactionStatus.LEDGER_FAILED;
+            case LEDGER_POSTING -> to == TransactionStatus.LEDGER_POSTED || to == TransactionStatus.LEDGER_FAILED;
             case LEDGER_POSTED -> to == TransactionStatus.COMPLETING;
             case COMPLETING -> to == TransactionStatus.COMPLETED;
             case RESERVE_FAILED -> to == TransactionStatus.FAILED;
             case LEDGER_FAILED -> to == TransactionStatus.REVERSING;
             case REVERSING -> to == TransactionStatus.REVERSED;
             case FRAUD_REJECTED -> to == TransactionStatus.FAILED;
-            default -> false; // Terminal states have no transitions
+            default -> false;
         };
     }
 
     public static boolean isTerminalStatus(TransactionStatus status) {
         return switch (status) {
-            case COMPLETED, FAILED, REVERSED,
-                 CANCELLED, FRAUD_REJECTED -> true;
+            case COMPLETED, FAILED, REVERSED, CANCELLED, FRAUD_REJECTED -> true;
             default -> false;
         };
     }

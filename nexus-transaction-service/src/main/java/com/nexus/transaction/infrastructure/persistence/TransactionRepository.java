@@ -16,14 +16,11 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface TransactionRepository
-        extends JpaRepository<Transaction, UUID> {
+public interface TransactionRepository extends JpaRepository<Transaction, UUID> {
 
-    Optional<Transaction> findByUserIdAndIdempotencyKey(
-            UUID userId, String idempotencyKey);
+    Optional<Transaction> findByUserIdAndIdempotencyKey(UUID userId, String idempotencyKey);
 
-    Page<Transaction> findByUserIdOrderByInitiatedAtDesc(
-            UUID userId, Pageable pageable);
+    Page<Transaction> findByUserIdOrderByInitiatedAtDesc(UUID userId, Pageable pageable);
 
     Page<Transaction> findByUserIdAndStatusOrderByInitiatedAtDesc(
             UUID userId, TransactionStatus status, Pageable pageable);

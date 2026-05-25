@@ -1,4 +1,3 @@
-
 package com.nexus.transaction.web.dto.response;
 
 import java.math.BigDecimal;
