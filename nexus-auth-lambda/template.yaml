@@ -1,0 +1,185 @@
+# template.yaml — AWS SAM deployment template
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Nexus Auth Lambda — Cognito JWT validation + session management.
+  SnapStart enabled for sub-500ms cold starts.
+
+Globals:
+  Function:
+    Runtime: java21
+    MemorySize: 512
+    Timeout: 29
+    Tracing: Active          # X-Ray tracing
+    Environment:
+      Variables:
+        AWS_REGION: !Ref AWS::Region
+        COGNITO_USER_POOL_ID: !Ref NexusCognitoUserPool
+        COGNITO_CLIENT_ID: !Ref NexusCognitoAppClient
+        DYNAMODB_SESSIONS_TABLE: !Ref SessionsTable
+        DYNAMODB_REVOKED_TOKENS_TABLE: !Ref RevokedTokensTable
+        LOCAL_PLANE_IDENTITY_URL: !Ref LocalPlaneIdentityUrl
+        PLANE_BRIDGE_SECRET: !Sub
+          "{{resolve:secretsmanager:nexus/plane-bridge-secret:SecretString:secret}}"
+
+Parameters:
+  LocalPlaneIdentityUrl:
+    Type: String
+    Description: URL of the local plane nexus-identity-service
+    Default: http://host.docker.internal:8083
+
+Resources:
+
+  # ── Lambda Function ───────────────────────────────────────
+  NexusAuthLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: nexus-auth-lambda
+      Handler: com.nexus.auth.lambda.AuthLambdaHandler::handleRequest
+      CodeUri: target/nexus-auth-lambda-1.0.0.jar
+
+      # SnapStart: snapshot after init, restore for cold starts
+      # Reduces Java cold start from 5-15s to ~200ms
+      SnapStart:
+        ApplyOn: PublishedVersions
+
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RevokedTokensTable
+        - AWSXRayDaemonWriteAccess
+
+      Events:
+        ValidateToken:
+          Type: HttpApi
+          Properties:
+            Path: /auth/validate
+            Method: POST
+        RefreshToken:
+          Type: HttpApi
+          Properties:
+            Path: /auth/refresh
+            Method: POST
+        ExtendSession:
+          Type: HttpApi
+          Properties:
+            Path: /auth/extend-session
+            Method: POST
+        RevokeToken:
+          Type: HttpApi
+          Properties:
+            Path: /auth/revoke
+            Method: POST
+        KycStatus:
+          Type: HttpApi
+          Properties:
+            Path: /auth/kyc-status/{userId}
+            Method: GET
+
+      # Auto-publish on deploy → enables SnapStart
+      AutoPublishAlias: live
+
+  # ── DynamoDB Tables ───────────────────────────────────────
+  SessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: nexus-sessions
+      BillingMode: PAY_PER_REQUEST    # On-Demand — no throttling
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI_JTI
+          AttributeType: S
+        - AttributeName: cognitoSub
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: JtiIndex
+          KeySchema:
+            - AttributeName: GSI_JTI
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: CognitoSubIndex
+          KeySchema:
+            - AttributeName: cognitoSub
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  RevokedTokensTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: nexus-revoked-tokens
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # ── Cognito User Pool ─────────────────────────────────────
+  NexusCognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: nexus-user-pool
+      MfaConfiguration: OPTIONAL
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+      Schema:
+        - Name: userId
+          AttributeDataType: String
+          Mutable: true
+        - Name: kycVerified
+          AttributeDataType: Boolean
+          Mutable: true
+        - Name: accountStatus
+          AttributeDataType: String
+          Mutable: true
+
+  NexusCognitoAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: nexus-mobile-client
+      UserPoolId: !Ref NexusCognitoUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+      AccessTokenValidity: 1        # 1 hour
+      RefreshTokenValidity: 30       # 30 days
+      IdTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: hours
+        RefreshToken: days
+        IdToken: hours
+
+Outputs:
+  AuthLambdaArn:
+    Value: !GetAtt NexusAuthLambda.Arn
+  SessionsTableName:
+    Value: !Ref SessionsTable
+  CognitoUserPoolId:
+    Value: !Ref NexusCognitoUserPool
+  CognitoClientId:
+    Value: !Ref NexusCognitoAppClient
