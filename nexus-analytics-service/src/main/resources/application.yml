@@ -1,0 +1,98 @@
+spring:
+  application:
+    name: nexus-analytics-service
+
+  config:
+    import: "optional:configserver:"
+
+  cloud:
+    config:
+      uri: http://nexus-config-service:8888
+      fail-fast: true
+
+  threads:
+    virtual:
+      enabled: true
+
+  data:
+    elasticsearch:
+      uris: ${ELASTICSEARCH_URIS:http://nexus-elasticsearch:9200}
+    redis:
+      host: ${REDIS_HOST:nexus-redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 100ms
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    streams:
+      application-id: nexus-analytics-streams
+      num-stream-threads: 4
+      state-dir: /var/kafka-streams
+      cache-max-bytes-buffering: 52428800  # 50MB
+      commit-interval-ms: 1000
+      processing-guarantee: at_least_once
+      properties:
+        default.key.serde: >
+          org.apache.kafka.common.serialization.Serdes$StringSerde
+        default.value.serde: >
+          org.apache.kafka.common.serialization.Serdes$StringSerde
+        replication.factor: "1"
+        rocksdb.block.cache.size.mb: "256"
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.4
+
+server:
+  port: 8092
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+  instance:
+    prefer-ip-address: true
+
+resilience4j:
+  retry:
+    instances:
+      openai-retry:
+        max-attempts: 3
+        wait-duration: 1s
+        exponential-backoff-multiplier: 2
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    distribution:
+      percentiles-histogram:
+        analytics.insight.generation.duration: true
+      percentiles:
+        analytics.insight.generation.duration: 0.5, 0.9, 0.95, 0.99
+    tags:
+      application: ${spring.application.name}
+  tracing:
+    enabled: true
+    sampling:
+      probability: 0.1  # 10% sampling — high volume service
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+
+logging:
+  level:
+    com.nexus.analytics: INFO
+    org.apache.kafka.streams: WARN
+  pattern:
+    console: >
+      %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
+      traceId=%X{traceId} spanId=%X{spanId}
+      service=nexus-analytics-service %logger{36} - %msg%n
