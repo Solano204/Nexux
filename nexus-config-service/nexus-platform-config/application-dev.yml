@@ -1,0 +1,55 @@
+# nexus-platform-config/application-dev.yml
+# Overrides application.yml for ALL services when profile=dev
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0              # trace everything in dev
+
+logging:
+  level:
+    root: INFO
+    com.nexus: DEBUG
+    org.springframework.ai: DEBUG
+    org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor: DEBUG
+    org.springframework.cloud.config: DEBUG
+
+spring:
+  jpa:
+    show-sql: false                 # flip to true when debugging SQL
+    hibernate:
+      ddl-auto: update             # allow auto-update in dev (never in prod)
+
+nexus:
+  features:
+    kyc-ai-analysis: true
+    fraud-ai-analysis: true
+    notification-ai-content: true
+    analytics-ai-insights: true
+
+  fraud:
+    thresholds:
+      approve-below: 40             # slightly more lenient for dev testing
+    velocity:
+      max-transactions-5min: 100    # relaxed for load testing
+      max-amount-5min: 100000
+
+  transaction:
+    rate-limit:
+      max-per-user-per-minute: 200  # relaxed for dev testing
+    large-transaction-threshold: 50000
+
+  ai:
+    assistant:
+      rate-limit:
+        max-messages-per-day: 1000
+        max-tokens-per-hour: 500000
+
+# ── Swagger UI: enabled in dev, disabled in prod ─────────────
+springdoc:
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+  api-docs:
+    enabled: true
+    path: /v3/api-docs

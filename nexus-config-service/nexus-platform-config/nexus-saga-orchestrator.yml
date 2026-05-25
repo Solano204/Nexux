@@ -1,0 +1,35 @@
+server:
+  port: 8095
+
+spring:
+  application:
+    name: nexus-saga-orchestrator
+
+  datasource:
+    url: jdbc:postgresql://nexus-postgres:5432/nexus_saga
+    username: nexus_app
+    password: ${POSTGRES_PASSWORD}
+    hikari:
+      maximum-pool-size: 40
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.1
+
+nexus:
+  saga:
+    onboarding:
+      total-timeout-minutes: 60
+      kyc-timeout-minutes: 30
+      account-creation-timeout-minutes: 5
+
+    transfer:
+      total-timeout-hours: 24
+      fraud-check-timeout-seconds: 60
+      balance-reserve-timeout-seconds: 30
+      ledger-post-timeout-seconds: 30
+      compensation-max-retries: 3

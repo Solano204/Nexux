@@ -1,0 +1,177 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: nexus-api-gateway
+
+  cloud:
+    gateway:
+      routes:
+
+        # ── Identity (no JWT required) ──────────────────────
+        - id: identity-auth
+          uri: lb://nexus-identity-service
+          predicates:
+            - Path=/api/v1/auth/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 1
+                redis-rate-limiter.burstCapacity: 10
+                key-resolver: "#{@ipKeyResolver}"
+            - name: CircuitBreaker
+              args:
+                name: identity-service
+                fallbackUri: forward:/fallback/identity
+
+        # ── Account Service ─────────────────────────────────
+        - id: account-service
+          uri: lb://nexus-account-service
+          predicates:
+            - Path=/api/v1/accounts/**
+          filters:
+            - JwtAuthentication
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 2
+                redis-rate-limiter.burstCapacity: 100
+                key-resolver: "#{@userKeyResolver}"
+            - name: CircuitBreaker
+              args:
+                name: account-service
+                fallbackUri: forward:/fallback/service
+
+        # ── Transaction Service ─────────────────────────────
+        - id: transaction-service
+          uri: lb://nexus-transaction-service
+          predicates:
+            - Path=/api/v1/transactions/**
+          filters:
+            - JwtAuthentication
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 0.33
+                redis-rate-limiter.burstCapacity: 20
+                key-resolver: "#{@userKeyResolver}"
+            - name: CircuitBreaker
+              args:
+                name: transaction-service
+                fallbackUri: forward:/fallback/transaction
+
+        # ── AI Assistant (streaming, generous timeout) ──────
+        - id: ai-assistant
+          uri: lb://nexus-ai-assistant-service
+          predicates:
+            - Path=/api/v1/ai/**
+          filters:
+            - JwtAuthentication
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 0.008   # 30/hour
+                redis-rate-limiter.burstCapacity: 5
+                key-resolver: "#{@userKeyResolver}"
+            - name: CircuitBreaker
+              args:
+                name: ai-assistant-service
+                fallbackUri: forward:/fallback/ai
+
+        # ── Analytics (cached at gateway) ───────────────────
+        - id: analytics-service
+          uri: lb://nexus-analytics-service
+          predicates:
+            - Path=/api/v1/analytics/**
+          filters:
+            - JwtAuthentication
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 1
+                redis-rate-limiter.burstCapacity: 60
+                key-resolver: "#{@userKeyResolver}"
+            - name: LocalResponseCache
+              args:
+                timeToLive: 60s
+                size: 1024
+
+        # ── Ledger Service ───────────────────────────────────
+        - id: ledger-service
+          uri: lb://nexus-ledger-service
+          predicates:
+            - Path=/api/v1/ledger/**
+          filters:
+            - JwtAuthentication
+            - name: CircuitBreaker
+              args:
+                name: ledger-service
+                fallbackUri: forward:/fallback/service
+
+        # ── Notifications ───────────────────────────────────
+        - id: notification-service
+          uri: lb://nexus-notification-service
+          predicates:
+            - Path=/api/v1/notifications/**
+          filters:
+            - JwtAuthentication
+
+        # ── KYC ─────────────────────────────────────────────
+        - id: kyc-service
+          uri: lb://nexus-ai-kyc-service
+          predicates:
+            - Path=/api/v1/kyc/**
+          filters:
+            - JwtAuthentication
+            - name: RequestSize
+              args:
+                maxSize: 12MB           # allow document uploads
+
+      default-filters:
+        - AddResponseHeader=X-Gateway-Version, 1.0
+        - AddResponseHeader=X-Frame-Options, DENY
+        - AddResponseHeader=X-Content-Type-Options, nosniff
+        - AddResponseHeader=Strict-Transport-Security, max-age=31536000
+        - name: RequestSize
+          args:
+            maxSize: 50MB
+
+      globalcors:
+        cors-configurations:
+          "[/**]":
+            allowedOrigins:
+              - "http://localhost:3000"
+              - "http://localhost:3001"
+            allowedMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+            allowedHeaders:
+              - Authorization
+              - Content-Type
+              - X-Request-Id
+              - X-Session-Id
+            allowCredentials: true
+            maxAge: 3600
+
+nexus:
+  gateway:
+    jwt:
+      public-key-url: >
+        http://nexus-identity-service:8083/api/v1/auth/.well-known/jwks.json
+      public-key-refresh-interval-minutes: 60
+      blacklist-check-redis-timeout-ms: 100
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        failure-rate-threshold: 50
+        slow-call-rate-threshold: 80
+        slow-call-duration-threshold: 5s
+        wait-duration-in-open-state: 30s
+        sliding-window-size: 50
+    instances:
+      transaction-service:
+        base-config: default
+        slow-call-duration-threshold: 2s
+      ai-assistant-service:
+        base-config: default
+        slow-call-duration-threshold: 120s  # AI streaming can be long
+      identity-service:
+        base-config: default
+        slow-call-duration-threshold: 3s
