@@ -1,0 +1,292 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Nexus Fraud Alert Lambda — emergency response for high-severity fraud.
+  SnapStart: fraud attacks are bursty; cold start must be sub-500ms.
+  Dedicated SQS queue: never delayed by routine notification backlog.
+  maxReceiveCount=2: DLQ + immediate alarm after just 2 failures.
+  DynamoDB: KMS-encrypted, PITR-enabled, 7-year TTL forensic record.
+  SAR workflow: CNBV 15-day regulatory deadline created automatically.
+
+Parameters:
+  ComplianceTeamEmail:
+    Type: String
+    Description: Email address for compliance team fraud alerts
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  LocalPlaneNotificationUrl:
+    Type: String
+    Default: http://host.docker.internal:8080
+    Description: Plane A API Gateway URL for user-facing notifications
+
+Globals:
+  Function:
+    Runtime: java21
+    MemorySize: 512
+    Timeout: 30
+    Tracing: Active
+    Environment:
+      Variables:
+        AWS_REGION_NAME: !Ref AWS::Region
+        FRAUD_ALERTS_TABLE: !Ref FraudAlertsTable
+        SAR_CONSIDERATIONS_TABLE: !Ref SarConsiderationsTable
+        COMPLIANCE_SNS_TOPIC_ARN: !Ref FraudComplianceAlertsTopic
+        OPERATIONS_SNS_TOPIC_ARN: !Ref SecurityOperationsTopic
+        CLOUDWATCH_NAMESPACE: Nexus/FraudAlerts
+        SAR_RISK_SCORE_THRESHOLD: "90"
+        SAR_PATTERNS: "STRUCTURING,LAYERING,ACCOUNT_TAKEOVER,AML"
+        ENVIRONMENT: !Ref Environment
+        LOCAL_PLANE_NOTIFICATION_URL: !Ref LocalPlaneNotificationUrl
+        PLANE_BRIDGE_SECRET: !Sub
+          "{{resolve:secretsmanager:nexus/plane-bridge-secret:SecretString:secret}}"
+
+Resources:
+
+  # ── Lambda Function ───────────────────────────────────────
+  FraudAlertLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: nexus-fraud-alert-lambda
+      Handler: >
+        com.nexus.fraud.lambda.FraudAlertHandler::handleRequest
+      CodeUri: target/nexus-fraud-alert-lambda-1.0.0.jar
+      AutoPublishAlias: live
+
+      # SnapStart: fraud attacks are bursty (quiet for hours → 20 alerts
+      # in 5 minutes). Without SnapStart, the first alerts in a burst take
+      # 5-15s to process. With SnapStart: ~300ms → compliance notified faster.
+      SnapStart:
+        ApplyOn: PublishedVersions
+
+      # 20 dedicated slots: handles burst attacks without starving other Lambdas
+      ReservedConcurrentExecutions: 20
+
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FraudAlertsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SarConsiderationsTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt FraudComplianceAlertsTopic.TopicName
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt SecurityOperationsTopic.TopicName
+        - CloudWatchPutMetricPolicy: {}
+        - AWSXRayDaemonWriteAccess
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub >
+                arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:nexus/*
+
+      Events:
+        FraudAlertQueueTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt FraudAlertHighSeverityQueue.Arn
+            BatchSize: 5            # Small batches: high-severity = individual attention
+            MaximumBatchingWindowInSeconds: 2   # Minimal delay for fraud alerts
+            FunctionResponseTypes:
+              - ReportBatchItemFailures   # Isolate individual message failures
+
+  # ── SQS Queues ────────────────────────────────────────────
+
+  # Dedicated high-severity fraud alert queue
+  # Never shares throughput with routine notifications
+  FraudAlertHighSeverityQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: nexus-fraud-alerts-high-severity
+      VisibilityTimeout: 60          # Lambda timeout (30) + 30s buffer
+      MessageRetentionPeriod: 86400  # 24 hours
+      ReceiveMessageWaitTimeSeconds: 5
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt FraudAlertDLQ.Arn
+        # ONLY 2 attempts before DLQ. Fraud alerts failing twice = immediate page.
+        # Unlike payment processing (3 retries), fraud alerts are too urgent
+        # to silently retry many times.
+        maxReceiveCount: 2
+
+  FraudAlertDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: nexus-fraud-alerts-dlq
+      MessageRetentionPeriod: 604800   # 7 days for forensic investigation
+
+  # ── DynamoDB Tables ───────────────────────────────────────
+
+  FraudAlertsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: nexus-fraud-alerts
+      BillingMode: PAY_PER_REQUEST
+      # PITR: recover any fraud alert record to any point in last 35 days
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      # KMS encryption: fraud data requires dedicated key
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref FraudAlertsKmsKey
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI_USER_PK
+          AttributeType: S
+        - AttributeName: GSI_USER_SK
+          AttributeType: S
+        - AttributeName: GSI_DATE_PK
+          AttributeType: S
+        - AttributeName: GSI_DATE_SK
+          AttributeType: S
+        - AttributeName: GSI_STATUS_PK
+          AttributeType: S
+        - AttributeName: GSI_STATUS_SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        # GSI 1: Find all alerts for a user
+        - IndexName: UserIndex
+          KeySchema:
+            - AttributeName: GSI_USER_PK
+              KeyType: HASH
+            - AttributeName: GSI_USER_SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        # GSI 2: Find all alerts for a date (compliance daily review)
+        - IndexName: DateIndex
+          KeySchema:
+            - AttributeName: GSI_DATE_PK
+              KeyType: HASH
+            - AttributeName: GSI_DATE_SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        # GSI 3: Find all unreviewed alerts (compliance queue)
+        - IndexName: StatusIndex
+          KeySchema:
+            - AttributeName: GSI_STATUS_PK
+              KeyType: HASH
+            - AttributeName: GSI_STATUS_SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true    # Auto-expire after 7 years (regulatory retention)
+
+  SarConsiderationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: nexus-sar-considerations
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  FraudAlertsKmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for nexus-fraud-alerts DynamoDB table
+      EnableKeyRotation: true
+
+  # ── SNS Topics ────────────────────────────────────────────
+
+  # Compliance team: email + mobile
+  FraudComplianceAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: nexus-fraud-compliance-alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref ComplianceTeamEmail
+
+  # Security operations: webhook + ops team
+  SecurityOperationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: nexus-security-operations
+
+  # ── CloudWatch Alarms ─────────────────────────────────────
+
+  FraudAlertProcessingErrors:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: nexus-fraud-alert-processing-errors
+      AlarmDescription: >
+        Fraud alert Lambda errors. Any error = potential missed compliance notification.
+        Page on-call immediately.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: nexus-fraud-alert-lambda
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  FraudAlertDLQDepth:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: nexus-fraud-alert-dlq-messages
+      AlarmDescription: >
+        Fraud alerts in DLQ after 2 processing failures.
+        These are high-severity events that failed compliance notification.
+        IMMEDIATE investigation required.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt FraudAlertDLQ.QueueName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+
+  HighSeverityFraudSpike:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: nexus-fraud-high-severity-spike
+      AlarmDescription: >
+        10+ high-severity fraud alerts in 5 minutes.
+        Indicates active coordinated attack campaign.
+        Notify security operations center immediately.
+      Namespace: Nexus/FraudAlerts
+      MetricName: fraud.high.severity.count
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+
+Outputs:
+  FraudAlertQueueUrl:
+    Value: !Ref FraudAlertHighSeverityQueue
+  FraudAlertsTableName:
+    Value: !Ref FraudAlertsTable
+  ComplianceTopicArn:
+    Value: !Ref FraudComplianceAlertsTopic
+  LambdaArn:
+    Value: !GetAtt FraudAlertLambda.Arn
