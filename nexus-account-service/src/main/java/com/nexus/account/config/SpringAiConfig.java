@@ -12,10 +12,10 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.rag.generation.augmentation.ContextualQueryAugmenter;
 import org.springframework.ai.rag.preretrieval.query.expansion.MultiQueryExpander;
 import org.springframework.ai.rag.retrieval.search.VectorStoreDocumentRetriever;
-import org.springframework.ai.vectorstore.PgVectorStore;
+import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-
+import org.springframework.ai.vectorstore.VectorStore; //  CLEAN & DECOUPLED
 /**
  * SpringAiConfig — Account Advisor RAG pipeline.
  *
@@ -74,8 +74,8 @@ public class SpringAiConfig {
                         .build();
 
         VectorStoreChatMemoryAdvisor semanticMemory =
-                VectorStoreChatMemoryAdvisor.builder(transactionVectorStore)
-                        .defaultTopK(5)
+                (VectorStoreChatMemoryAdvisor) VectorStoreChatMemoryAdvisor.builder(transactionVectorStore)
+                        .chatMemoryRetrieveSize(5) // ✅ Fixed: Matches the decompiled class property
                         .build();
 
         return ChatClient.builder(chatModel)

@@ -16,7 +16,6 @@
           <entry name="$MAVEN_REPOSITORY$/org/projectlombok/lombok/1.18.36/lombok-1.18.36.jar" />
         </processorPath>
         <module name="identity" />
-        <module name="nexus-identity-service" />
       </profile>
       <profile name="Annotation profile for Nexus Financial Platform" enabled="true">
         <sourceOutputDir name="target/generated-sources/annotations" />
@@ -25,20 +24,20 @@
         <processorPath useClasspath="false">
           <entry name="$MAVEN_REPOSITORY$/org/projectlombok/lombok/1.18.36/lombok-1.18.36.jar" />
         </processorPath>
+        <module name="nexus-account-service" />
+        <module name="nexus-identity-service" />
+        <module name="nexus-api-gateway" />
       </profile>
     </annotationProcessing>
     <bytecodeTargetLevel>
       <module name="gateway" target="25" />
       <module name="identity" target="25" />
-      <module name="nexus-account-service" target="25" />
-      <module name="nexus-api-gateway" target="25" />
-      <module name="nexus-identity-service" target="25" />
     </bytecodeTargetLevel>
   </component>
   <component name="JavacSettings">
     <option name="ADDITIONAL_OPTIONS_OVERRIDE">
       <module name="gateway" options="--enable-preview" />
-      <module name="nexus-api-gateway" options="--enable-preview" />
+      <module name="nexus-api-gateway" options="" />
     </option>
   </component>
 </project>
