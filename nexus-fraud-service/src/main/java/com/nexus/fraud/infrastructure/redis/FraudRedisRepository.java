@@ -35,6 +35,15 @@ public class FraudRedisRepository {
                 .add("fraud:merchant:blacklist", merchantId);
     }
 
+    /**
+     * ✅ ADD THIS METHOD TO RESOLVE THE MISSING SYMBOL SYNC BREAK
+     * Removes a merchant from the active Redis block list.
+     */
+    public void removeFromBlacklist(String merchantId) {
+        redisTemplate.opsForSet()
+                .remove("fraud:merchant:blacklist", merchantId);
+    }
+
     public void addRecentDecision(String userId, String transactionId,
                                   String outcome, BigDecimal riskScore) {
         String entry = transactionId + ":" + outcome + ":" +

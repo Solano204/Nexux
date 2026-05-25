@@ -9,6 +9,7 @@ import com.nexus.fraud.domain.model.enums.RecommendedAction;
 import com.nexus.fraud.infrastructure.persistence.FraudDecisionRepository;
 import com.nexus.fraud.infrastructure.persistence.OutboxRepository;
 import com.nexus.fraud.infrastructure.redis.FraudRedisRepository;
+import com.nexus.fraud.web.dto.FraudAnalysisRequest;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.ObservationRegistry;

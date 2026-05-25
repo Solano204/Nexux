@@ -23,6 +23,7 @@
         <module>nexus-api-gateway</module>
         <module>nexus-account-service</module>
         <module>nexus-identity-service</module>
+        <module>nexus-fraud-service</module>  <!-- Add this line -->
 
         <module>nexus-transaction-service</module>
 

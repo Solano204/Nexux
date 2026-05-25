@@ -9,15 +9,25 @@
         <module name="gateway" />
         <module name="fraud" />
       </profile>
+      <profile name="Annotation profile for Nexus Financial Platform" enabled="true">
+        <sourceOutputDir name="target/generated-sources/annotations" />
+        <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
+        <outputRelativeToContentRoot value="true" />
+        <processorPath useClasspath="false">
+          <entry name="$MAVEN_REPOSITORY$/org/projectlombok/lombok/1.18.36/lombok-1.18.36.jar" />
+        </processorPath>
+        <module name="nexus-api-gateway" />
+        <module name="nexus-transaction-service" />
+        <module name="nexus-account-service" />
+        <module name="nexus-fraud-service" />
+        <module name="nexus-identity-service" />
+      </profile>
     </annotationProcessing>
-    <bytecodeTargetLevel>
-      <module name="nexus-api-gateway" target="25" />
-    </bytecodeTargetLevel>
   </component>
   <component name="JavacSettings">
     <option name="ADDITIONAL_OPTIONS_OVERRIDE">
       <module name="gateway" options="--enable-preview" />
-      <module name="nexus-api-gateway" options="--enable-preview" />
+      <module name="nexus-api-gateway" options="" />
     </option>
   </component>
 </project>

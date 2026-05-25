@@ -11,7 +11,9 @@ CREATE TABLE outbox (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     processed_at    TIMESTAMPTZ,
 
-    CONSTRAINT pk_fraud_outbox PRIMARY KEY (outbox_id)
+    CONSTRAINT pk_transaction_outbox PRIMARY KEY (outbox_id)
 );
 
-CREATE INDEX idx_fraud_outbox_created ON outbox (created_at);
+CREATE INDEX idx_transaction_outbox_created ON outbox (created_at);
+CREATE INDEX idx_transaction_outbox_type
+    ON outbox (aggregate_type, event_type);
