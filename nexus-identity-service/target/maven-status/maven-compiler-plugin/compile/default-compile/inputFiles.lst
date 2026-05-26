@@ -4,6 +4,7 @@ C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\main\ja
 C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\main\java\com\nexus\identity\application\command\DuplicateEmailException.java
 C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\main\java\com\nexus\identity\application\command\DuplicatePhoneException.java
 C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\main\java\com\nexus\identity\application\command\InvalidCredentialsException.java
+C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\main\java\com\nexus\identity\application\command\InvalidPasswordResetTokenException.java
 C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\main\java\com\nexus\identity\application\command\KycRetryLimitExceededException.java
 C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\main\java\com\nexus\identity\application\command\PasswordReusedException.java
 C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\main\java\com\nexus\identity\application\command\UnauthorizedException.java

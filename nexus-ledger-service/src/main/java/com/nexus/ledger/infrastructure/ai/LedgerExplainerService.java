@@ -11,7 +11,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
-
+import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import java.util.UUID;
 
 /**
@@ -81,24 +81,20 @@ public class LedgerExplainerService {
         return explainerClient.prompt()
                 .user(enrichedMessage)
                 .advisors(advisorSpec -> advisorSpec
-                        .param(org.springframework.ai.chat.memory.ChatMemory
-                                .CONVERSATION_ID, sessionId))
+                        .param("chat_memory_conversation_id", sessionId))
                 .stream()
                 .content()
                 .doOnComplete(() -> {
                     sample.stop(explainerTimer);
-                    obs.event(Observation.Event.of(
-                            "explainer.stream.complete"));
+                    obs.event(Observation.Event.of("explainer.stream.complete"));
                     obs.stop();
-                    log.info("Ledger explain complete: " +
-                                    "accountId={} sessionId={}",
+                    log.info("Ledger explain complete: accountId={} sessionId={}",
                             accountId, sessionId);
                 })
                 .doOnError(e -> {
                     obs.error(e);
                     obs.stop();
-                    log.error("Ledger explain error: {}",
-                            e.getMessage(), e);
+                    log.error("Ledger explain error: {}", e.getMessage(), e);
                 });
     }
 }

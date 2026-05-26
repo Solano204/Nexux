@@ -21,4 +21,4 @@ C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\main\java\co
 C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\main\java\com\nexus\gateway\ratelimit\UserIdKeyResolver.java
 C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\main\java\com\nexus\gateway\resilience\CircuitBreakerFallbackHandler.java
 C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\main\java\com\nexus\gateway\resilience\FallbackController.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\main\java\com\nexus\Main.java
+C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\main\java\com\nexus\NexusApiGatewayApplication.java

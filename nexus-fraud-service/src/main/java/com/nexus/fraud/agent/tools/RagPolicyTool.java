@@ -24,7 +24,6 @@ import java.util.List;
 @Slf4j
 @Component
 public class RagPolicyTool {
-
     private final PgVectorStore policyVectorStore;
     private final MultiQueryExpander queryExpander;
     private final RerankPostProcessor reranker;

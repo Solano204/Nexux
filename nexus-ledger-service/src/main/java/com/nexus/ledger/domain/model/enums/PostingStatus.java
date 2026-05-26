@@ -1,4 +1,8 @@
 package com.nexus.ledger.domain.model.enums;
 
-public class PostingStatus {
+public enum PostingStatus {
+    PENDING,
+    POSTED,
+    REVERSED,
+    PARTIAL_REVERSE
 }

@@ -1,4 +1,11 @@
 package com.nexus.ledger.domain.exception;
 
-public class InsufficientLedgerBalanceException {
+/**
+ * Ledger balance insufficient for the debit operation.
+ * Secondary safety check — Account Service should catch this first.
+ */
+public class InsufficientLedgerBalanceException extends RuntimeException {
+    public InsufficientLedgerBalanceException(String message) {
+        super(message);
+    }
 }
