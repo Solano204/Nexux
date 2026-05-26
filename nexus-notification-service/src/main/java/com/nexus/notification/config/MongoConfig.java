@@ -1,0 +1,4 @@
+package com.nexus.notification.config;
+
+public class MongoConfig {
+}
