@@ -1,7 +1,0 @@
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\test\java\com\nexus\identity\contract\IdentityServiceContractTest.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\test\java\com\nexus\identity\integration\AuthControllerIntegrationTest.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\test\java\com\nexus\identity\integration\KycFlowIntegrationTest.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\test\java\com\nexus\identity\integration\OutboxPatternIntegrationTest.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\test\java\com\nexus\identity\unit\JwtIssuerTest.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\test\java\com\nexus\identity\unit\PasswordValidatorTest.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-identity-service\src\test\java\com\nexus\identity\unit\UserCommandServiceTest.java

@@ -1,5 +1,0 @@
-com\nexus\transaction\unit\TransactionCommandServiceTest.class
-com\nexus\transaction\unit\TransactionStateMachineTest.class
-com\nexus\transaction\integration\KafkaStreamsVelocityTest.class
-com\nexus\transaction\contract\TransactionContractTest.class
-com\nexus\transaction\integration\TransactionFlowIntegrationTest.class

@@ -1,8 +1,0 @@
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\test\java\com\nexus\gateway\contract\GatewayContractTest.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\test\java\com\nexus\gateway\integration\GatewayRoutingIntegrationTest.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\test\java\com\nexus\gateway\integration\JwtAuthenticationIntegrationTest.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\test\java\com\nexus\gateway\integration\RateLimitIntegrationTest.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\test\java\com\nexus\gateway\unit\JwtValidatorTest.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\test\java\com\nexus\gateway\unit\RequestSanitizationFilterTest.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\test\java\com\nexus\gateway\unit\TokenBlacklistServiceTest.java
-C:\Users\GAMER\Music\PROJECT IA STARTUP\NEXUS\nexus-api-gateway\src\test\java\com\nexus\gateway\unit\UserIdKeyResolverTest.java
