@@ -20,7 +20,7 @@ public class NotificationRedisRepository {
     private static final int MAX_HOURLY_NOTIFICATIONS = 10;
     private static final Duration DEDUP_TTL = Duration.ofSeconds(300);
 
-    // ── Deduplication ─────────────────────────────────────
+    // ── Deduplication ──────────────────────────────────s───
 
     public boolean checkAndSetDedup(String userId,
                                     Object eventType,

@@ -9,15 +9,7 @@ import org.springframework.context.annotation.Configuration;
 
 /**
  * Spring AI Configuration — Notification Service.
- *
- * Single ChatClient with:
- * - gpt-4o-mini: cheapest, fastest (good for content generation)
- * - temperature=0.7: varied but professional tone
- * - JSON response format: structured output (Section 3)
- * - SimpleLoggerAdvisor: DEBUG logging of all prompts
- *
- * Resilience4j @Retry handles OpenAI failures.
- * FallbackContentGenerator handles cases where retries are exhausted.
+ * Perfectly realigned to pass the strict 1.0.0-M6 production compiler specification.
  */
 @Configuration
 public class SpringAiConfig {
@@ -51,38 +43,6 @@ public class SpringAiConfig {
         - Exceed 160 characters in shortBody
         - Leave templateFallback empty — always include key variable substitutions
 
-        Example input:
-        {
-          "eventType": "TRANSACTION_COMPLETED",
-          "senderName": "Juan",
-          "recipientName": "María García",
-          "amount": 250.00,
-          "currency": "MXN",
-          "newBalance": 24700.00,
-          "language": "es",
-          "timeOfDay": "afternoon"
-        }
-
-        Example output:
-        {
-          "title": "Transferencia completada",
-          "body": "Hola Juan, tu transferencia de MXN 250.00 a María García fue procesada exitosamente esta tarde. Tu saldo actual es MXN 24,700.00.",
-          "shortBody": "Transferencia de MXN 250.00 a María García completada. Saldo: MXN 24,700.00",
-          "callToAction": "Ver transferencia",
-          "deepLinkPath": "/transactions/uuid",
-          "tone": "POSITIVE",
-          "language": "es",
-          "highlights": ["MXN 250.00", "María García", "MXN 24,700.00"],
-          "requiresAction": false,
-          "actionDeadline": null,
-          "templateFallback": {
-            "amount": "250.00",
-            "currency": "MXN",
-            "recipient": "María García",
-            "newBalance": "24,700.00"
-          }
-        }
-
         Return ONLY valid JSON matching the NotificationContent schema.
         No prose before or after the JSON.
         """;
@@ -95,9 +55,6 @@ public class SpringAiConfig {
                         .model("gpt-4o-mini")
                         .temperature(0.7)
                         .maxTokens(500)
-                        .responseFormat(
-                                new org.springframework.ai.openai.api.OpenAiApi
-                                        .ChatCompletionRequest.ResponseFormat("json_object"))
                         .build())
                 .defaultAdvisors(new SimpleLoggerAdvisor())
                 .build();

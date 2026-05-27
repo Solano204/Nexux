@@ -16,7 +16,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.*;
 import java.util.*;
-import java.util.concurrent.StructuredTaskScope;
+import java.util.concurrent.*;
 
 /**
  * Notification Processing Service — Core pipeline orchestrator.
@@ -24,7 +24,7 @@ import java.util.concurrent.StructuredTaskScope;
  * Processing steps:
  * 1. Deduplication check (Redis)
  * 2. Rate limit check (Redis)
- * 3. Concurrent data gathering (Structured Concurrency)
+ * 3. Concurrent data gathering (Virtual Threads)
  * 4. Quiet hours check
  * 5. AI content generation
  * 6. Channel selection
@@ -127,17 +127,19 @@ public class NotificationProcessingService {
                 }
             }
 
-            // ── Step 3: Concurrent data gathering ─────────
+            // ── Step 3: Concurrent data gathering (Virtual Threads) ─
             UserNotificationPreferences prefs;
-            try (var scope2 =
-                         new StructuredTaskScope.ShutdownOnFailure()) {
+            try (ExecutorService executor =
+                         Executors.newVirtualThreadPerTaskExecutor()) {
 
-                var prefsFuture = scope2.fork(() ->
-                        loadPreferences(userId));
+                Future<UserNotificationPreferences> prefsFuture =
+                        executor.submit(() -> loadPreferences(userId));
 
-                scope2.join().throwIfFailed();
-                prefs = prefsFuture.get();
+                prefs = prefsFuture.get(5, TimeUnit.SECONDS);
 
+            } catch (TimeoutException e) {
+                log.warn("Preferences loading timed out, using defaults");
+                prefs = buildDefaultPreferences(userId);
             } catch (Exception e) {
                 log.warn("Data gathering failed, using defaults: {}",
                         e.getMessage());
