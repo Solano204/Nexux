@@ -2,7 +2,7 @@ package com.nexus.risk.infrastructure.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.nexus.risk.agent.RiskScoringAgent;
+import com.nexus.risk.agent.model.RiskScoringAgent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;

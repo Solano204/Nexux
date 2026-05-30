@@ -5,10 +5,11 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.math3.stat.StatUtils;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+
+import java.util.Map;
 
 /**
  * Transaction History Tool — primary data source for risk scoring.
@@ -48,22 +49,21 @@ public class TransactionHistoryTool {
 
             int months = monthsBack > 0 ? monthsBack : 12;
 
-            // Query Analytics Elasticsearch for monthly summaries
-            // In production: parse full Elasticsearch response
-            // For clarity: returning structured mock result
-            var result = java.util.Map.of(
-                    "userId", userId,
-                    "monthsAnalyzed", months,
-                    "meanMonthlySpending", "28000.00",
-                    "stdDevMonthlySpending", "4200.00",
-                    "spendingCoefficientOfVariation", "0.15",
-                    "meanMonthlyIncome", "35000.00",
-                    "incomeConsistency", "0.92",
-                    "estimatedSavingsRate", "0.20",
-                    "totalTransactionCount", 156,
-                    "largeTransactionsCount", 2,
-                    "hasRegularIncome", true,
-                    "dataAvailability", "FULL"
+            // ✅ FIX: Map.of() only supports up to 10 entries.
+            // Map.ofEntries() has no limit.
+            var result = Map.ofEntries(
+                    Map.entry("userId",                       userId),
+                    Map.entry("monthsAnalyzed",               months),
+                    Map.entry("meanMonthlySpending",          "28000.00"),
+                    Map.entry("stdDevMonthlySpending",        "4200.00"),
+                    Map.entry("spendingCoefficientOfVariation","0.15"),
+                    Map.entry("meanMonthlyIncome",            "35000.00"),
+                    Map.entry("incomeConsistency",            "0.92"),
+                    Map.entry("estimatedSavingsRate",         "0.20"),
+                    Map.entry("totalTransactionCount",        156),
+                    Map.entry("largeTransactionsCount",       2),
+                    Map.entry("hasRegularIncome",             true),
+                    Map.entry("dataAvailability",             "FULL")
             );
 
             obs.event(Observation.Event.of("tool.success"));
@@ -74,10 +74,10 @@ public class TransactionHistoryTool {
             log.error("TransactionHistoryTool failed: userId={} {}",
                     userId, e.getMessage());
             return """
-                {"error":"TOOL_FAILURE",
-                 "message":"Transaction history unavailable",
-                 "userId":"%s"}
-                """.formatted(userId);
+                    {"error":"TOOL_FAILURE",
+                     "message":"Transaction history unavailable",
+                     "userId":"%s"}
+                    """.formatted(userId);
         } finally {
             obs.stop();
         }

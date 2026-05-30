@@ -1,0 +1,64 @@
+spring:
+  application:
+    name: nexus-audit-query-jvm
+
+  config:
+    import: "optional:configserver:"
+
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5432/nexus_audit}
+    username: ${POSTGRES_USER:nexus}
+    password: ${POSTGRES_PASSWORD:}
+
+  data:
+    elasticsearch:
+      uris: ${ELASTICSEARCH_URIS:http://nexus-elasticsearch:9200}
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev@nexus-mongodb:27017/nexus_audit?authSource=admin}
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.1
+
+  ai.vectorstore.pgvector:
+    initialize-schema: true
+    index-type: HNSW
+    distance-type: COSINE_DISTANCE
+    dimensions: 1536
+
+server:
+  port: 8097
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+
+logging:
+  level:
+    com.nexus.audit: INFO
+  pattern:
+    console: >
+      %d{HH:mm:ss.SSS} [%thread] %-5level traceId=%X{traceId}
+      service=nexus-audit-query %logger{36} - %msg%n

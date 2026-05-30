@@ -2,7 +2,7 @@ package com.nexus.kyc.infrastructure.kafka;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.kyc.domain.model.enums.KycStatus;
-import com.nexus.kyc.infrastructure.mongodb.KycDocument;
+import com.nexus.kyc.infrastructure.mongodb.KycDocumentMongoDB;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -28,7 +28,7 @@ public class KycEventProducer {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
 
-    public void publishKycDecision(KycDocument doc, String sagaId) {
+    public void publishKycDecision(KycDocumentMongoDB doc, String sagaId) {
         try {
 
             // 1. Domain event for notification service, analytics, etc.

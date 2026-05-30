@@ -85,10 +85,6 @@ public class SpringAiConfig {
                         .model("gpt-4o")         // Best vision accuracy
                         .temperature(0.0)        // Deterministic extraction
                         .maxTokens(1500)
-                        .responseFormat(
-                                new org.springframework.ai.openai.api.OpenAiApi
-                                        .ChatCompletionRequest.ResponseFormat(
-                                        "json_object"))
                         .build())
                 .defaultAdvisors(new SimpleLoggerAdvisor())
                 .build();
@@ -154,10 +150,6 @@ public class SpringAiConfig {
                         .model("gpt-4o-mini")   // Cheaper — comparison is simpler
                         .temperature(0.0)       // Deterministic decisions
                         .maxTokens(1000)
-                        .responseFormat(
-                                new org.springframework.ai.openai.api.OpenAiApi
-                                        .ChatCompletionRequest.ResponseFormat(
-                                        "json_object"))
                         .build())
                 .defaultAdvisors(new SimpleLoggerAdvisor())
                 .build();

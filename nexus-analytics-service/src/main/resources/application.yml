@@ -25,18 +25,20 @@ spring:
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    producer:
+      acks: "1"
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
     streams:
       application-id: nexus-analytics-streams
       num-stream-threads: 4
       state-dir: /var/kafka-streams
-      cache-max-bytes-buffering: 52428800  # 50MB
+      cache-max-bytes-buffering: 52428800
       commit-interval-ms: 1000
       processing-guarantee: at_least_once
       properties:
-        default.key.serde: >
-          org.apache.kafka.common.serialization.Serdes$StringSerde
-        default.value.serde: >
-          org.apache.kafka.common.serialization.Serdes$StringSerde
+        default.key.serde: org.apache.kafka.common.serialization.Serdes$StringSerde
+        default.value.serde: org.apache.kafka.common.serialization.Serdes$StringSerde
         replication.factor: "1"
         rocksdb.block.cache.size.mb: "256"
 
@@ -82,7 +84,7 @@ management:
   tracing:
     enabled: true
     sampling:
-      probability: 0.1  # 10% sampling — high volume service
+      probability: 0.1
   zipkin:
     tracing:
       endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}

@@ -5,6 +5,7 @@ import com.nexus.analytics.streams.AnalyticsTopology;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.streams.*;
+import org.apache.kafka.streams.errors.InvalidStateStoreException;
 import org.apache.kafka.streams.kstream.Windowed;
 import org.apache.kafka.streams.state.*;
 import org.springframework.http.ResponseEntity;

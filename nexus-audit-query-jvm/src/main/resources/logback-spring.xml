@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <springProfile name="docker">
+        <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdcKeyName>traceId</includeMdcKeyName>
+                <customFields>{"service":"nexus-audit-query-jvm"}</customFields>
+            </encoder>
+        </appender>
+    </springProfile>
+    <springProfile name="!docker">
+        <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level traceId=%X{traceId} %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+    </springProfile>
+    <root level="INFO"><appender-ref ref="STDOUT"/></root>
+    <logger name="com.nexus.audit" level="INFO"/>
+</configuration>

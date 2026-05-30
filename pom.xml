@@ -22,7 +22,20 @@
         <module>nexus-fraud-service</module>
         <module>nexus-transaction-service</module>
         <module>nexus-ledger-service</module>
-
+        <module>nexus-notification-service</module>
+        <module>nexus-ai-assistant-service</module>
+        <module>nexus-ai-kyc-service</module>
+        <module>nexus-analytics-service</module>
+        <module>nexus-config-service</module>
+        <module>nexus-discovery-service</module>
+        <module>nexus-saga-orchestrator</module>
+        <module>nexus-risk-scoring-service</module>
+        <module>nexus-audit-query-jvm</module>
+        <!--
+            nexus-audit-write-native is a standalone Quarkus/GraalVM module.
+            It has no parent relationship to this POM and targets Java 21.
+            Build it separately: cd nexus-audit-write-native && mvn package [-Pnative]
+        -->
     </modules>
 
     <properties>
@@ -35,7 +48,8 @@
         <spring-boot.version>3.4.0</spring-boot.version>
         <spring-cloud.version>2024.0.0</spring-cloud.version>
         <spring-ai.version>1.0.0-M6</spring-ai.version>
-        <lombok.version>1.18.36</lombok.version>
+        <!-- ✅ FIXED: bumped from 1.18.36 to 1.18.38 for Java 25 support -->
+        <lombok.version>1.18.38</lombok.version>
 
         <resilience4j.version>2.2.0</resilience4j.version>
         <java-jwt.version>4.4.0</java-jwt.version>

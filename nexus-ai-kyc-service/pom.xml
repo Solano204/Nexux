@@ -17,42 +17,15 @@
     <description>
         AI-powered identity verification for the OnboardingFlowSaga.
         Two-stage AI pipeline:
-        Stage 1 — GPT-4.1-mini vision extracts KycExtractedData
+        Stage 1 — GPT-4o-mini vision extracts KycExtractedData
         from passport/ID image (Section 8 image-to-text).
         Stage 2 — GPT-4o-mini compares extracted vs submitted data
-        and produces KycVerificationDecision (Section 3
-        structured output).
+        and produces KycVerificationDecision (Section 3 structured output).
         Hard rule validation before any AI call (cost optimization).
         MongoDB for KYC documents, PostgreSQL for immutable audit trail.
     </description>
 
-    <properties>
-        <java.version>25</java.version>
-        <spring-boot.version>3.4.0</spring-boot.version>
-        <spring-cloud.version>2024.0.0</spring-cloud.version>
-        <spring-ai.version>1.0.0</spring-ai.version>
-        <flyway.version>10.4.1</flyway.version>
-        <testcontainers.version>1.19.3</testcontainers.version>
-    </properties>
-
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>org.springframework.cloud</groupId>
-                <artifactId>spring-cloud-dependencies</artifactId>
-                <version>${spring-cloud.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework.ai</groupId>
-                <artifactId>spring-ai-bom</artifactId>
-                <version>${spring-ai.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
+    <!-- No <dependencyManagement> needed: fully inherited from root POM. -->
 
     <dependencies>
 
@@ -77,7 +50,7 @@
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
-             DATA — PostgreSQL (immutable audit trail) + Flyway
+             DATA — PostgreSQL + Flyway
              ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -91,16 +64,14 @@
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
-            <version>${flyway.version}</version>
         </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-database-postgresql</artifactId>
-            <version>${flyway.version}</version>
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
-             MONGODB — KYC documents and decisions
+             MONGODB
              ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -108,7 +79,7 @@
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
-             SPRING CLOUD — Config + Eureka
+             SPRING CLOUD
              ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
@@ -120,7 +91,7 @@
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
-             KAFKA — SAGA participation + KYC events
+             KAFKA
              ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.kafka</groupId>
@@ -129,8 +100,6 @@
 
         <!-- ══════════════════════════════════════════════════
              SPRING AI — Two-stage KYC pipeline
-             Section 8: vision model for document extraction
-             Section 3: structured output for both stages
              ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
@@ -138,12 +107,11 @@
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
-             RESILIENCE4J — Retry on vision API transient failures
+             RESILIENCE4J
              ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>io.github.resilience4j</groupId>
             <artifactId>resilience4j-spring-boot3</artifactId>
-            <version>2.2.0</version>
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
@@ -164,21 +132,16 @@
         <dependency>
             <groupId>net.logstash.logback</groupId>
             <artifactId>logstash-logback-encoder</artifactId>
-            <version>7.4</version>
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
              UTILITIES
              ══════════════════════════════════════════════════ -->
         <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <optional>true</optional>
-        </dependency>
-        <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
+        <!-- lombok declared globally in root <dependencies> — no need here -->
 
         <!-- ══════════════════════════════════════════════════
              TESTING
@@ -191,19 +154,16 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>postgresql</artifactId>
-            <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>mongodb</artifactId>
-            <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -213,20 +173,57 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <!-- config inherited from root pluginManagement -->
             </plugin>
+
+            <!--
+                ✅ FIXED: Explicit compiler config overriding the inherited one.
+                The root pluginManagement used ${lombok.version} which was 1.18.36
+                (no Java 25 support). Now root is fixed to 1.18.38, but we also
+                declare it explicitly here as a safety net for standalone builds.
+            -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
                     <release>25</release>
                     <enablePreview>true</enablePreview>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>1.18.38</version>
+                        </path>
+                    </annotationProcessorPaths>
+                    <compilerArgs>
+                        <arg>--enable-preview</arg>
+                        <arg>--add-opens=java.base/java.lang=ALL-UNNAMED</arg>
+                    </compilerArgs>
                 </configuration>
             </plugin>
+
             <plugin>
                 <groupId>org.flywaydb</groupId>
                 <artifactId>flyway-maven-plugin</artifactId>
-                <version>${flyway.version}</version>
+            </plugin>
+
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
             </plugin>
         </plugins>
     </build>
+
+    <repositories>
+        <repository>
+            <id>central</id>
+            <url>https://repo.maven.apache.org/maven2</url>
+        </repository>
+        <repository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+    </repositories>
 </project>

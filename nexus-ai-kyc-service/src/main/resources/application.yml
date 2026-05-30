@@ -15,7 +15,7 @@ spring:
       enabled: true
 
   # ════════════════════════════════════════════════════════
-  # POSTGRESQL — Immutable audit trail
+  # POSTGRESQL — Immutable audit trail (kyc_audit_entries)
   # ════════════════════════════════════════════════════════
   datasource:
     url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5432/nexus_kyc}
@@ -37,7 +37,7 @@ spring:
     locations: classpath:db/migration
 
   # ════════════════════════════════════════════════════════
-  # MONGODB — KYC documents and decisions
+  # MONGODB — KYC documents, decisions, GridFS encrypted docs
   # ════════════════════════════════════════════════════════
   data:
     mongodb:
@@ -45,7 +45,7 @@ spring:
       auto-index-creation: true
 
   # ════════════════════════════════════════════════════════
-  # KAFKA — SAGA + domain events
+  # KAFKA — SAGA replies + domain events
   # ════════════════════════════════════════════════════════
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
@@ -57,16 +57,18 @@ spring:
 
   # ════════════════════════════════════════════════════════
   # SPRING AI — Two-stage KYC pipeline
+  # Stage 1: GPT-4o Vision (document extraction, temp=0.0)
+  # Stage 2: GPT-4o-mini (data comparison, temp=0.0)
   # ════════════════════════════════════════════════════════
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:}
       chat:
         options:
-          model: gpt-4o       # Stage 1 default — overridden per bean
-          temperature: 0.0    # Deterministic for document reading
+          model: gpt-4o
+          temperature: 0.0
 
-  # Multipart: allow up to 10MB document images
+  # Multipart: up to 10MB document images
   servlet:
     multipart:
       max-file-size: 10MB
@@ -81,6 +83,24 @@ eureka:
       defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
   instance:
     prefer-ip-address: true
+
+# ══════════════════════════════════════════════════════════
+# KYC Service custom configuration
+# ══════════════════════════════════════════════════════════
+nexus:
+  kyc:
+    s3:
+      bucket: ${KYC_S3_BUCKET:nexus-kyc-documents}
+    encryption:
+      enabled: ${KYC_ENCRYPTION_ENABLED:false}
+    retry:
+      max-attempts: 3
+      window-days: 30
+    pre-screening:
+      min-text-elements: 5
+      min-total-characters: 100
+      min-face-brightness: 50
+      min-face-sharpness: 50
 
 resilience4j:
   retry:
@@ -105,6 +125,8 @@ management:
         kyc.stage2.comparison.duration: true
       percentiles:
         kyc.pipeline.total.duration: 0.5, 0.9, 0.95, 0.99
+        kyc.stage1.extraction.duration: 0.5, 0.9, 0.95, 0.99
+        kyc.stage2.comparison.duration: 0.5, 0.9, 0.95, 0.99
     tags:
       application: ${spring.application.name}
   tracing:

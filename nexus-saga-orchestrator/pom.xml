@@ -30,29 +30,21 @@
         <java.version>25</java.version>
         <spring-boot.version>3.4.0</spring-boot.version>
         <spring-cloud.version>2024.0.0</spring-cloud.version>
-        <spring-ai.version>1.0.0</spring-ai.version>
+        <!--
+            ✅ FIXED: Removed local spring-ai.version=1.0.0 (GA) override.
+            1.0.0 GA is not resolvable from the milestone repo used by this platform.
+            spring-ai.version=1.0.0-M6 is now inherited from the root POM.
+        -->
         <flyway.version>10.4.1</flyway.version>
         <testcontainers.version>1.19.3</testcontainers.version>
     </properties>
 
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>org.springframework.cloud</groupId>
-                <artifactId>spring-cloud-dependencies</artifactId>
-                <version>${spring-cloud.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework.ai</groupId>
-                <artifactId>spring-ai-bom</artifactId>
-                <version>${spring-ai.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
+    <!--
+        ✅ FIXED: Removed local <dependencyManagement> block.
+        spring-cloud-dependencies and spring-ai-bom are already imported
+        by the root POM — redeclaring them here was the source of the
+        version conflict.
+    -->
 
     <dependencies>
 
@@ -92,17 +84,17 @@
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
-            <version>${flyway.version}</version>
+            <!-- version managed by root dependencyManagement -->
         </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-database-postgresql</artifactId>
-            <version>${flyway.version}</version>
+            <!-- version managed by root dependencyManagement -->
         </dependency>
         <dependency>
             <groupId>io.hypersistence</groupId>
             <artifactId>hypersistence-utils-hibernate-63</artifactId>
-            <version>3.7.3</version>
+            <!-- ✅ version managed by root dependencyManagement (3.8.3) -->
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
@@ -128,10 +120,12 @@
         <!-- ══════════════════════════════════════════════════
              SPRING AI — Section 3: structured output
              SagaFailureExplanation on SAGA failure
+             Version managed by spring-ai-bom in root POM (1.0.0-M6)
              ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-openai-spring-boot-starter</artifactId>
+            <!-- ✅ FIXED: removed hardcoded <version>1.0.0</version> -->
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
@@ -152,7 +146,6 @@
         <dependency>
             <groupId>net.logstash.logback</groupId>
             <artifactId>logstash-logback-encoder</artifactId>
-            <version>7.4</version>
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
@@ -184,19 +177,19 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>${testcontainers.version}</version>
+            <!-- ✅ version managed by testcontainers-bom in root -->
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>postgresql</artifactId>
-            <version>${testcontainers.version}</version>
+            <!-- ✅ version managed by testcontainers-bom in root -->
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>kafka</artifactId>
-            <version>${testcontainers.version}</version>
+            <!-- ✅ version managed by testcontainers-bom in root -->
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -206,20 +199,36 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <!-- config inherited from root pluginManagement -->
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <configuration>
-                    <release>25</release>
-                    <enablePreview>true</enablePreview>
-                </configuration>
+                <!-- ✅ full config (release=25, enablePreview, lombok 1.18.38)
+                     inherited from root pluginManagement -->
             </plugin>
             <plugin>
                 <groupId>org.flywaydb</groupId>
                 <artifactId>flyway-maven-plugin</artifactId>
-                <version>${flyway.version}</version>
+                <!-- version managed by root pluginManagement -->
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
             </plugin>
         </plugins>
     </build>
+
+    <repositories>
+        <repository>
+            <id>central</id>
+            <url>https://repo.maven.apache.org/maven2</url>
+        </repository>
+        <repository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+    </repositories>
 </project>

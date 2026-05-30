@@ -46,10 +46,7 @@ public class SpringAiConfig {
                         .model("gpt-4o-mini")
                         .temperature(0.4)
                         .maxTokens(2000)
-                        .responseFormat(
-                                new org.springframework.ai.openai.api.OpenAiApi
-                                        .ChatCompletionRequest.ResponseFormat(
-                                        "json_object"))
+
                         .build())
                 .defaultAdvisors(new SimpleLoggerAdvisor())
                 .build();
@@ -68,10 +65,6 @@ public class SpringAiConfig {
                         .model("gpt-4o-mini")
                         .temperature(0.2)
                         .maxTokens(800)
-                        .responseFormat(
-                                new org.springframework.ai.openai.api.OpenAiApi
-                                        .ChatCompletionRequest.ResponseFormat(
-                                        "json_object"))
                         .build())
                 .defaultAdvisors(new SimpleLoggerAdvisor())
                 .build();
