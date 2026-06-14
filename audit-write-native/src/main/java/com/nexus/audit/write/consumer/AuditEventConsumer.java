@@ -12,24 +12,12 @@ import io.smallrye.mutiny.Uni;
 import io.smallrye.reactive.messaging.kafka.KafkaRecord;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.eclipse.microprofile.reactive.messaging.*;
 import org.jboss.logging.Logger;
 
 import java.time.*;
 
-/**
- * Audit Event Consumer — Fan-in from ALL 23 Kafka topics.
- *
- * Each @Incoming method subscribes to one topic.
- * All methods delegate to the same writeToElasticsearch() pipeline.
- *
- * Idempotency: op_type=create — HTTP 409 if document exists.
- * The event's own UUID is the Elasticsearch document ID.
- * Same event delivered twice = same document ID = 409 = handled.
- *
- * Acknowledgment: MANUAL — offset committed only after successful
- * Elasticsearch write. On failure: no ack → Kafka redelivers.
- */
 @ApplicationScoped
 @RegisterForReflection
 public class AuditEventConsumer {
@@ -175,6 +163,17 @@ public class AuditEventConsumer {
     // ══════════════════════════════════════════════════════════
 
     /**
+     * Extracts the Kafka partition offset from the underlying ConsumerRecord.
+     * KafkaRecord does not expose getOffset() directly — metadata must be
+     * retrieved via getMetadata(ConsumerRecord.class).
+     */
+    private long extractOffset(KafkaRecord<String, String> record) {
+        return record.getMetadata(ConsumerRecord.class)
+                .map(ConsumerRecord::offset)
+                .orElse(-1L);
+    }
+
+    /**
      * Base processing: normalize + write to Elasticsearch.
      * Idempotent via op_type=create (409 = already exists = OK).
      */
@@ -182,7 +181,7 @@ public class AuditEventConsumer {
                                    String topic) {
         return Uni.createFrom()
                 .item(() -> parseAndNormalize(
-                        record.getPayload(), topic, record.getOffset()))
+                        record.getPayload(), topic, extractOffset(record)))
                 .flatMap(this::writeToElasticsearch)
                 .onItem().invoke(() -> record.ack())
                 .onFailure().invoke(t ->
@@ -199,7 +198,7 @@ public class AuditEventConsumer {
             KafkaRecord<String, String> record, String topic) {
         return Uni.createFrom()
                 .item(() -> parseAndNormalize(
-                        record.getPayload(), topic, record.getOffset()))
+                        record.getPayload(), topic, extractOffset(record)))
                 .flatMap(event ->
                         writeToElasticsearch(event)
                                 .flatMap(v -> ruleEvaluator.evaluate(event)))
@@ -244,7 +243,7 @@ public class AuditEventConsumer {
         IndexRequest<AuditEvent> request = IndexRequest.of(idx ->
                 idx.index(indexName)
                         .id(event.eventId())
-                        .opType(OpType.Create)   // idempotent — fail on dup
+                        .opType(OpType.Create)
                         .routing(event.userId() != null
                                 ? event.userId() : "global")
                         .document(event));
@@ -256,7 +255,6 @@ public class AuditEventConsumer {
                 .onFailure(co.elastic.clients.elasticsearch
                         ._types.ElasticsearchException.class)
                 .recoverWithUni(e -> {
-                    // 409 = duplicate (idempotent replay) — safe to ignore
                     if (e.getMessage().contains("409") ||
                             e.getMessage().contains("version_conflict")) {
                         log.debugf("Idempotent replay: %s", event.eventId());

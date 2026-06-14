@@ -1,0 +1,21 @@
+<!-- generic-notification.html -->
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{_layout :: layout(~{::body-content})}">
+<head><title>Notificación de Nexus Bank</title></head>
+<body>
+<th:block th:fragment="body-content">
+    <p th:if="${title}" th:text="${title}"
+       style="font-size:18px;font-weight:700;color:#1a1a2e;">
+        Notificación
+    </p>
+    <div th:if="${bodyContent}" th:utext="${bodyContent}">
+        <p>Tienes una nueva notificación en tu cuenta Nexus Bank.</p>
+    </div>
+    <p th:unless="${bodyContent}">
+        Tienes una nueva notificación en tu cuenta Nexus Bank.
+        Abre la aplicación para ver los detalles.
+    </p>
+</th:block>
+</body>
+</html>

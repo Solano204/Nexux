@@ -1,0 +1,15 @@
+# nexus-platform-config/nexus-audit-query-jvm-dev.yml
+# Served by config server when nexus-audit-query-jvm starts with profile=dev
+server:
+  port: 8097
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/nexus_audit
+    username: nexus
+    password: nexus_dev_password
+  data:
+    elasticsearch:
+      uris: http://localhost:9200
+    mongodb:
+      uri: mongodb://nexus:nexus_dev_password@localhost:27017/nexus_audit?authSource=admin

@@ -1,0 +1,60 @@
+# ══════════════════════════════════════════════════════════════════════
+# nexus-analytics-aggregator-lambda — LOCAL DEVELOPMENT Docker Compose
+#
+# This is an AWS Lambda — there is no "run the service" locally like
+# the Spring Boot services. Instead, this compose provides:
+#   1. LocalStack — emulates all required AWS services locally:
+#        DynamoDB   → source transactions table + 6 analytics tables
+#        DynamoDB Streams → triggers Lambda on INSERT/MODIFY
+#        SQS        → DLQ for failed batches
+#        CloudWatch → metrics (LocalStack Pro only; CE fakes it)
+#   2. sam local invoke — test the Lambda locally with a sample event
+#
+# Lambda is invoked by DynamoDB Streams events, not HTTP.
+# There is no port to expose. The Lambda reacts to database changes.
+#
+# Usage for local dev:
+#   1. docker compose up -d nexus-localstack
+#   2. ./scripts/setup-localstack.sh      (creates all DynamoDB tables)
+#   3. sam local invoke -e events/completed_transaction.json \
+#        AnalyticsAggregatorLambda
+#
+# To test the full stream trigger (requires SAM + Docker):
+#   sam local start-lambda   ← emulates Lambda invocation endpoint
+# ══════════════════════════════════════════════════════════════════════
+
+version: "3.9"
+
+networks:
+  nexus-network:
+    driver: bridge
+
+volumes:
+  localstack-data:
+
+services:
+
+  nexus-localstack:
+    image: localstack/localstack:3.2
+    container_name: nexus-localstack
+    restart: unless-stopped
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: dynamodb,sqs,cloudwatch,lambda
+      DEFAULT_REGION: us-east-1
+      EAGER_SERVICE_LOADING: "1"
+      DEBUG: "0"
+      DYNAMODB_HEAP_SIZE: 256m
+    volumes:
+      - localstack-data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./scripts/setup-localstack.sh:/etc/localstack/init/ready.d/setup.sh:ro
+    networks:
+      - nexus-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s

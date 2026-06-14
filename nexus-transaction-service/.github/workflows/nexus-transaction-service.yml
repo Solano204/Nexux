@@ -1,0 +1,241 @@
+# .github/workflows/nexus-transaction-service.yml
+#
+# FIXED from .worlflows/yaml — two problems corrected:
+#   1. Directory typo: .worlflows → .github/workflows
+#   2. Missing .yml extension — GitHub Actions only reads .yml files
+#
+# Changes from original content:
+#   - Added compile step before unit tests
+#   - Added coverage verification step
+#   - Added cache save/restore (was missing in original)
+#   - Added contract tests stage
+#   - Added deploy-staging stage
+#   - Added KAFKA_STREAMS_STATE_DIR env for CI integration tests
+
+name: Nexus Transaction Service Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'nexus-transaction-service/**'
+      - '.github/workflows/nexus-transaction-service.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'nexus-transaction-service/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SERVICE_NAME: nexus-transaction-service
+  JAVA_VERSION: '25'
+  DOCKER_IMAGE: nexusplatform/nexus-transaction-service
+
+jobs:
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 1: COMPILE + UNIT TESTS
+  # State machine logic, SAGA orchestration, velocity topology
+  # ════════════════════════════════════════════════════════════
+  unit-tests:
+    name: Unit Tests (State Machine + SAGA Logic)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-transaction-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Compile
+        run: mvn compile -q --no-transfer-progress
+
+      - name: Run Unit Tests
+        run: |
+          mvn test \
+            -Dgroups="unit" \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            --no-transfer-progress
+
+      - name: Verify Coverage
+        run: |
+          mvn verify \
+            -Dgroups="unit" \
+            -Pcoverage \
+            --no-transfer-progress
+
+      - name: Upload Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Unit Tests — ${{ env.SERVICE_NAME }}
+          path: nexus-transaction-service/target/surefire-reports/*.xml
+          reporter: java-junit
+
+      - name: Cache compiled artifacts
+        uses: actions/cache/save@v4
+        with:
+          path: nexus-transaction-service/target
+          key: compiled-transaction-${{ github.sha }}
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 2: INTEGRATION TESTS
+  # Kafka Streams topology + Elasticsearch indexing + SAGA flow
+  # Testcontainers: PostgreSQL + Kafka + Elasticsearch
+  # ════════════════════════════════════════════════════════════
+  integration-tests:
+    name: Integration Tests (Kafka Streams + ES)
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-transaction-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Restore compiled artifacts
+        uses: actions/cache/restore@v4
+        with:
+          path: nexus-transaction-service/target
+          key: compiled-transaction-${{ github.sha }}
+
+      - name: Run Integration Tests
+        run: |
+          mvn test \
+            -Dgroups="integration" \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            --no-transfer-progress
+        env:
+          TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: /var/run/docker.sock
+          TESTCONTAINERS_RYUK_DISABLED: "false"
+          # Use a temp directory for Kafka Streams state in CI
+          KAFKA_STREAMS_STATE_DIR: /tmp/kafka-streams-ci-${{ github.run_id }}
+
+      - name: Upload Integration Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Integration Tests — ${{ env.SERVICE_NAME }}
+          path: nexus-transaction-service/target/surefire-reports/*.xml
+          reporter: java-junit
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 3: CONTRACT TESTS
+  # ════════════════════════════════════════════════════════════
+  contract-tests:
+    name: Contract Tests
+    needs: integration-tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-transaction-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Run Contract Tests
+        run: |
+          mvn test \
+            -Dgroups="contract" \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            --no-transfer-progress
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 4: DOCKER BUILD + PUSH
+  # ════════════════════════════════════════════════════════════
+  docker-build:
+    name: Docker Build + Push
+    needs: [unit-tests, integration-tests, contract-tests]
+    if: |
+      always() && !failure() && !cancelled() &&
+      (github.ref == 'refs/heads/main' ||
+       github.ref == 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-transaction-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Build JAR
+        run: mvn package -DskipTests --no-transfer-progress
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: nexus-transaction-service
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 5: DEPLOY TO STAGING
+  # ════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy to Staging
+    needs: docker-build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Deploy nexus-transaction-service to staging
+        run: |
+          echo "Deploying ${{ env.SERVICE_NAME }}:${{ github.sha }} to staging"
+          # kubectl set image deployment/nexus-transaction-service \
+          #   nexus-transaction-service=${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+          # kubectl rollout status deployment/nexus-transaction-service --timeout=180s

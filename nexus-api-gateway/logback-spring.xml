@@ -1,0 +1,163 @@
+<!-- ══════════════════════════════════════════════════════════════════
+     nexus-api-gateway — logback-spring.xml
+     Replaces the version in src/main/resources/
+
+     Key changes vs the original:
+       1. LogstashEncoder used for CONSOLE (structured JSON, not plain text)
+          so every log line is machine-parseable by Loki / Promtail.
+       2. <springProfile> blocks activate the LOKI appender only
+          when profile is "docker" or "production" — not in dev/test.
+       3. LogstashEncoder configured with custom fields:
+          - service / environment / version always present
+          - traceId / spanId from Micrometer MDC
+       4. Safe fallback: if Loki is unreachable, ASYNC_LOKI drops
+          messages silently rather than blocking Netty threads.
+     ══════════════════════════════════════════════════════════════════ -->
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- Read from Spring Environment so the app name is always right -->
+    <springProperty name="appName"
+                    source="spring.application.name"
+                    defaultValue="nexus-api-gateway"/>
+    <springProperty name="appVersion"
+                    source="info.app.version"
+                    defaultValue="1.0.0"/>
+    <springProperty name="environment"
+                    source="management.metrics.tags.environment"
+                    defaultValue="local"/>
+    <springProperty name="lokiUrl"
+                    source="loki.url"
+                    defaultValue="http://nexus-loki:3100/loki/api/v1/push"/>
+
+    <!-- ══════════════════════════════════════════════════════════
+         CONSOLE APPENDER
+         Outputs structured JSON using LogstashEncoder.
+         Every log line is a JSON object — parseable by any log
+         aggregator (Loki, ELK, CloudWatch, etc.).
+
+         Required dependency in pom.xml (already present in your project):
+           net.logstash.logback:logstash-logback-encoder
+     ══════════════════════════════════════════════════════════ -->
+    <appender name="CONSOLE"
+              class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <!-- Add constant fields present on every log line -->
+            <customFields>{"service":"${appName}","version":"${appVersion}","environment":"${environment}"}</customFields>
+            <!-- Include MDC fields (traceId / spanId set by Micrometer) -->
+            <includeMdcKeyName>traceId</includeMdcKeyName>
+            <includeMdcKeyName>spanId</includeMdcKeyName>
+            <includeMdcKeyName>X-Request-Id</includeMdcKeyName>
+            <!-- Short class name in "logger" field -->
+            <shortenedLoggerNameLength>36</shortenedLoggerNameLength>
+        </encoder>
+    </appender>
+
+    <!-- ══════════════════════════════════════════════════════════
+         LOKI APPENDER
+         Ships logs to Grafana Loki.
+         Only activated on docker / production profiles.
+
+         Required dependency in pom.xml:
+           com.github.loki4j:loki-logback-appender
+           (see DEPENDENCIES.md for exact version and GAV)
+     ══════════════════════════════════════════════════════════ -->
+    <appender name="LOKI"
+              class="com.github.loki4j.logback.Loki4jAppender">
+        <http>
+            <url>${lokiUrl}</url>
+            <!-- Retry on connection failure — does not block threads -->
+            <connectionTimeoutMs>3000</connectionTimeoutMs>
+            <requestTimeoutMs>5000</requestTimeoutMs>
+        </http>
+        <format>
+            <label>
+                <!--
+                    These labels become Loki stream selectors.
+                    Keep cardinality LOW — service + level + environment only.
+                    traceId is extracted as a *value* inside the message,
+                    not a label, because high-cardinality labels kill Loki.
+                -->
+                <pattern>service=${appName},level=%level,environment=${environment}</pattern>
+                <readMarkers>true</readMarkers>
+            </label>
+            <message class="com.github.loki4j.logback.JsonLayout">
+                <!-- Full structured JSON in Loki message body -->
+                <pattern>
+                    {"time":"%d{yyyy-MM-dd'T'HH:mm:ss.SSS'Z',UTC}",
+                     "level":"%level",
+                     "logger":"%logger{36}",
+                     "thread":"%thread",
+                     "traceId":"%X{traceId:-no-trace}",
+                     "spanId":"%X{spanId:-no-span}",
+                     "requestId":"%X{X-Request-Id:-}",
+                     "message":"%message",
+                     "service":"${appName}",
+                     "environment":"${environment}"}%n
+                </pattern>
+            </message>
+        </format>
+        <!-- Send in batches for efficiency -->
+        <batchMaxItems>1000</batchMaxItems>
+        <batchMaxBytes>4194304</batchMaxBytes>
+        <batchTimeoutMs>2000</batchTimeoutMs>
+    </appender>
+
+    <!-- Async wrapper — prevents Loki slowness from blocking Netty -->
+    <appender name="ASYNC_LOKI"
+              class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="LOKI"/>
+        <queueSize>20000</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <!-- Don't block on queue full — drop rather than slow the gateway -->
+        <neverBlock>true</neverBlock>
+    </appender>
+
+    <!-- ══════════════════════════════════════════════════════════
+         LOGGER CONFIGURATION
+     ══════════════════════════════════════════════════════════ -->
+
+    <!-- Gateway application code — always INFO+ -->
+    <logger name="com.nexus.gateway" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <!-- Loki only on docker/production profiles -->
+        <springProfile name="docker,production">
+            <appender-ref ref="ASYNC_LOKI"/>
+        </springProfile>
+    </logger>
+
+    <!-- Circuit breaker events — useful for alerting -->
+    <logger name="io.github.resilience4j" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <springProfile name="docker,production">
+            <appender-ref ref="ASYNC_LOKI"/>
+        </springProfile>
+    </logger>
+
+    <!-- Reduce noise from framework internals -->
+    <logger name="org.springframework.cloud.gateway" level="WARN"/>
+    <logger name="org.springframework.security" level="WARN"/>
+    <logger name="org.springframework.web" level="WARN"/>
+    <logger name="io.netty" level="WARN"/>
+    <logger name="reactor.netty" level="WARN"/>
+    <logger name="io.lettuce" level="WARN"/>
+    <logger name="com.netflix.eureka" level="WARN"/>
+    <logger name="com.netflix.discovery" level="WARN"/>
+    <logger name="org.springframework.cloud.config" level="WARN"/>
+
+    <!-- Dev profile: enable DEBUG for gateway code -->
+    <springProfile name="dev">
+        <logger name="com.nexus.gateway" level="DEBUG"/>
+        <logger name="org.springframework.cloud.gateway" level="DEBUG"/>
+        <logger name="org.springframework.security" level="DEBUG"/>
+    </springProfile>
+
+    <!-- Root: all other loggers at WARN unless overridden above -->
+    <root level="WARN">
+        <appender-ref ref="CONSOLE"/>
+        <springProfile name="docker,production">
+            <appender-ref ref="ASYNC_LOKI"/>
+        </springProfile>
+    </root>
+
+</configuration>

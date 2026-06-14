@@ -1,0 +1,79 @@
+# ══════════════════════════════════════════════════════════════
+# nexus-audit-query-jvm — DEV profile
+# Active when: SPRING_PROFILES_ACTIVE=dev
+#
+# Prerequisites:
+#   docker compose up -d nexus-postgres nexus-elasticsearch \
+#     nexus-mongodb nexus-config-service nexus-discovery-service
+# ══════════════════════════════════════════════════════════════
+
+spring:
+  cloud:
+    config:
+      enabled: false
+      fail-fast: false
+
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/nexus_audit
+    username: nexus
+    password: nexus_dev_password
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 2
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+  data:
+    elasticsearch:
+      uris: http://localhost:9200
+    mongodb:
+      uri: mongodb://nexus:nexus_dev_password@localhost:27017/nexus_audit?authSource=admin
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.1
+    vectorstore:
+      pgvector:
+        initialize-schema: true
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        dimensions: 1536
+
+server:
+  port: 8097
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9411/api/v2/spans
+
+logging:
+  level:
+    com.nexus.audit: DEBUG
+    org.springframework.ai: DEBUG
+    org.springframework.data.elasticsearch: DEBUG
+    org.springframework.data.mongodb: DEBUG

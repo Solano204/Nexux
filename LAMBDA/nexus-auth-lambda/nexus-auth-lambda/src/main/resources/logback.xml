@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logback configuration for AWS Lambda.
+  
+  Lambda captures stdout/stderr → CloudWatch Logs automatically.
+  JSON format enables CloudWatch Insights structured queries:
+    fields @timestamp, level, message, userId
+    | filter level = "ERROR"
+    | sort @timestamp desc
+  
+  No file appenders — Lambda's /tmp is ephemeral.
+  No async appenders — Lambda freezes between invocations,
+  async buffers would lose unflushed logs.
+-->
+<configuration>
+    <appender name="STDOUT"
+              class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+
+    <!-- Lambda handler + auth logic -->
+    <logger name="com.nexus.auth.lambda" level="INFO"/>
+
+    <!-- AWS SDK — WARN to avoid verbose HTTP logging -->
+    <logger name="software.amazon.awssdk" level="WARN"/>
+    <logger name="software.amazon.awssdk.request" level="WARN"/>
+
+    <!-- Auth0 JWT library -->
+    <logger name="com.auth0" level="WARN"/>
+
+    <!-- X-Ray -->
+    <logger name="com.amazonaws.xray" level="WARN"/>
+</configuration>

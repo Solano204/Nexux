@@ -1,0 +1,173 @@
+<!-- ══════════════════════════════════════════════════════════════════
+     nexus-saga-orchestrator — logback-spring.xml
+
+     The service had NO logback-spring.xml at all. Created from scratch.
+
+     Key design choices for the SAGA orchestrator:
+       1. SAGA state transition logger — always INFO regardless of root
+          level. Every state transition in both SAGAs is logged for the
+          immutable audit trail and incident investigation.
+       2. Timeout monitor logger — always WARN when a saga step times
+          out (this is an alert-worthy event requiring investigation).
+       3. Compensation logger — always WARN when compensation runs
+          (fund release is critical — must be traceable in Loki).
+       4. MDC fields: sagaId, sagaType, sagaStep, transactionId, userId
+          Injected by OnboardingFlowSagaProcessor and TransferSagaProcessor.
+       5. neverBlock on ASYNC_LOKI — Kafka consumer threads process
+          saga replies; log shipping must never delay acknowledgement.
+       6. Loki active only on docker/production profiles.
+     ══════════════════════════════════════════════════════════════════ -->
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <springProperty name="appName"
+                    source="spring.application.name"
+                    defaultValue="nexus-saga-orchestrator"/>
+    <springProperty name="appVersion"
+                    source="info.app.version"
+                    defaultValue="1.0.0"/>
+    <springProperty name="environment"
+                    source="management.metrics.tags.environment"
+                    defaultValue="local"/>
+    <springProperty name="lokiUrl"
+                    source="loki.url"
+                    defaultValue="http://nexus-loki:3100/loki/api/v1/push"/>
+
+    <!-- ══════════════════════════════════════════════════════════
+         PLAIN TEXT CONSOLE — dev/local profile
+     ══════════════════════════════════════════════════════════ -->
+    <springProfile name="!docker,!production">
+        <appender name="CONSOLE"
+                  class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level traceId=%X{traceId:-} sagaId=%X{sagaId:-} step=%X{sagaStep:-} %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <!-- ══════════════════════════════════════════════════════════
+         STRUCTURED JSON + LOKI — docker + production profiles
+         Dependencies:
+           net.logstash.logback:logstash-logback-encoder (in pom.xml)
+           com.github.loki4j:loki-logback-appender:1.5.2 (add to pom.xml)
+     ══════════════════════════════════════════════════════════ -->
+    <springProfile name="docker,production">
+
+        <appender name="CONSOLE"
+                  class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <customFields>{"service":"${appName}","version":"${appVersion}","environment":"${environment}"}</customFields>
+                <includeMdcKeyName>traceId</includeMdcKeyName>
+                <includeMdcKeyName>spanId</includeMdcKeyName>
+                <!-- SAGA-specific MDC -->
+                <includeMdcKeyName>sagaId</includeMdcKeyName>
+                <includeMdcKeyName>sagaType</includeMdcKeyName>
+                <includeMdcKeyName>sagaStep</includeMdcKeyName>
+                <includeMdcKeyName>transactionId</includeMdcKeyName>
+                <includeMdcKeyName>userId</includeMdcKeyName>
+                <shortenedLoggerNameLength>36</shortenedLoggerNameLength>
+            </encoder>
+        </appender>
+
+        <!-- ══════════════════════════════════════════════════
+             LOKI — ships logs to Grafana Loki
+         ══════════════════════════════════════════════════ -->
+        <appender name="LOKI"
+                  class="com.github.loki4j.logback.Loki4jAppender">
+            <http>
+                <url>${lokiUrl}</url>
+                <connectionTimeoutMs>3000</connectionTimeoutMs>
+                <requestTimeoutMs>5000</requestTimeoutMs>
+            </http>
+            <format>
+                <label>
+                    <pattern>service=${appName},level=%level,environment=${environment}</pattern>
+                </label>
+                <message class="com.github.loki4j.logback.JsonLayout">
+                    <pattern>
+                        {"time":"%d{yyyy-MM-dd'T'HH:mm:ss.SSS'Z',UTC}",
+                         "level":"%level",
+                         "logger":"%logger{36}",
+                         "thread":"%thread",
+                         "traceId":"%X{traceId:-no-trace}",
+                         "spanId":"%X{spanId:-no-span}",
+                         "sagaId":"%X{sagaId:-}",
+                         "sagaType":"%X{sagaType:-}",
+                         "sagaStep":"%X{sagaStep:-}",
+                         "transactionId":"%X{transactionId:-}",
+                         "userId":"%X{userId:-}",
+                         "message":"%message",
+                         "service":"${appName}",
+                         "environment":"${environment}"}%n
+                    </pattern>
+                </message>
+            </format>
+            <batchMaxItems>1000</batchMaxItems>
+            <batchMaxBytes>4194304</batchMaxBytes>
+            <batchTimeoutMs>2000</batchTimeoutMs>
+        </appender>
+
+        <!-- CRITICAL neverBlock: Kafka consumer acknowledgement must not
+             be delayed by Loki backpressure — un-acked messages get
+             re-delivered and cause duplicate saga command processing -->
+        <appender name="ASYNC_LOKI"
+                  class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="LOKI"/>
+            <queueSize>20000</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+            <neverBlock>true</neverBlock>
+        </appender>
+
+        <!-- ══════════════════════════════════════════════════
+             SAGA STATE TRANSITION LOGGER — always INFO
+             Every state transition in OnboardingFlowSaga and
+             TransferSaga logged for audit trail.
+         ══════════════════════════════════════════════════ -->
+        <logger name="com.nexus.saga.application" level="INFO" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </logger>
+
+        <!-- Timeout + compensation — always WARN (alert-worthy) -->
+        <logger name="com.nexus.saga.application.timeout" level="WARN" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </logger>
+
+        <!-- All other saga code -->
+        <logger name="com.nexus.saga" level="INFO" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </logger>
+
+        <!-- Framework noise -->
+        <logger name="org.springframework.ai" level="WARN"/>
+        <logger name="org.springframework.kafka" level="WARN"/>
+        <logger name="org.apache.kafka" level="WARN"/>
+        <logger name="org.hibernate" level="WARN"/>
+        <logger name="org.hibernate.SQL" level="WARN"/>
+        <logger name="org.flywaydb" level="WARN"/>
+        <logger name="com.netflix.eureka" level="WARN"/>
+        <logger name="com.netflix.discovery" level="WARN"/>
+        <logger name="org.springframework.cloud" level="WARN"/>
+
+        <root level="WARN">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </root>
+
+    </springProfile>
+
+    <!-- Dev overrides -->
+    <springProfile name="dev">
+        <logger name="com.nexus.saga" level="DEBUG"/>
+        <logger name="org.springframework.ai" level="DEBUG"/>
+        <logger name="org.hibernate.SQL" level="DEBUG"/>
+        <logger name="org.springframework.kafka" level="DEBUG"/>
+    </springProfile>
+
+</configuration>

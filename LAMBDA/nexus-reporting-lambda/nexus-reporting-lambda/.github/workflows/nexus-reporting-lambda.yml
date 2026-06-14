@@ -1,0 +1,258 @@
+# .github/workflows/nexus-reporting-lambda.yml
+#
+# Java 21, SnapStart, daily scheduled trigger.
+# No SnapStart test in CI — SnapStart only activates on published versions.
+# The daily trigger cannot be tested in CI — only manual invocation works.
+
+name: Nexus Reporting Lambda Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'nexus-reporting-lambda/**'
+      - '.github/workflows/nexus-reporting-lambda.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'nexus-reporting-lambda/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: '21'
+  AWS_REGION: us-east-1
+
+jobs:
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 1: BUILD + TEST
+  # Tests: report generators, PDF builder, S3 uploader
+  # ════════════════════════════════════════════════════════════
+  build-test:
+    name: Build + Test (Report Generators + PDF)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-reporting-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Build fat JAR
+        run: mvn package --no-transfer-progress
+
+      - name: Run Tests
+        run: mvn test --no-transfer-progress
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-reporting-jar-${{ github.sha }}
+          path: nexus-reporting-lambda/target/nexus-reporting-lambda-1.0.0.jar
+          retention-days: 7
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 2: DESIGN INVARIANT CHECKS
+  # ════════════════════════════════════════════════════════════
+  verify-design:
+    name: Verify Design Invariants
+    needs: build-test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-reporting-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify all four report generators exist
+        run: |
+          GENERATORS=(
+            "src/main/java/com/nexus/reporting/generator/OperationsReportGenerator.java"
+            "src/main/java/com/nexus/reporting/generator/ComplianceReportGenerator.java"
+            "src/main/java/com/nexus/reporting/generator/BusinessIntelligenceReportGenerator.java"
+            "src/main/java/com/nexus/reporting/generator/UserStatementGenerator.java"
+          )
+          MISSING=0
+          for g in "${GENERATORS[@]}"; do
+            if [ -f "$g" ]; then
+              echo "  ✓ $(basename $g)"
+            else
+              echo "  ✗ MISSING: $g"
+              MISSING=1
+            fi
+          done
+          [ "$MISSING" -eq 0 ] || exit 1
+
+      - name: Verify schedule is UTC noon (6am Mexico City)
+        run: |
+          grep -q "cron(0 12 \* \* ? \*)" template.yaml && \
+            echo "✓ Daily schedule: 12:00 UTC = 06:00 Mexico City" || \
+            (echo "✗ Schedule is not 0 12 * * ? * — verify timezone" && exit 1)
+
+      - name: Verify 15-minute timeout for large datasets
+        run: |
+          grep -q "Timeout: 900" template.yaml && \
+            echo "✓ Timeout set to 900s (15 minutes)" || \
+            echo "⚠  Timeout < 900s — may fail on large dataset days"
+
+      - name: Verify 2GB ephemeral storage for PDFBox
+        run: |
+          grep -q "Size: 2048" template.yaml && \
+            echo "✓ EphemeralStorage: 2048MB for PDFBox temp files" || \
+            echo "⚠  EphemeralStorage < 2048MB — PDFBox may fail on large reports"
+
+      - name: Verify TreatMissingData=breaching on report-not-generated alarm
+        run: |
+          # This alarm catches Lambda not running at all (schedule disabled, etc.)
+          grep -A5 "nexus-daily-report-not-generated" template.yaml | \
+            grep -q "breaching" && \
+            echo "✓ TreatMissingData=breaching — catches Lambda never running" || \
+            (echo "✗ Missing TreatMissingData=breaching on report-not-generated alarm" && exit 1)
+
+      - name: Verify compliance reports use 7-year retention
+        run: |
+          grep -q "ComplianceRetention7Years\|GLACIER\|daily/compliance" template.yaml && \
+            echo "✓ Compliance report lifecycle rules present (CNBV 7-year retention)" || \
+            (echo "✗ Missing compliance retention lifecycle rule" && exit 1)
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 3: SAM BUILD + VALIDATE
+  # ════════════════════════════════════════════════════════════
+  sam-build:
+    name: SAM Build + Validate
+    needs: [build-test, verify-design]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-reporting-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus-reporting-jar-${{ github.sha }}
+          path: nexus-reporting-lambda/target/
+
+      - name: SAM Validate
+        run: sam validate --template template.yaml --lint
+
+      - name: SAM Build
+        run: sam build --template template.yaml
+
+      - name: Upload SAM build
+        uses: actions/upload-artifact@v4
+        with:
+          name: sam-build-reporting-${{ github.sha }}
+          path: nexus-reporting-lambda/.aws-sam/
+          retention-days: 7
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 4: DEPLOY TO STAGING
+  # ════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy to Staging
+    needs: sam-build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: staging
+    defaults:
+      run:
+        working-directory: nexus-reporting-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials (staging)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download SAM build
+        uses: actions/download-artifact@v4
+        with:
+          name: sam-build-reporting-${{ github.sha }}
+          path: nexus-reporting-lambda/.aws-sam/
+
+      - name: SAM Deploy to Staging
+        run: |
+          sam deploy \
+            --config-env staging \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --resolve-s3
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 5: DEPLOY TO PRODUCTION
+  # ════════════════════════════════════════════════════════════
+  deploy-prod:
+    name: Deploy to Production
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: nexus-reporting-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials (production)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download SAM build
+        uses: actions/download-artifact@v4
+        with:
+          name: sam-build-reporting-${{ github.sha }}
+          path: nexus-reporting-lambda/.aws-sam/
+
+      - name: SAM Deploy to Production
+        run: |
+          sam deploy \
+            --config-env prod \
+            --no-fail-on-empty-changeset \
+            --resolve-s3 \
+            --parameter-overrides \
+              "OpsNotificationEmail=${{ secrets.OPS_NOTIFICATION_EMAIL_PROD }}"

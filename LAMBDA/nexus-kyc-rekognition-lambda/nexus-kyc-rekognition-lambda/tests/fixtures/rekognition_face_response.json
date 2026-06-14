@@ -1,0 +1,83 @@
+{
+  "FaceDetails": [
+    {
+      "BoundingBox": {
+        "Width": 0.18,
+        "Height": 0.28,
+        "Left": 0.08,
+        "Top": 0.15
+      },
+      "Confidence": 99.9,
+      "Quality": {
+        "Brightness": 72.5,
+        "Sharpness": 85.3
+      },
+      "Pose": {
+        "Roll": -1.2,
+        "Yaw": 3.5,
+        "Pitch": -2.1
+      },
+      "AgeRange": {
+        "Low": 28,
+        "High": 36
+      },
+      "Gender": {
+        "Value": "Male",
+        "Confidence": 99.1
+      },
+      "Sunglasses": {
+        "Value": false,
+        "Confidence": 98.7
+      },
+      "EyesOpen": {
+        "Value": true,
+        "Confidence": 97.3
+      },
+      "Smile": {
+        "Value": false,
+        "Confidence": 95.2
+      },
+      "Emotions": [
+        {
+          "Type": "CALM",
+          "Confidence": 89.5
+        },
+        {
+          "Type": "HAPPY",
+          "Confidence": 5.2
+        },
+        {
+          "Type": "SAD",
+          "Confidence": 2.1
+        }
+      ],
+      "Landmarks": [
+        {
+          "Type": "eyeLeft",
+          "X": 0.13,
+          "Y": 0.25
+        },
+        {
+          "Type": "eyeRight",
+          "X": 0.21,
+          "Y": 0.25
+        },
+        {
+          "Type": "nose",
+          "X": 0.17,
+          "Y": 0.32
+        },
+        {
+          "Type": "mouthLeft",
+          "X": 0.14,
+          "Y": 0.38
+        },
+        {
+          "Type": "mouthRight",
+          "X": 0.2,
+          "Y": 0.38
+        }
+      ]
+    }
+  ]
+}

@@ -1,7 +1,3 @@
-# application.yml — The config service's own configuration.
-# This file lives IN the service, not in the Git config repo.
-# It must bootstrap independently before connecting to Git.
-
 server:
   port: 8888
 
@@ -9,26 +5,19 @@ spring:
   application:
     name: nexus-config-service
 
-  # ════════════════════════════════════════════════════════
-  # SPRING CLOUD CONFIG SERVER
-  # Git backend: local bare repo mounted as Docker volume.
-  # In production: replace uri with GitHub/GitLab private repo.
-  # ════════════════════════════════════════════════════════
   cloud:
     config:
       server:
         git:
-          uri: file:///config-repo
+          uri: https://github.com/Solano204/nexus-platform-config.git
           default-label: main
-          clone-on-start: true      # clone immediately, fail fast if unavailable
-          force-pull: true          # always pull latest on config request
-          refresh-rate: 30          # check for Git updates every 30s
+          clone-on-start: true
+          force-pull: true
+          refresh-rate: 30
           search-paths:
-            - "."                   # config files at root of repo
-
-    # ── Spring Cloud Bus via Kafka ──────────────────────────
-    # POST /actuator/busrefresh → publishes RefreshEvent to
-    # spring.cloud.bus Kafka topic → ALL services refresh.
+            - "."
+          username: ${GIT_USERNAME:Solano204}
+          password: ${GIT_TOKEN:your-token-here}
     bus:
       enabled: true
       refresh:
@@ -36,9 +25,8 @@ spring:
       destination: spring.cloud.bus
 
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
 
-  # ── Security: protect config endpoints ───────────────────
   security:
     user:
       name: ${CONFIG_SERVER_USERNAME:nexus-config}
@@ -51,9 +39,9 @@ eureka:
     lease-renewal-interval-in-seconds: 30
   client:
     service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
-    register-with-eureka: true
-    fetch-registry: false     # config server doesn't need the registry itself
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
+    register-with-eureka: false
+    fetch-registry: false
 
 management:
   endpoints:
@@ -73,6 +61,4 @@ logging:
     com.nexus: INFO
     org.springframework.cloud.config: INFO
   pattern:
-    console: >
-      %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
-      service=nexus-config-service %logger{36} - %msg%n
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level service=nexus-config-service %logger{36} - %msg%n"

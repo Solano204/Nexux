@@ -1,0 +1,44 @@
+# samconfig.toml — missing from repo, created from scratch
+#
+# IMPORTANT — ComplianceTeamEmail is REQUIRED.
+# SAM will fail without it. Set it via parameter_overrides or
+# pass --parameter-overrides on the command line.
+#
+# SnapStart: AutoPublishAlias: live in template.yaml.
+# Every sam deploy publishes a new version + triggers SnapStart snapshot.
+
+version = 0.1
+
+[default.build.parameters]
+use_container = false
+
+[default.deploy.parameters]
+stack_name = "nexus-fraud-alert-lambda-dev"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-dev"
+s3_prefix = "nexus-fraud-alert-lambda"
+parameter_overrides = "Environment=dev LocalPlaneNotificationUrl=http://host.docker.internal:8080 ComplianceTeamEmail=compliance-dev@nexusbank.com"
+
+[staging.deploy.parameters]
+stack_name = "nexus-fraud-alert-lambda-staging"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-staging"
+s3_prefix = "nexus-fraud-alert-lambda"
+parameter_overrides = "Environment=dev LocalPlaneNotificationUrl=http://nexus-api-gateway.staging.internal:8080 ComplianceTeamEmail=compliance-staging@nexusbank.com"
+
+[prod.deploy.parameters]
+stack_name = "nexus-fraud-alert-lambda-prod"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-prod"
+s3_prefix = "nexus-fraud-alert-lambda"
+# CHANGE BEFORE DEPLOY: ComplianceTeamEmail must be real production address
+parameter_overrides = "Environment=prod LocalPlaneNotificationUrl=http://nexus-api-gateway.prod.internal:8080 ComplianceTeamEmail=compliance@nexusbank.com"

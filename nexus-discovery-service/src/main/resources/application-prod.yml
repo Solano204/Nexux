@@ -1,0 +1,42 @@
+# nexus-discovery-service — PRODUCTION profile
+spring:
+  cloud:
+    config:
+      uri: ${CONFIG_SERVER_URI}
+      enabled: true
+      fail-fast: true
+      username: ${CONFIG_SERVER_USERNAME}
+      password: ${CONFIG_SERVER_PASSWORD}
+  security:
+    user:
+      name: ${EUREKA_USERNAME}
+      password: ${EUREKA_PASSWORD}
+
+eureka:
+  instance:
+    hostname: ${HOSTNAME:nexus-discovery-service}
+    prefer-ip-address: false
+  client:
+    register-with-eureka: false
+    fetch-registry: false
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE}
+  server:
+    enable-self-preservation: true
+    eviction-interval-timer-in-ms: 15000
+    renewal-percent-threshold: 0.85
+
+management:
+  tracing:
+    sampling:
+      probability: 0.05
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT}
+
+logging:
+  level:
+    root: WARN
+    com.nexus: INFO
+    com.netflix.eureka: WARN
+    com.netflix.discovery: WARN

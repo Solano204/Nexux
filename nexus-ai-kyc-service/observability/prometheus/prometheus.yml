@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: nexus-ai-kyc-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-ai-kyc-service:8091]
+
+  - job_name: nexus-config-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-config-service:8888]

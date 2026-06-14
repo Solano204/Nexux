@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/nexus_risk
+    username: nexus
+    password: nexus_dev_password
+  data:
+    elasticsearch:
+      uris: http://localhost:9200
+    redis:
+      host: localhost
+      port: 6379
+      password: ""

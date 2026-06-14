@@ -1,0 +1,13 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/nexus_fraud
+    username: nexus
+    password: nexus_dev_password
+  data:
+    mongodb:
+      uri: mongodb://nexus:nexus_dev_password@localhost:27017/nexus_fraud?authSource=admin
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: ""

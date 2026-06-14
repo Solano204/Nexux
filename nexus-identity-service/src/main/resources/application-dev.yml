@@ -1,0 +1,116 @@
+# ══════════════════════════════════════════════════════════════
+# nexus-identity-service — DEV profile
+# Active when: SPRING_PROFILES_ACTIVE=dev
+# Purpose: run from IDE or  mvn spring-boot:run  on your machine,
+#          with services started via Docker but NOT inside a container.
+#
+# Prerequisites (start manually or via partial compose):
+#   docker compose up -d nexus-postgres nexus-redis nexus-kafka
+#   docker compose up -d nexus-config-service nexus-discovery-service
+#   docker compose up -d nexus-localstack
+# ══════════════════════════════════════════════════════════════
+
+spring:
+  cloud:
+    config:
+      enabled: false      # Don't wait for Config Service in dev
+      fail-fast: false
+    bus:
+      enabled: false      # No Kafka bus in dev
+
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/nexus_identity
+    username: nexus
+    password: nexus_dev_password
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      pool-name: nexus-identity-dev-pool
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: true        # SQL logging helpful in dev
+    properties:
+      hibernate:
+        format_sql: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: ""         # No password in dev Redis
+      timeout: 500ms
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: identity-service-saga-commands-dev
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.3
+
+server:
+  port: 8083
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+
+nexus:
+  jwt:
+    keystore:
+      path: ${JWT_KEYSTORE_PATH:./keys/nexus-identity.jks}
+      password: ${JWT_KEYSTORE_PASSWORD:dev_keystore_password}
+    access-token-expiry-seconds: 3600   # 1 hour in dev (less token refreshing)
+    issuer: nexus-identity-service
+    audience: nexus-platform
+    key:
+      rotation-days: 90
+      rotation-check-hours: 24
+
+  aws:
+    region: us-east-1
+    endpoint-override: http://localhost:4566   # LocalStack
+    access-key-id: test
+    secret-access-key: test
+    kyc-bucket: nexus-kyc-documents
+    kyc-queue-url: http://localhost:4566/000000000000/nexus-kyc-documents-pending
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9411/api/v2/spans
+
+logging:
+  level:
+    com.nexus.identity: DEBUG
+    org.springframework.security: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql: TRACE
+    org.flywaydb: DEBUG
+    software.amazon.awssdk: DEBUG

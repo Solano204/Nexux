@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: nexus-fraud-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-fraud-service:8087]
+
+  - job_name: nexus-elasticsearch
+    metrics_path: /_prometheus/metrics
+    static_configs:
+      - targets: [nexus-elasticsearch:9200]
+
+  - job_name: nexus-config-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-config-service:8888]

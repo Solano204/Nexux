@@ -1,0 +1,160 @@
+<!-- ══════════════════════════════════════════════════════════════════
+     nexus-analytics-service — logback-spring.xml
+
+     Improvements over the original:
+       1. Added Loki appender — original only shipped logs to console.
+       2. Added ASYNC_LOKI with neverBlock — 6 Streams topology threads
+          must never be blocked by Loki backpressure.
+       3. Added customFields (version, environment) to docker encoder.
+       4. Added analytics-specific MDC fields:
+            userId, topologyName, anomalyType, insightCategory
+          Set by InsightGenerationService and SpendingAnomalyDetector.
+       5. Added production profile (original only had docker/!docker).
+       6. Moved root to INFO (original had no explicit root logger,
+          which defaults to DEBUG and floods logs with framework output).
+     ══════════════════════════════════════════════════════════════════ -->
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <springProperty name="appName"
+                    source="spring.application.name"
+                    defaultValue="nexus-analytics-service"/>
+    <springProperty name="appVersion"
+                    source="info.app.version"
+                    defaultValue="1.0.0"/>
+    <springProperty name="environment"
+                    source="management.metrics.tags.environment"
+                    defaultValue="local"/>
+    <springProperty name="lokiUrl"
+                    source="loki.url"
+                    defaultValue="http://nexus-loki:3100/loki/api/v1/push"/>
+
+    <!-- ══════════════════════════════════════════════════════════
+         PLAIN TEXT CONSOLE — dev/local (non-docker) profile
+     ══════════════════════════════════════════════════════════ -->
+    <springProfile name="!docker,!production">
+        <appender name="CONSOLE"
+                  class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level traceId=%X{traceId:-} user=%X{userId:-} topology=%X{topologyName:-} %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <!-- ══════════════════════════════════════════════════════════
+         STRUCTURED JSON + LOKI — docker + production profiles
+         Dependency: net.logstash.logback:logstash-logback-encoder
+         (already in pom.xml via version inherited from root POM)
+     ══════════════════════════════════════════════════════════ -->
+    <springProfile name="docker,production">
+
+        <appender name="CONSOLE"
+                  class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <customFields>{"service":"${appName}","version":"${appVersion}","environment":"${environment}"}</customFields>
+                <includeMdcKeyName>traceId</includeMdcKeyName>
+                <includeMdcKeyName>spanId</includeMdcKeyName>
+                <includeMdcKeyName>userId</includeMdcKeyName>
+                <includeMdcKeyName>topologyName</includeMdcKeyName>
+                <includeMdcKeyName>anomalyType</includeMdcKeyName>
+                <includeMdcKeyName>insightCategory</includeMdcKeyName>
+                <shortenedLoggerNameLength>36</shortenedLoggerNameLength>
+            </encoder>
+        </appender>
+
+        <!-- ══════════════════════════════════════════════════
+             LOKI — ships logs to Grafana Loki
+             Dependency: com.github.loki4j:loki-logback-appender:1.5.2
+             (add to pom.xml — see DEPENDENCIES.md)
+         ══════════════════════════════════════════════════ -->
+        <appender name="LOKI"
+                  class="com.github.loki4j.logback.Loki4jAppender">
+            <http>
+                <url>${lokiUrl}</url>
+                <connectionTimeoutMs>3000</connectionTimeoutMs>
+                <requestTimeoutMs>5000</requestTimeoutMs>
+            </http>
+            <format>
+                <label>
+                    <pattern>service=${appName},level=%level,environment=${environment}</pattern>
+                </label>
+                <message class="com.github.loki4j.logback.JsonLayout">
+                    <pattern>
+                        {"time":"%d{yyyy-MM-dd'T'HH:mm:ss.SSS'Z',UTC}",
+                         "level":"%level",
+                         "logger":"%logger{36}",
+                         "thread":"%thread",
+                         "traceId":"%X{traceId:-no-trace}",
+                         "spanId":"%X{spanId:-no-span}",
+                         "userId":"%X{userId:-}",
+                         "topologyName":"%X{topologyName:-}",
+                         "anomalyType":"%X{anomalyType:-}",
+                         "insightCategory":"%X{insightCategory:-}",
+                         "message":"%message",
+                         "service":"${appName}",
+                         "environment":"${environment}"}%n
+                    </pattern>
+                </message>
+            </format>
+            <batchMaxItems>1000</batchMaxItems>
+            <batchMaxBytes>4194304</batchMaxBytes>
+            <batchTimeoutMs>2000</batchTimeoutMs>
+        </appender>
+
+        <!-- neverBlock: 6 Streams topology threads must never pause
+             waiting for Loki to absorb high-throughput transaction events -->
+        <appender name="ASYNC_LOKI"
+                  class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="LOKI"/>
+            <queueSize>20000</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+            <neverBlock>true</neverBlock>
+        </appender>
+
+        <!-- Anomaly detection logger — always INFO for alert audit trail -->
+        <logger name="com.nexus.analytics.application.anomaly" level="INFO" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </logger>
+
+        <!-- Insight generation logger — INFO to track AI call / fallback -->
+        <logger name="com.nexus.analytics.application" level="INFO" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </logger>
+
+        <!-- All other analytics code -->
+        <logger name="com.nexus.analytics" level="INFO" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </logger>
+
+        <!-- Kafka Streams — WARN (very chatty at INFO with 6 topologies) -->
+        <logger name="org.apache.kafka.streams" level="WARN"/>
+        <logger name="org.apache.kafka" level="WARN"/>
+        <logger name="org.springframework.kafka" level="WARN"/>
+        <logger name="org.springframework.ai" level="WARN"/>
+        <logger name="org.springframework.data.elasticsearch" level="WARN"/>
+        <logger name="io.lettuce" level="WARN"/>
+        <logger name="com.netflix.eureka" level="WARN"/>
+        <logger name="co.elastic" level="WARN"/>
+
+        <root level="WARN">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </root>
+
+    </springProfile>
+
+    <!-- Dev overrides -->
+    <springProfile name="dev">
+        <logger name="com.nexus.analytics" level="DEBUG"/>
+        <logger name="org.apache.kafka.streams" level="DEBUG"/>
+        <logger name="org.springframework.ai" level="DEBUG"/>
+    </springProfile>
+
+</configuration>

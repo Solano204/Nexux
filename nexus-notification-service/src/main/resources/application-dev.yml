@@ -1,0 +1,77 @@
+# ══════════════════════════════════════════════════════════════
+# nexus-notification-service — DEV profile
+# Active when: SPRING_PROFILES_ACTIVE=dev
+#
+# Prerequisites:
+#   docker compose up -d nexus-mongodb nexus-redis nexus-kafka \
+#     nexus-config-service nexus-discovery-service
+# ══════════════════════════════════════════════════════════════
+
+spring:
+  cloud:
+    config:
+      enabled: false
+      fail-fast: false
+
+  threads:
+    virtual:
+      enabled: true
+
+  data:
+    mongodb:
+      uri: mongodb://nexus:nexus_dev_password@localhost:27017/nexus_notification?authSource=admin
+    redis:
+      host: localhost
+      port: 6379
+      password: ""
+      timeout: 500ms
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.7
+
+server:
+  port: 8089
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+
+resilience4j:
+  retry:
+    instances:
+      openai-retry:
+        max-attempts: 2        # Fewer retries in dev
+        wait-duration: 500ms
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9411/api/v2/spans
+
+logging:
+  level:
+    com.nexus.notification: DEBUG
+    org.springframework.data.mongodb: DEBUG
+    org.springframework.kafka: DEBUG
+    org.springframework.ai: DEBUG
+    io.lettuce: DEBUG

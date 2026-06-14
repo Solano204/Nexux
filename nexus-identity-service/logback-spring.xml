@@ -1,0 +1,161 @@
+<!-- ══════════════════════════════════════════════════════════════════
+     nexus-identity-service — logback-spring.xml
+     Replaces the version in src/main/resources/
+
+     Improvements over original:
+       1. LogstashEncoder with explicit customFields — service name,
+          version, and environment on every JSON log line.
+       2. <springProfile> — LOKI appender only active on docker /
+          production profiles. Dev/test get CONSOLE only (no Loki noise).
+       3. neverBlock on ASYNC_LOKI — drops logs rather than blocking
+          Tomcat threads during Loki backpressure.
+       4. Security audit logger — separate logger at INFO that always
+          logs auth events (login, token revocation, KYC decisions)
+          regardless of root level.
+       5. SQL logger controlled per profile (DEBUG in dev, WARN in prod)
+          without changing root level.
+     ══════════════════════════════════════════════════════════════════ -->
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <springProperty name="appName"
+                    source="spring.application.name"
+                    defaultValue="nexus-identity-service"/>
+    <springProperty name="appVersion"
+                    source="info.app.version"
+                    defaultValue="1.0.0"/>
+    <springProperty name="environment"
+                    source="management.metrics.tags.environment"
+                    defaultValue="local"/>
+    <springProperty name="lokiUrl"
+                    source="loki.url"
+                    defaultValue="http://nexus-loki:3100/loki/api/v1/push"/>
+
+    <!-- ══════════════════════════════════════════════════════════
+         CONSOLE APPENDER — Structured JSON via LogstashEncoder
+         Required dependency:
+           net.logstash.logback:logstash-logback-encoder  (already in pom.xml)
+     ══════════════════════════════════════════════════════════ -->
+    <appender name="CONSOLE"
+              class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <customFields>{"service":"${appName}","version":"${appVersion}","environment":"${environment}"}</customFields>
+            <includeMdcKeyName>traceId</includeMdcKeyName>
+            <includeMdcKeyName>spanId</includeMdcKeyName>
+            <includeMdcKeyName>X-Request-Id</includeMdcKeyName>
+            <shortenedLoggerNameLength>36</shortenedLoggerNameLength>
+        </encoder>
+    </appender>
+
+    <!-- ══════════════════════════════════════════════════════════
+         LOKI APPENDER — Ships logs to Grafana Loki
+         Required dependency:
+           com.github.loki4j:loki-logback-appender:1.5.2
+           (see DEPENDENCIES.md — add to pom.xml)
+     ══════════════════════════════════════════════════════════ -->
+    <appender name="LOKI"
+              class="com.github.loki4j.logback.Loki4jAppender">
+        <http>
+            <url>${lokiUrl}</url>
+            <connectionTimeoutMs>3000</connectionTimeoutMs>
+            <requestTimeoutMs>5000</requestTimeoutMs>
+        </http>
+        <format>
+            <label>
+                <!-- Low-cardinality labels only -->
+                <pattern>service=${appName},level=%level,environment=${environment}</pattern>
+            </label>
+            <message class="com.github.loki4j.logback.JsonLayout">
+                <pattern>
+                    {"time":"%d{yyyy-MM-dd'T'HH:mm:ss.SSS'Z',UTC}",
+                     "level":"%level",
+                     "logger":"%logger{36}",
+                     "thread":"%thread",
+                     "traceId":"%X{traceId:-no-trace}",
+                     "spanId":"%X{spanId:-no-span}",
+                     "requestId":"%X{X-Request-Id:-}",
+                     "userId":"%X{userId:-}",
+                     "message":"%message",
+                     "service":"${appName}",
+                     "environment":"${environment}"}%n
+                </pattern>
+            </message>
+        </format>
+        <batchMaxItems>1000</batchMaxItems>
+        <batchMaxBytes>4194304</batchMaxBytes>
+        <batchTimeoutMs>2000</batchTimeoutMs>
+    </appender>
+
+    <!-- Async wrapper — neverBlock prevents Loki slowness from
+         blocking Tomcat threads (critical for BCrypt latency) -->
+    <appender name="ASYNC_LOKI"
+              class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="LOKI"/>
+        <queueSize>20000</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
+    </appender>
+
+    <!-- ══════════════════════════════════════════════════════════
+         SECURITY AUDIT LOGGER
+         Always at INFO regardless of root level.
+         Captures: logins, logouts, token revocations, KYC decisions,
+         failed auth attempts, password changes.
+         The UserCommandService logs to com.nexus.identity.audit.*
+     ══════════════════════════════════════════════════════════ -->
+    <logger name="com.nexus.identity.audit" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <springProfile name="docker,production">
+            <appender-ref ref="ASYNC_LOKI"/>
+        </springProfile>
+    </logger>
+
+    <!-- ══════════════════════════════════════════════════════════
+         APPLICATION LOGGERS
+     ══════════════════════════════════════════════════════════ -->
+    <logger name="com.nexus.identity" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <springProfile name="docker,production">
+            <appender-ref ref="ASYNC_LOKI"/>
+        </springProfile>
+    </logger>
+
+    <!-- ══════════════════════════════════════════════════════════
+         FRAMEWORK NOISE REDUCTION
+     ══════════════════════════════════════════════════════════ -->
+    <logger name="org.springframework.security" level="WARN"/>
+    <logger name="org.hibernate" level="WARN"/>
+    <logger name="org.hibernate.SQL" level="WARN"/>
+    <logger name="org.hibernate.type.descriptor.sql" level="WARN"/>
+    <logger name="org.flywaydb" level="WARN"/>
+    <logger name="software.amazon.awssdk" level="WARN"/>
+    <logger name="com.amazonaws" level="WARN"/>
+    <logger name="com.netflix.eureka" level="WARN"/>
+    <logger name="com.netflix.discovery" level="WARN"/>
+    <logger name="io.lettuce" level="WARN"/>
+    <logger name="org.springframework.kafka" level="WARN"/>
+    <logger name="org.apache.kafka" level="WARN"/>
+    <logger name="org.springframework.cloud.config" level="WARN"/>
+
+    <!-- ══════════════════════════════════════════════════════════
+         DEV OVERRIDES — More verbose when running locally
+     ══════════════════════════════════════════════════════════ -->
+    <springProfile name="dev">
+        <logger name="com.nexus.identity" level="DEBUG"/>
+        <logger name="org.springframework.security" level="DEBUG"/>
+        <logger name="org.hibernate.SQL" level="DEBUG"/>
+        <logger name="org.flywaydb" level="DEBUG"/>
+        <logger name="software.amazon.awssdk" level="DEBUG"/>
+    </springProfile>
+
+    <!-- ══════════════════════════════════════════════════════════
+         ROOT
+     ══════════════════════════════════════════════════════════ -->
+    <root level="WARN">
+        <appender-ref ref="CONSOLE"/>
+        <springProfile name="docker,production">
+            <appender-ref ref="ASYNC_LOKI"/>
+        </springProfile>
+    </root>
+
+</configuration>

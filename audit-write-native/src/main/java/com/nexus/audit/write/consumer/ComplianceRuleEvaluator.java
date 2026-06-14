@@ -13,6 +13,7 @@ import org.jboss.logging.Logger;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.Flow;
 
 /**
  * Compliance Rule Evaluator — real-time rule assessment on write path.
@@ -208,6 +209,11 @@ public class ComplianceRuleEvaluator {
         return Uni.createFrom().voidItem();
     }
 
+    /**
+     * Converts the MongoDB reactivestreams Publisher to a
+     * java.util.concurrent.Flow.Publisher via AdaptersToFlow,
+     * which is what Mutiny's Uni.createFrom().publisher() requires.
+     */
     private Uni<Void> createAlert(ComplianceAlert alert) {
         Document doc = new Document()
                 .append("_id", alert.alertId())
@@ -221,10 +227,12 @@ public class ComplianceRuleEvaluator {
                 .append("generatedAt", alert.generatedAt().toString())
                 .append("reviewed", false);
 
-        return Uni.createFrom().publisher(
-                        mongoClient.getDatabase("nexus_audit")
-                                .getCollection("compliance_alerts")
-                                .insertOne(doc))
+        return Uni.createFrom()
+                .publisher(
+                        org.reactivestreams.FlowAdapters.toFlowPublisher(
+                                mongoClient.getDatabase("nexus_audit")
+                                        .getCollection("compliance_alerts")
+                                        .insertOne(doc)))
                 .replaceWithVoid()
                 .onFailure().invoke(t ->
                         log.warnf("Failed to create compliance alert: %s",

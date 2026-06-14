@@ -1,0 +1,5 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/nexus_ai_assistant
+    username: nexus
+    password: nexus_dev_password

@@ -1,0 +1,8 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/nexus_account
+    username: nexus
+    password: nexus_dev_password
+  data:
+    mongodb:
+      uri: mongodb://nexus:nexus_dev_password@localhost:27017/nexus_account?authSource=admin

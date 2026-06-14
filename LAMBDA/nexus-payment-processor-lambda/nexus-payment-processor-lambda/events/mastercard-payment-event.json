@@ -1,0 +1,29 @@
+{
+  "Records": [
+    {
+      "messageId": "mc-test-msg-001",
+      "receiptHandle": "test-receipt-handle-mc",
+      "body": "{\"externalPaymentId\":\"mc-event-98765\",\"paymentNetwork\":\"MASTERCARD\",\"eventType\":\"PAYMENT_COMPLETED\",\"networkTransactionId\":\"mc-txn-54321\",\"amount\":\"875.50\",\"currency\":\"MXN\",\"cardLast4\":\"8901\",\"cardToken\":\"tok_mc_test_001\",\"merchantId\":\"MERCHANT-XYZ789\",\"merchantName\":\"Costco Wholesale\",\"merchantCategoryCode\":\"5300\",\"authorizationCode\":\"AUTH456\",\"responseCode\":\"00\",\"terminalId\":\"TERM002\",\"posEntryMode\":\"CONTACTLESS\",\"cardholderPresent\":true,\"isContactless\":true,\"timestamp\":\"2025-05-07T15:45:00Z\",\"targetAccountId\":\"nexus-account-uuid-002\"}",
+      "attributes": {
+        "ApproximateReceiveCount": "1",
+        "SentTimestamp": "1715095500000",
+        "SenderId": "123456789012",
+        "ApproximateFirstReceiveTimestamp": "1715095501000"
+      },
+      "messageAttributes": {
+        "X-Signature": {
+          "stringValue": "sha256=test-hmac-signature-for-mc-event",
+          "dataType": "String"
+        },
+        "X-Network": {
+          "stringValue": "MASTERCARD",
+          "dataType": "String"
+        }
+      },
+      "md5OfBody": "test-md5-mc",
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:us-east-1:123456789012:nexus-payment-incoming",
+      "awsRegion": "us-east-1"
+    }
+  ]
+}

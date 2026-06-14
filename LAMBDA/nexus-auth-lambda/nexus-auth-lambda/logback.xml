@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  nexus-auth-lambda — logback.xml (IMPROVED)
+
+  Original used plain-text format. Replaced with structured JSON so
+  CloudWatch Insights can query individual fields without regex.
+
+  CloudWatch Insights query examples with this format:
+    fields @timestamp, level, message, userId, jti
+    | filter level = "ERROR"
+    | sort @timestamp desc
+
+    fields @timestamp, message, durationMs
+    | filter operation = "token_validation"
+    | stats avg(durationMs), pct(durationMs, 95) by bin(5m)
+
+  IMPORTANT Lambda logging rules preserved from original:
+  - No file appenders (Lambda /tmp is ephemeral and not persisted)
+  - No async appenders (Lambda freezes between invocations;
+    async buffers lose unflushed logs on freeze)
+  - Log4j2 bridge wired via aws-lambda-java-log4j2 dependency
+
+  Requires net.logstash.logback:logstash-logback-encoder in pom.xml
+  (see DEPENDENCIES.md — add to pom.xml).
+-->
+<configuration>
+
+    <appender name="STDOUT"
+              class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <!-- Lambda-specific fields on every log line -->
+            <customFields>{"service":"nexus-auth-lambda"}</customFields>
+            <!-- Auth-specific MDC fields -->
+            <includeMdcKeyName>userId</includeMdcKeyName>
+            <includeMdcKeyName>jti</includeMdcKeyName>
+            <includeMdcKeyName>operation</includeMdcKeyName>
+            <includeMdcKeyName>awsRequestId</includeMdcKeyName>
+            <shortenedLoggerNameLength>36</shortenedLoggerNameLength>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+
+    <!-- Lambda handler + auth logic -->
+    <logger name="com.nexus.auth.lambda" level="INFO"/>
+
+    <!-- AWS SDK — WARN to avoid verbose HTTP logging -->
+    <logger name="software.amazon.awssdk" level="WARN"/>
+    <logger name="software.amazon.awssdk.request" level="WARN"/>
+
+    <!-- Auth0 JWT library -->
+    <logger name="com.auth0" level="WARN"/>
+
+    <!-- X-Ray -->
+    <logger name="com.amazonaws.xray" level="WARN"/>
+
+</configuration>

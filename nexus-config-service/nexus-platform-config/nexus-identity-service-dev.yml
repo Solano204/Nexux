@@ -1,0 +1,14 @@
+# nexus-identity-service-dev.yml
+# Local dev overrides for identity service
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/nexus_identity
+    username: nexus
+    password: nexus_dev_password
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: ""

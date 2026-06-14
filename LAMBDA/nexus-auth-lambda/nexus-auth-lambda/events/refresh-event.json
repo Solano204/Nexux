@@ -1,0 +1,25 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /auth/refresh",
+  "rawPath": "/auth/refresh",
+  "rawQueryString": "",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"refreshToken\":\"test-refresh-token-value\",\"previousJti\":\"old-jti-123\"}",
+  "requestContext": {
+    "accountId": "123456789012",
+    "apiId": "test-api",
+    "http": {
+      "method": "POST",
+      "path": "/auth/refresh",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "127.0.0.1",
+      "userAgent": "SAM-CLI/1.0"
+    },
+    "requestId": "test-request-id-2",
+    "stage": "$default",
+    "time": "07/May/2025:14:35:00 +0000"
+  },
+  "isBase64Encoded": false
+}

@@ -1,0 +1,43 @@
+# samconfig.toml — missing from repo, created from scratch
+#
+# KYC Rekognition Lambda — S3-triggered, Python 3.12.
+# No SnapStart (Python). Cold starts ~200-500ms — acceptable for
+# async document processing (consumer waits for SQS result anyway).
+#
+# Note on the S3 bucket:
+#   The template names the bucket nexus-kyc-documents-{AccountId}
+#   (account-ID suffix ensures global uniqueness).
+#   resolve_s3=true lets SAM manage the artifact bucket separately.
+#   The KYC documents bucket is CREATED by this SAM stack — not pre-existing.
+
+version = 0.1
+
+[default.build.parameters]
+use_container = false
+
+[default.deploy.parameters]
+stack_name = "nexus-kyc-rekognition-dev"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-dev"
+s3_prefix = "nexus-kyc-rekognition-lambda"
+
+[staging.deploy.parameters]
+stack_name = "nexus-kyc-rekognition-staging"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-staging"
+s3_prefix = "nexus-kyc-rekognition-lambda"
+
+[prod.deploy.parameters]
+stack_name = "nexus-kyc-rekognition-prod"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-prod"
+s3_prefix = "nexus-kyc-rekognition-lambda"

@@ -1,0 +1,156 @@
+<!-- ══════════════════════════════════════════════════════════════════
+     nexus-account-service — logback-spring.xml
+
+     Improvements over the original:
+       1. LogstashEncoder with customFields (service, version, environment)
+       2. LOKI appender active only on docker/production profiles
+       3. neverBlock on ASYNC_LOKI — locks/reservations can't be delayed
+          by Loki backpressure
+       4. Financial operations logger at INFO — always logs balance
+          reservations, releases, and finalizations for audit trail
+       5. userId + accountId + reservationId in MDC fields pulled
+          into every Loki log line
+     ══════════════════════════════════════════════════════════════════ -->
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <springProperty name="appName"
+                    source="spring.application.name"
+                    defaultValue="nexus-account-service"/>
+    <springProperty name="appVersion"
+                    source="info.app.version"
+                    defaultValue="1.0.0"/>
+    <springProperty name="environment"
+                    source="management.metrics.tags.environment"
+                    defaultValue="local"/>
+    <springProperty name="lokiUrl"
+                    source="loki.url"
+                    defaultValue="http://nexus-loki:3100/loki/api/v1/push"/>
+
+    <!-- ══════════════════════════════════════════════════════════
+         CONSOLE — Structured JSON
+         Dependency: net.logstash.logback:logstash-logback-encoder (in pom.xml)
+     ══════════════════════════════════════════════════════════ -->
+    <appender name="CONSOLE"
+              class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <customFields>{"service":"${appName}","version":"${appVersion}","environment":"${environment}"}</customFields>
+            <includeMdcKeyName>traceId</includeMdcKeyName>
+            <includeMdcKeyName>spanId</includeMdcKeyName>
+            <includeMdcKeyName>accountId</includeMdcKeyName>
+            <includeMdcKeyName>userId</includeMdcKeyName>
+            <includeMdcKeyName>reservationId</includeMdcKeyName>
+            <includeMdcKeyName>sagaId</includeMdcKeyName>
+            <shortenedLoggerNameLength>36</shortenedLoggerNameLength>
+        </encoder>
+    </appender>
+
+    <!-- ══════════════════════════════════════════════════════════
+         LOKI — Active on docker/production profiles only
+         Dependency: com.github.loki4j:loki-logback-appender:1.5.2
+         (add to pom.xml — see DEPENDENCIES.md)
+     ══════════════════════════════════════════════════════════ -->
+    <appender name="LOKI"
+              class="com.github.loki4j.logback.Loki4jAppender">
+        <http>
+            <url>${lokiUrl}</url>
+            <connectionTimeoutMs>3000</connectionTimeoutMs>
+            <requestTimeoutMs>5000</requestTimeoutMs>
+        </http>
+        <format>
+            <label>
+                <pattern>service=${appName},level=%level,environment=${environment}</pattern>
+            </label>
+            <message class="com.github.loki4j.logback.JsonLayout">
+                <pattern>
+                    {"time":"%d{yyyy-MM-dd'T'HH:mm:ss.SSS'Z',UTC}",
+                     "level":"%level",
+                     "logger":"%logger{36}",
+                     "thread":"%thread",
+                     "traceId":"%X{traceId:-no-trace}",
+                     "spanId":"%X{spanId:-no-span}",
+                     "accountId":"%X{accountId:-}",
+                     "userId":"%X{userId:-}",
+                     "reservationId":"%X{reservationId:-}",
+                     "sagaId":"%X{sagaId:-}",
+                     "message":"%message",
+                     "service":"${appName}",
+                     "environment":"${environment}"}%n
+                </pattern>
+            </message>
+        </format>
+        <batchMaxItems>1000</batchMaxItems>
+        <batchMaxBytes>4194304</batchMaxBytes>
+        <batchTimeoutMs>2000</batchTimeoutMs>
+    </appender>
+
+    <!-- neverBlock: SELECT FOR UPDATE → balance finalization must never
+         be delayed by Loki backpressure -->
+    <appender name="ASYNC_LOKI"
+              class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="LOKI"/>
+        <queueSize>20000</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
+    </appender>
+
+    <!-- ══════════════════════════════════════════════════════════
+         FINANCIAL OPERATIONS LOGGER
+         Always at INFO — logs every balance reservation, release,
+         and finalization for audit trail even if root is WARN.
+         The AccountCommandService logs to com.nexus.account.financial.*
+     ══════════════════════════════════════════════════════════ -->
+    <logger name="com.nexus.account.financial" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <springProfile name="docker,production">
+            <appender-ref ref="ASYNC_LOKI"/>
+        </springProfile>
+    </logger>
+
+    <!-- ══════════════════════════════════════════════════════════
+         APPLICATION LOGGERS
+     ══════════════════════════════════════════════════════════ -->
+    <logger name="com.nexus.account" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <springProfile name="docker,production">
+            <appender-ref ref="ASYNC_LOKI"/>
+        </springProfile>
+    </logger>
+
+    <!-- ══════════════════════════════════════════════════════════
+         FRAMEWORK NOISE REDUCTION
+     ══════════════════════════════════════════════════════════ -->
+    <logger name="org.hibernate" level="WARN"/>
+    <logger name="org.hibernate.SQL" level="WARN"/>
+    <logger name="org.flywaydb" level="WARN"/>
+    <logger name="org.springframework.data.mongodb" level="WARN"/>
+    <logger name="org.springframework.kafka" level="WARN"/>
+    <logger name="org.apache.kafka" level="WARN"/>
+    <logger name="io.lettuce" level="WARN"/>
+    <logger name="com.netflix.eureka" level="WARN"/>
+    <logger name="com.netflix.discovery" level="WARN"/>
+    <logger name="org.springframework.cloud" level="WARN"/>
+    <logger name="org.springframework.ai" level="WARN"/>
+
+    <!-- ══════════════════════════════════════════════════════════
+         DEV OVERRIDES
+     ══════════════════════════════════════════════════════════ -->
+    <springProfile name="dev">
+        <logger name="com.nexus.account" level="DEBUG"/>
+        <logger name="org.hibernate.SQL" level="DEBUG"/>
+        <logger name="org.springframework.data.mongodb" level="DEBUG"/>
+        <logger name="org.springframework.kafka" level="DEBUG"/>
+        <logger name="org.springframework.ai" level="DEBUG"/>
+    </springProfile>
+
+    <!-- ══════════════════════════════════════════════════════════
+         ROOT
+     ══════════════════════════════════════════════════════════ -->
+    <root level="WARN">
+        <appender-ref ref="CONSOLE"/>
+        <springProfile name="docker,production">
+            <appender-ref ref="ASYNC_LOKI"/>
+        </springProfile>
+    </root>
+
+</configuration>

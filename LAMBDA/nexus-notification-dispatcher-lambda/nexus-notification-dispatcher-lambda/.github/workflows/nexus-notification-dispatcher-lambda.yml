@@ -1,0 +1,250 @@
+# .github/workflows/nexus-notification-dispatcher-lambda.yml
+#
+# Java 21, SnapStart, SNS-triggered.
+# IMPORTANT: FromEmailAddress must be SES-verified in both staging
+# and production AWS accounts before deploy. See DEPENDENCIES.md.
+
+name: Notification Dispatcher Lambda Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'nexus-notification-dispatcher-lambda/**'
+      - '.github/workflows/nexus-notification-dispatcher-lambda.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'nexus-notification-dispatcher-lambda/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: '21'
+  AWS_REGION: us-east-1
+
+jobs:
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 1: BUILD + TEST
+  # Tests cover: template rendering, dispatcher routing, SES/SNS calls
+  # ════════════════════════════════════════════════════════════
+  build-test:
+    name: Build + Test (Templates + Dispatchers)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-notification-dispatcher-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Build fat JAR
+        run: mvn package --no-transfer-progress
+
+      - name: Run Tests
+        run: mvn test --no-transfer-progress
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-notification-dispatcher-jar-${{ github.sha }}
+          path: nexus-notification-dispatcher-lambda/target/nexus-notification-dispatcher-lambda-1.0.0.jar
+          retention-days: 7
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 2: VERIFY EMAIL TEMPLATES
+  # All 8 templates must be present and valid HTML
+  # ════════════════════════════════════════════════════════════
+  verify-templates:
+    name: Verify Email Templates
+    needs: build-test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-notification-dispatcher-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check all required templates exist
+        run: |
+          TEMPLATES=(
+            "src/main/resources/templates/email/_layout.html"
+            "src/main/resources/templates/email/transaction-completed.html"
+            "src/main/resources/templates/email/transaction-failed.html"
+            "src/main/resources/templates/email/fraud-alert.html"
+            "src/main/resources/templates/email/account-created.html"
+            "src/main/resources/templates/email/kyc-approved.html"
+            "src/main/resources/templates/email/kyc-rejected.html"
+            "src/main/resources/templates/email/login-new-device.html"
+            "src/main/resources/templates/email/generic-notification.html"
+          )
+
+          MISSING=0
+          for t in "${TEMPLATES[@]}"; do
+            if [ -f "$t" ]; then
+              echo "  ✓ $t"
+            else
+              echo "  ✗ MISSING: $t"
+              MISSING=1
+            fi
+          done
+          [ "$MISSING" -eq 0 ] && echo "All 9 templates present" || exit 1
+
+      - name: Verify templates reference _layout.html
+        run: |
+          MISSING_LAYOUT=0
+          for t in src/main/resources/templates/email/*.html; do
+            BASENAME=$(basename "$t")
+            if [ "$BASENAME" = "_layout.html" ]; then continue; fi
+            if grep -q "layout" "$t" || grep -q "_layout" "$t"; then
+              echo "  ✓ $BASENAME references layout"
+            else
+              echo "  ⚠  $BASENAME — no layout reference found"
+            fi
+          done
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 3: SAM BUILD + VALIDATE
+  # ════════════════════════════════════════════════════════════
+  sam-build:
+    name: SAM Build + Validate
+    needs: [build-test, verify-templates]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-notification-dispatcher-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus-notification-dispatcher-jar-${{ github.sha }}
+          path: nexus-notification-dispatcher-lambda/target/
+
+      - name: SAM Validate
+        run: sam validate --template template.yaml --lint
+
+      - name: SAM Build
+        run: sam build --template template.yaml
+
+      - name: Upload SAM build
+        uses: actions/upload-artifact@v4
+        with:
+          name: sam-build-notification-dispatcher-${{ github.sha }}
+          path: nexus-notification-dispatcher-lambda/.aws-sam/
+          retention-days: 7
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 4: DEPLOY TO STAGING
+  # ════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy to Staging
+    needs: sam-build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: staging
+    defaults:
+      run:
+        working-directory: nexus-notification-dispatcher-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials (staging)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download SAM build
+        uses: actions/download-artifact@v4
+        with:
+          name: sam-build-notification-dispatcher-${{ github.sha }}
+          path: nexus-notification-dispatcher-lambda/.aws-sam/
+
+      - name: SAM Deploy to Staging
+        run: |
+          sam deploy \
+            --config-env staging \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --resolve-s3 \
+            --parameter-overrides \
+              "IosPlatformApplicationArn=${{ secrets.IOS_PLATFORM_APP_ARN_STAGING }}" \
+              "AndroidPlatformApplicationArn=${{ secrets.ANDROID_PLATFORM_APP_ARN_STAGING }}"
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 5: DEPLOY TO PRODUCTION
+  # ════════════════════════════════════════════════════════════
+  deploy-prod:
+    name: Deploy to Production
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: nexus-notification-dispatcher-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials (production)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download SAM build
+        uses: actions/download-artifact@v4
+        with:
+          name: sam-build-notification-dispatcher-${{ github.sha }}
+          path: nexus-notification-dispatcher-lambda/.aws-sam/
+
+      - name: SAM Deploy to Production
+        run: |
+          sam deploy \
+            --config-env prod \
+            --no-fail-on-empty-changeset \
+            --resolve-s3 \
+            --parameter-overrides \
+              "IosPlatformApplicationArn=${{ secrets.IOS_PLATFORM_APP_ARN_PROD }}" \
+              "AndroidPlatformApplicationArn=${{ secrets.ANDROID_PLATFORM_APP_ARN_PROD }}"

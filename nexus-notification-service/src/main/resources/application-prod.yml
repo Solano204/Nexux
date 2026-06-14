@@ -1,0 +1,49 @@
+# nexus-notification-service — PRODUCTION profile
+# All values come from environment variables — no hardcoded secrets.
+
+spring:
+  cloud:
+    config:
+      uri: ${CONFIG_SERVER_URI}
+      enabled: true
+      fail-fast: true
+      username: ${CONFIG_SERVER_USERNAME}
+      password: ${CONFIG_SERVER_PASSWORD}
+      retry:
+        max-attempts: 15
+        initial-interval: 2000
+        max-interval: 10000
+        multiplier: 1.5
+    bus:
+      enabled: true
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+
+server:
+  port: 8089
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE}
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 30
+    lease-expiration-duration-in-seconds: 90
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: ${TRACING_SAMPLE_RATE:0.1}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT}
+
+logging:
+  level:
+    root: WARN
+    com.nexus: INFO

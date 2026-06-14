@@ -1,0 +1,44 @@
+# nexus-discovery-service — DOCKER profile
+spring:
+  cloud:
+    config:
+      uri: http://nexus-config-service:8888
+      enabled: true
+      fail-fast: false
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
+      retry:
+        max-attempts: 6
+        initial-interval: 2000
+        max-interval: 10000
+        multiplier: 1.5
+  security:
+    user:
+      name: ${EUREKA_USERNAME:eureka-admin}
+      password: ${EUREKA_PASSWORD:eureka-admin-password}
+
+eureka:
+  instance:
+    hostname: nexus-discovery-service
+    prefer-ip-address: false
+  client:
+    register-with-eureka: false
+    fetch-registry: false
+    service-url:
+      defaultZone: http://nexus-discovery-service:8761/eureka/
+  server:
+    enable-self-preservation: false
+    eviction-interval-timer-in-ms: 10000
+    wait-time-in-ms-when-sync-empty: 0
+
+management:
+  zipkin:
+    tracing:
+      endpoint: http://nexus-zipkin:9411/api/v2/spans
+
+logging:
+  level:
+    root: INFO
+    com.nexus: INFO
+    com.netflix.eureka: WARN
+    com.netflix.discovery: WARN

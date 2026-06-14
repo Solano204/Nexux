@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: local-docker
+    platform: nexus-financial
+
+scrape_configs:
+  - job_name: nexus-notification-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-notification-service:8089]
+
+  - job_name: nexus-config-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-config-service:8888]
+
+  - job_name: nexus-discovery-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-discovery-service:8761]

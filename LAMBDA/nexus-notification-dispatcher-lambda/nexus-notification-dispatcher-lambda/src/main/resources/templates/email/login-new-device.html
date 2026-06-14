@@ -1,0 +1,32 @@
+<!-- login-new-device.html -->
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{_layout :: layout(~{::body-content})}">
+<head><title>Nuevo inicio de sesión detectado</title></head>
+<body>
+<th:block th:fragment="body-content">
+    <p style="font-size:20px;font-weight:700;color:#f59e0b;">
+        🔐 Nuevo inicio de sesión detectado
+    </p>
+    <p>Detectamos un inicio de sesión en tu cuenta desde un dispositivo o ubicación nuevos.</p>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+        <tr>
+            <td style="color:#6b7280;padding:8px 0;">Dispositivo</td>
+            <td style="text-align:right;"
+                th:text="${deviceName ?: 'Desconocido'}">Desconocido</td>
+        </tr>
+        <tr>
+            <td style="color:#6b7280;padding:8px 0;">Ubicación</td>
+            <td style="text-align:right;"
+                th:text="${location ?: 'No disponible'}">No disponible</td>
+        </tr>
+        <tr>
+            <td style="color:#6b7280;padding:8px 0;">Fecha y hora</td>
+            <td style="text-align:right;"
+                th:text="${loginTime ?: '---'}">---</td>
+        </tr>
+    </table>
+    <p>Si fuiste tú, puedes ignorar este mensaje. Si no reconoces esta actividad, te recomendamos cambiar tu contraseña inmediatamente.</p>
+</th:block>
+</body>
+</html>

@@ -1,0 +1,67 @@
+# nexus-platform-config/application-prod.yml
+# Overrides application.yml for ALL services when profile=production
+# Applied on top of application.yml (base) → application-prod.yml (overrides)
+
+management:
+  tracing:
+    sampling:
+      probability: 0.1              # 10% tracing in production — control cost
+  endpoint:
+    health:
+      show-details: when-authorized
+
+spring:
+  jpa:
+    show-sql: false                  # never log SQL in production
+    hibernate:
+      ddl-auto: validate            # validate only — never mutate schema
+
+  flyway:
+    baseline-on-migrate: false      # no auto-baseline in production
+
+  data:
+    mongodb:
+      auto-index-creation: false    # manage indexes explicitly
+
+logging:
+  level:
+    root: WARN
+    com.nexus: INFO
+    org.springframework.ai: WARN
+    org.hibernate.SQL: WARN
+    org.apache.kafka: WARN
+    com.netflix.eureka: WARN
+    com.netflix.discovery: WARN
+
+nexus:
+  features:
+    kyc-ai-analysis: true
+    fraud-ai-analysis: true
+    notification-ai-content: true
+    analytics-ai-insights: true
+    voice-input: true
+    document-analysis: true
+
+  fraud:
+    thresholds:
+      approve-below: 30
+    velocity:
+      max-transactions-5min: 5
+      max-amount-5min: 2000
+
+  transaction:
+    rate-limit:
+      max-per-user-per-minute: 20
+
+  ai:
+    assistant:
+      rate-limit:
+        max-messages-per-day: 100
+        max-tokens-per-hour: 100000
+
+# ── Swagger UI: disabled in production ───────────────────────
+springdoc:
+  swagger-ui:
+    enabled: false
+  api-docs:
+    enabled: false
