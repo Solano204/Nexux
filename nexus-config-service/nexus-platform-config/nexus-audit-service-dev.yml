@@ -5,6 +5,6 @@ spring:
     password: nexus_dev_password
   data:
     elasticsearch:
-      uris: http://localhost:9200
+      uris: http://localhost:9201
     mongodb:
       uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_audit?authSource=admin

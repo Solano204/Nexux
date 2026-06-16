@@ -7,7 +7,7 @@ spring:
 
   cloud:
     config:
-      uri: http://localhost:8888
+      uri: ${CONFIG_SERVER_URI:http://localhost:8888}
       fail-fast: false
       retry:
         max-attempts: 3
@@ -20,16 +20,16 @@ spring:
 
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev@nexus-mongodb:27018/nexus_notification?authSource=admin}
+      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev_password@localhost:27018/nexus_notification?authSource=admin}
       auto-index-creation: true
     redis:
-      host: ${REDIS_HOST:nexus-redis}
-      port: ${REDIS_PORT:6379}
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
       password: ${REDIS_PASSWORD:}
       timeout: 100ms
 
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
     consumer:
       auto-offset-reset: earliest
       enable-auto-commit: false
@@ -87,13 +87,8 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
 
 logging:
   level:
     com.nexus.notification: INFO
-  pattern:
-    console: >
-      %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
-      traceId=%X{traceId} spanId=%X{spanId}
-      service=nexus-notification-service %logger{36} - %msg%n

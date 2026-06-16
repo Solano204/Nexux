@@ -1,21 +1,7 @@
-# ══════════════════════════════════════════════════════════════
-# nexus-notification-service — DEV profile
-# Active when: SPRING_PROFILES_ACTIVE=dev
-#
-# Prerequisites:
-#   docker compose up -d nexus-mongodb nexus-redis nexus-kafka \
-#     nexus-config-service nexus-discovery-service
-# ══════════════════════════════════════════════════════════════
-
 spring:
   cloud:
     config:
-      uri: http://localhost:8888
-      fail-fast: false
-      retry:
-        max-attempts: 3
-      username: ${CONFIG_SERVER_USERNAME:nexus-config}
-      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
+      enabled: false
 
   threads:
     virtual:
@@ -26,12 +12,12 @@ spring:
       uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_notification?authSource=admin
     redis:
       host: localhost
-      port: 6379
+      port: 6380
       password: ""
       timeout: 500ms
 
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: localhost:19092
     consumer:
       auto-offset-reset: earliest
       enable-auto-commit: false
@@ -60,7 +46,7 @@ resilience4j:
   retry:
     instances:
       openai-retry:
-        max-attempts: 2        # Fewer retries in dev
+        max-attempts: 2
         wait-duration: 500ms
 
 management:
@@ -70,7 +56,7 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: http://localhost:9411/api/v2/spans
+      endpoint: http://localhost:9412/api/v2/spans
 
 logging:
   level:

@@ -1,21 +1,7 @@
-# ══════════════════════════════════════════════════════════════
-# nexus-ai-assistant-service — DEV profile
-# Active when: SPRING_PROFILES_ACTIVE=dev
-#
-# Prerequisites:
-#   docker compose up -d nexus-postgres nexus-redis nexus-kafka \
-#     nexus-config-service nexus-discovery-service nexus-ollama
-# ══════════════════════════════════════════════════════════════
-
 spring:
   cloud:
     config:
-      uri: http://localhost:8888
-      fail-fast: false
-      retry:
-        max-attempts: 3
-      username: ${CONFIG_SERVER_USERNAME:nexus-config}
-      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
+      enabled: false
 
   threads:
     virtual:
@@ -32,17 +18,20 @@ spring:
   jpa:
     hibernate:
       ddl-auto: validate
-    show-sql: false
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
 
   data:
     redis:
       host: localhost
-      port: 6379
+      port: 6380
       password: ""
       timeout: 500ms
 
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: localhost:19092
 
   ai:
     openai:
@@ -62,7 +51,7 @@ spring:
       memory:
         repository:
           jdbc:
-            initialize-schema: always    # Auto-create schema in dev
+            initialize-schema: always
 
     vectorstore:
       pgvector:
@@ -99,7 +88,7 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: http://localhost:9411/api/v2/spans
+      endpoint: http://localhost:9412/api/v2/spans
 
 logging:
   level:

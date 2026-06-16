@@ -25,7 +25,7 @@ spring:
       destination: spring.cloud.bus
 
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
 
   security:
     user:
@@ -54,11 +54,12 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
 
 logging:
   level:
     root: INFO
     com.nexus: INFO
     org.springframework.cloud.config: INFO
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level service=nexus-config-service %logger{36} - %msg%n"

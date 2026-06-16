@@ -32,6 +32,9 @@ management:
     enabled: true
     sampling:
       probability: 0.05
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
   endpoint:
     health:
       show-details: when-authorized

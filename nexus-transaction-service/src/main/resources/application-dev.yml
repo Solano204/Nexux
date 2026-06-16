@@ -1,22 +1,7 @@
-# ══════════════════════════════════════════════════════════════
-# nexus-transaction-service — DEV profile
-# Active when: SPRING_PROFILES_ACTIVE=dev
-# Run from IDE or  mvn spring-boot:run  on your machine.
-#
-# Prerequisites (start these first):
-#   docker compose up -d nexus-postgres nexus-elasticsearch \
-#     nexus-kafka nexus-config-service nexus-discovery-service
-# ══════════════════════════════════════════════════════════════
-
 spring:
   cloud:
     config:
-      uri: http://localhost:8888
-      fail-fast: false
-      retry:
-        max-attempts: 3
-      username: ${CONFIG_SERVER_USERNAME:nexus-config}
-      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
+      enabled: false
 
   threads:
     virtual:
@@ -30,7 +15,7 @@ spring:
       maximum-pool-size: 10
       minimum-idle: 2
       data-source-properties:
-        lock_timeout: 30000       # More lenient in dev
+        lock_timeout: 30000
         application_name: nexus-transaction-service-dev
 
   jpa:
@@ -46,12 +31,12 @@ spring:
     baseline-on-migrate: true
 
   elasticsearch:
-    uris: http://localhost:9200
+    uris: http://localhost:9201
     connection-timeout: 10s
     socket-timeout: 60s
 
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: localhost:19092
     producer:
       acks: all
       enable-idempotence: true
@@ -60,10 +45,10 @@ spring:
       enable-auto-commit: false
     streams:
       application-id: nexus-transaction-streams-dev
-      bootstrap-servers: localhost:9092
+      bootstrap-servers: localhost:19092
       properties:
         state.dir: /tmp/kafka-streams-state-dev
-        processing.guarantee: at_least_once   # Easier to reset in dev
+        processing.guarantee: at_least_once
         commit.interval.ms: 1000
 
 server:
@@ -85,7 +70,7 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: http://localhost:9411/api/v2/spans
+      endpoint: http://localhost:9412/api/v2/spans
 
 logging:
   level:

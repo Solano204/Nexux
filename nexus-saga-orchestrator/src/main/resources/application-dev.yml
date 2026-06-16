@@ -1,21 +1,7 @@
-# ══════════════════════════════════════════════════════════════
-# nexus-saga-orchestrator — DEV profile
-# Active when: SPRING_PROFILES_ACTIVE=dev
-#
-# Prerequisites:
-#   docker compose up -d nexus-postgres nexus-kafka \
-#     nexus-config-service nexus-discovery-service
-# ══════════════════════════════════════════════════════════════
-
 spring:
   cloud:
     config:
-      uri: http://localhost:8888
-      fail-fast: false
-      retry:
-        max-attempts: 3
-      username: ${CONFIG_SERVER_USERNAME:nexus-config}
-      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
+      enabled: false
 
   threads:
     virtual:
@@ -30,7 +16,7 @@ spring:
       minimum-idle: 2
       connection-timeout: 5000
       data-source-properties:
-        lock_timeout: 10000   # More lenient in dev
+        lock_timeout: 10000
 
   jpa:
     hibernate:
@@ -46,7 +32,7 @@ spring:
     baseline-on-migrate: true
 
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: localhost:19092
     consumer:
       enable-auto-commit: false
       isolation-level: read_committed
@@ -79,7 +65,7 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: http://localhost:9411/api/v2/spans
+      endpoint: http://localhost:9412/api/v2/spans
 
 logging:
   level:

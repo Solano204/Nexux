@@ -1,10 +1,11 @@
 spring:
   cloud:
     config:
+      uri: ${CONFIG_SERVER_URI:http://nexus-config-service:8888}
       enabled: true
       fail-fast: true
-      username: ${CONFIG_SERVER_USERNAME:nexus-config}
-      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
+      username: ${CONFIG_SERVER_USERNAME}
+      password: ${CONFIG_SERVER_PASSWORD}
     bus:
       enabled: true
 

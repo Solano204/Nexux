@@ -32,9 +32,6 @@ eureka:
 management:
   tracing:
     enabled: false
-  zipkin:
-    tracing:
-      endpoint: http://localhost:9411/api/v2/spans
 
 logging:
   level:

@@ -1,21 +1,7 @@
-# ══════════════════════════════════════════════════════════════
-# nexus-ledger-service — DEV profile
-# Active when: SPRING_PROFILES_ACTIVE=dev
-#
-# Prerequisites:
-#   docker compose up -d nexus-postgres nexus-mongodb nexus-kafka \
-#     nexus-config-service nexus-discovery-service
-# ══════════════════════════════════════════════════════════════
-
 spring:
   cloud:
     config:
-      uri: http://localhost:8888
-      fail-fast: false
-      retry:
-        max-attempts: 3
-      username: ${CONFIG_SERVER_USERNAME:nexus-config}
-      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
+      enabled: false
 
   threads:
     virtual:
@@ -29,7 +15,7 @@ spring:
       maximum-pool-size: 10
       minimum-idle: 2
       data-source-properties:
-        lock_timeout: 30000         # More lenient in dev
+        lock_timeout: 30000
         application_name: nexus-ledger-service-dev
 
   jpa:
@@ -42,7 +28,7 @@ spring:
 
   flyway:
     enabled: true
-    locations: classpath:db/migration   # NOTE: actual files are in db.migration/ — see BUGS.md
+    locations: classpath:db/migration
     baseline-on-migrate: true
 
   data:
@@ -50,7 +36,7 @@ spring:
       uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_ledger?authSource=admin
 
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: localhost:19092
     consumer:
       group-id: ledger-service-saga-commands-dev
 
@@ -81,7 +67,7 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: http://localhost:9411/api/v2/spans
+      endpoint: http://localhost:9412/api/v2/spans
 
 logging:
   level:

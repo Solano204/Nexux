@@ -7,7 +7,7 @@ spring:
 
   cloud:
     config:
-      uri: http://localhost:8888
+      uri: ${CONFIG_SERVER_URI:http://localhost:8888}
       fail-fast: false
       retry:
         max-attempts: 3
@@ -18,13 +18,10 @@ spring:
     virtual:
       enabled: true
 
-  # ════════════════════════════════════════════════════════
-  # POSTGRESQL — Immutable audit trail (kyc_audit_entries)
-  # ════════════════════════════════════════════════════════
   datasource:
-    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5433/nexus_kyc}
+    url: ${DATASOURCE_URL:jdbc:postgresql://localhost:5433/nexus_kyc}
     username: ${POSTGRES_USER:nexus}
-    password: ${POSTGRES_PASSWORD:}
+    password: ${POSTGRES_PASSWORD:nexus_dev_password}
     hikari:
       maximum-pool-size: 20
       connection-timeout: 5000
@@ -40,30 +37,19 @@ spring:
     enabled: true
     locations: classpath:db/migration
 
-  # ════════════════════════════════════════════════════════
-  # MONGODB — KYC documents, decisions, GridFS encrypted docs
-  # ════════════════════════════════════════════════════════
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev@nexus-mongodb:27018/nexus_kyc?authSource=admin}
+      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev_password@localhost:27018/nexus_kyc?authSource=admin}
       auto-index-creation: true
 
-  # ════════════════════════════════════════════════════════
-  # KAFKA — SAGA replies + domain events
-  # ════════════════════════════════════════════════════════
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
     producer:
       acks: all
       enable-idempotence: true
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
-  # ════════════════════════════════════════════════════════
-  # SPRING AI — Two-stage KYC pipeline
-  # Stage 1: GPT-4o Vision (document extraction, temp=0.0)
-  # Stage 2: GPT-4o-mini (data comparison, temp=0.0)
-  # ════════════════════════════════════════════════════════
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:}
@@ -72,7 +58,6 @@ spring:
           model: gpt-4o
           temperature: 0.0
 
-  # Multipart: up to 10MB document images
   servlet:
     multipart:
       max-file-size: 10MB
@@ -84,7 +69,7 @@ server:
 eureka:
   client:
     service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
     register-with-eureka: true
     fetch-registry: true
   instance:
@@ -92,9 +77,6 @@ eureka:
     lease-renewal-interval-in-seconds: 30
     lease-expiration-duration-in-seconds: 90
 
-# ══════════════════════════════════════════════════════════
-# KYC Service custom configuration
-# ══════════════════════════════════════════════════════════
 nexus:
   kyc:
     s3:
@@ -143,13 +125,8 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
 
 logging:
   level:
     com.nexus.kyc: INFO
-  pattern:
-    console: >
-      %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
-      traceId=%X{traceId} spanId=%X{spanId}
-      service=nexus-ai-kyc-service %logger{36} - %msg%n

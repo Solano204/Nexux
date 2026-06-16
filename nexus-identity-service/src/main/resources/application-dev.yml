@@ -1,28 +1,15 @@
-# ══════════════════════════════════════════════════════════════
-# nexus-identity-service — DEV profile
-# Active when: SPRING_PROFILES_ACTIVE=dev
-# Purpose: run from terminal on your machine with direct JVM
-#          without being overridden by config server remote data.
-# ══════════════════════════════════════════════════════════════
-
 spring:
   config:
     import: ""
 
   cloud:
     config:
-      uri: http://localhost:8888
-      fail-fast: false
-      retry:
-        max-attempts: 3
-      username: ${CONFIG_SERVER_USERNAME:nexus-config}
-      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
+      enabled: false
 
   threads:
     virtual:
-      enabled: true       # Activación de Virtual Threads para Java 25
+      enabled: true
 
-  # ── JPA + POSTGRESQL (LOCALHOST DEV OVERRIDES) ────────────────
   datasource:
     url: jdbc:postgresql://localhost:5433/nexus_identity
     username: nexus
@@ -33,84 +20,48 @@ spring:
       pool-name: nexus-identity-dev-pool
 
   jpa:
+    show-sql: true
     hibernate:
       ddl-auto: validate
-    show-sql: true        # Habilita el log de queries SQL en consola
     properties:
       hibernate:
         format_sql: true
 
   flyway:
-    enabled: true
     baseline-on-migrate: true
 
-  # ── REDIS (LOCALHOST) ─────────────────────────────────────────
   data:
     redis:
       host: localhost
-      port: 6379
+      port: 6380
       password: ""
-      timeout: 500ms
 
-  # ── KAFKA (LOCALHOST) ─────────────────────────────────────────
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: localhost:19092
     consumer:
       group-id: identity-service-saga-commands-dev
-      auto-offset-reset: earliest
-      enable-auto-commit: false
-
-  ai:
-    openai:
-      api-key: ${OPENAI_API_KEY:}
-
-server:
-  port: 8083
-
-# ════════════════════════════════════════════════════════════════
-# EUREKA CLIENTE — CREDENCIALES FIJAS REQUERIDAS DE INFRAESTRUCTURA
-# ════════════════════════════════════════════════════════════════
-eureka:
-  client:
-    register-with-eureka: true
-    fetch-registry: true
-    service-url:
-      defaultZone: http://localhost:8761/eureka/
-  instance:
-    prefer-ip-address: true
 
 nexus:
   jwt:
     keystore:
-      path: ${JWT_KEYSTORE_PATH:./keys/nexus-identity.jks}
-      password: ${JWT_KEYSTORE_PASSWORD:dev_keystore_password}
-    access-token-expiry-seconds: 3600
-    issuer: nexus-identity-service
-    audience: nexus-platform
-    key:
-      rotation-days: 90
-      rotation-check-hours: 24
+      path: ./keys/nexus-identity.jks
+      password: dev_keystore_password
 
   aws:
-    region: us-east-1
-    endpoint-override: http://localhost:4566  # Redirección a LocalStack local
-    kyc-bucket: nexus-kyc-documents
+    endpoint-override: http://localhost:4566
     kyc-queue-url: http://localhost:4566/000000000000/nexus-kyc-documents-pending
 
 management:
   tracing:
-    enabled: true
     sampling:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: http://localhost:9411/api/v2/spans
+      endpoint: http://localhost:9412/api/v2/spans
 
 logging:
   level:
     com.nexus.identity: DEBUG
     org.springframework.security: DEBUG
     org.hibernate.SQL: DEBUG
-    org.hibernate.type.descriptor.sql: TRACE
     org.flywaydb: DEBUG
-    software.amazon.awssdk: DEBUG

@@ -7,7 +7,7 @@ spring:
 
   cloud:
     config:
-      uri: http://localhost:8888
+      uri: ${CONFIG_SERVER_URI:http://localhost:8888}
       fail-fast: false
       retry:
         max-attempts: 3
@@ -21,7 +21,7 @@ spring:
   datasource:
     url: ${DATASOURCE_URL:jdbc:postgresql://localhost:5433/nexus_risk}
     username: ${POSTGRES_USER:nexus}
-    password: ${POSTGRES_PASSWORD:}
+    password: ${POSTGRES_PASSWORD:nexus_dev_password}
     hikari:
       maximum-pool-size: 30
       connection-timeout: 5000
@@ -39,19 +39,17 @@ spring:
 
   data:
     redis:
-      host: ${REDIS_HOST:nexus-redis}
-      port: ${REDIS_PORT:6379}
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
       password: ${REDIS_PASSWORD:}
       timeout: 100ms
 
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
     producer:
       acks: "1"
-      key-serializer: >
-        org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: >
-        org.apache.kafka.common.serialization.StringSerializer
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
     consumer:
       enable-auto-commit: false
       auto-offset-reset: earliest
@@ -64,13 +62,12 @@ spring:
       chat:
         options:
           model: gpt-4o
-          temperature: 0.0   # deterministic — compliance requirement
+          temperature: 0.0
           timeout: 120s
 
 server:
   port: 8094
 
-# Scheduling enabled
 task:
   scheduling:
     enabled: true
@@ -90,9 +87,9 @@ resilience4j:
   ratelimiter:
     instances:
       openai-risk:
-        limit-for-period: 55          # 55/min, safe below 60 RPM limit
+        limit-for-period: 55
         limit-refresh-period: 60s
-        timeout-duration: 30s         # wait up to 30s for a slot
+        timeout-duration: 30s
 
 management:
   endpoints:
@@ -113,4 +110,8 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
+
+logging:
+  level:
+    com.nexus.risk: INFO

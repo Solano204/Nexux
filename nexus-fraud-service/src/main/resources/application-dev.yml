@@ -1,26 +1,7 @@
-# ══════════════════════════════════════════════════════════════
-# nexus-fraud-service — DEV profile
-# Active when: SPRING_PROFILES_ACTIVE=dev
-#
-# Prerequisites:
-#   docker compose up -d nexus-postgres nexus-redis \
-#     nexus-elasticsearch nexus-kafka \
-#     nexus-config-service nexus-discovery-service
-# ══════════════════════════════════════════════════════════════
-
 spring:
   cloud:
     config:
-      uri: http://localhost:8888
-      fail-fast: false
-      retry:
-        max-attempts: 3
-      username: ${CONFIG_SERVER_USERNAME:nexus-config}
-      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
-
-  threads:
-    virtual:
-      enabled: true
+      enabled: false
 
   datasource:
     url: jdbc:postgresql://localhost:5433/nexus_fraud
@@ -29,74 +10,41 @@ spring:
     hikari:
       maximum-pool-size: 5
       minimum-idle: 2
-      data-source-properties:
-        application_name: nexus-fraud-service-dev
 
   jpa:
+    show-sql: true
     hibernate:
       ddl-auto: validate
-    show-sql: true
 
   flyway:
-    enabled: true
-    locations: classpath:db/migration   # NOTE: see BUGS.md — fix dir name first
     baseline-on-migrate: true
 
   data:
     redis:
       host: localhost
-      port: 6379
+      port: 6380
       password: ""
-      timeout: 500ms
 
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: localhost:19092
     consumer:
       group-id: fraud-service-saga-commands-dev
 
   ai:
-    openai:
-      api-key: ${OPENAI_API_KEY:}
-      chat:
-        options:
-          model: gpt-4o-mini
-          temperature: 0.1
     vectorstore:
       pgvector:
         initialize-schema: true
-        table-name: fraud_policy_embeddings
 
   elasticsearch:
-    uris: http://localhost:9200
-
-server:
-  port: 8087
-
-eureka:
-  client:
-    service-url:
-      defaultZone: http://localhost:8761/eureka/
-    register-with-eureka: true
-    fetch-registry: true
-  instance:
-    prefer-ip-address: true
-
-resilience4j:
-  circuitbreaker:
-    instances:
-      openai:
-        sliding-window-size: 5
-        failure-rate-threshold: 60
-        wait-duration-in-open-state: 10s
+    uris: http://localhost:9201
 
 management:
   tracing:
-    enabled: true
     sampling:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: http://localhost:9411/api/v2/spans
+      endpoint: http://localhost:9412/api/v2/spans
 
 logging:
   level:

@@ -1,55 +1,45 @@
 # nexus-platform-config/application-dev.yml
 # Overrides application.yml for ALL services when profile=dev
-# ── LOCAL DEV OVERRIDES ───────────────────────────────────────
-# Replaces all Docker hostnames with localhost
-# Uses your actual local passwords
+# Replaces all Docker hostnames with localhost using PORT+1 to avoid conflicts
 
 spring:
-  # ── Kafka → localhost ─────────────────────────────────────
   kafka:
     bootstrap-servers: localhost:19092
 
-  # ── JPA dev settings ─────────────────────────────────────
   jpa:
     show-sql: false
     hibernate:
       ddl-auto: update
 
-  # ── Redis → localhost ─────────────────────────────────────
   data:
     redis:
       host: localhost
-      port: 6379
+      port: 6380
       password: ""
 
-    # ── Elasticsearch → localhost ───────────────────────────
     elasticsearch:
-      uris: http://localhost:9200
+      uris: http://localhost:9201
 
-    # ── MongoDB → localhost ─────────────────────────────────
     mongodb:
       uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_platform?authSource=admin
 
-# ── Eureka → localhost ───────────────────────────────────────
 eureka:
   client:
     service-url:
       defaultZone: http://localhost:8761/eureka/
 
-# ── Zipkin → localhost ───────────────────────────────────────
 management:
   tracing:
     sampling:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: http://localhost:9411/api/v2/spans
+      endpoint: http://localhost:9412/api/v2/spans
   endpoints:
     web:
       exposure:
         include: health,info,prometheus,metrics,refresh
 
-# ── Logging ──────────────────────────────────────────────────
 logging:
   level:
     root: INFO

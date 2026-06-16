@@ -1,12 +1,25 @@
 spring:
   cloud:
     config:
+      uri: ${CONFIG_SERVER_URI:http://nexus-config-service:8888}
       enabled: true
       fail-fast: true
-      username: ${CONFIG_SERVER_USERNAME:nexus-config}
-      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
+      username: ${CONFIG_SERVER_USERNAME}
+      password: ${CONFIG_SERVER_PASSWORD}
     bus:
       enabled: true
+
+  datasource:
+    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5432/nexus_accounts}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      pool-name: nexus-account-prod-pool
+      data-source-properties:
+        lock_timeout: 10000
+        statement_timeout: 60000
 
   jpa:
     show-sql: false
@@ -18,21 +31,35 @@ spring:
 
   data:
     mongodb:
-      auto-index-creation: false
+      uri: ${MONGODB_URI:mongodb://nexus-mongodb:27017/nexus_accounts}
+    redis:
+      host: ${REDIS_HOST:nexus-redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 100ms
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
 
 eureka:
   client:
     service-url:
       defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+  instance:
+    lease-renewal-interval-in-seconds: 30
+    lease-expiration-duration-in-seconds: 90
+    health-check-url-path: /actuator/health
 
 management:
   tracing:
-    enabled: true
     sampling:
-      probability: 0.05
+      probability: ${TRACING_SAMPLE_RATE:0.05}
   zipkin:
     tracing:
       endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+  metrics:
+    tags:
+      environment: production
 
 logging:
   level:
@@ -41,4 +68,3 @@ logging:
     org.hibernate.SQL: WARN
     org.apache.kafka: WARN
     com.netflix.eureka: WARN
-    com.netflix.discovery: WARN

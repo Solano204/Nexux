@@ -5,7 +5,7 @@ spring:
     password: nexus_dev_password
   data:
     elasticsearch:
-      uris: http://localhost:9200
+      uris: http://localhost:9201
   kafka:
     streams:
       state-dir: /tmp/kafka-streams/transaction
