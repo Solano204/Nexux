@@ -1,0 +1,239 @@
+{
+  "info": {
+    "name": "NEXUS - Ledger Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Double-entry financial ledger. Stores all debit/credit postings, provides balances, monthly summaries, and AI-powered transaction explanations via SSE. Port: 8088"
+  },
+  "item": [
+    {
+      "name": "Ledger (User-Facing)",
+      "item": [
+        {
+          "name": "Get Ledger Balance",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ledger/accounts/{{accountId}}/balance",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ledger", "accounts", "{{accountId}}", "balance"],
+              "variable": [
+                { "key": "accountId", "value": "550e8400-e29b-41d4-a716-446655440000" }
+              ]
+            },
+            "description": "Current ledger balance computed from all posted entries.\n\nResponse 200: { accountId: UUID, balance: BigDecimal, currency: 'MXN' }"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Ledger Entries (Paginated)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ledger/accounts/{{accountId}}/entries?page=0&size=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ledger", "accounts", "{{accountId}}", "entries"],
+              "variable": [
+                { "key": "accountId", "value": "550e8400-e29b-41d4-a716-446655440000" }
+              ],
+              "query": [
+                { "key": "page", "value": "0", "description": "Page number (0-based)" },
+                { "key": "size", "value": "20", "description": "Page size" }
+              ]
+            },
+            "description": "Full paginated ledger entry history for an account.\n\nResponse 200: Page<LedgerEntryResponse> {\n  content: [{ entryId, postingId, type: DEBIT|CREDIT, amount, runningBalance, description, postedAt }],\n  totalElements, totalPages, number, size\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Monthly Summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ledger/accounts/{{accountId}}/summary/monthly?year=2026&month=6",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ledger", "accounts", "{{accountId}}", "summary", "monthly"],
+              "variable": [
+                { "key": "accountId", "value": "550e8400-e29b-41d4-a716-446655440000" }
+              ],
+              "query": [
+                { "key": "year", "value": "2026", "description": "Year (e.g. 2026)" },
+                { "key": "month", "value": "6", "description": "Month (1-12)" }
+              ]
+            },
+            "description": "Monthly summary of debits, credits, and net movement.\n\nResponse 200: MonthlySummaryResponse {\n  accountId, year, month,\n  totalDebits: BigDecimal, totalCredits: BigDecimal, netChange: BigDecimal,\n  openingBalance: BigDecimal, closingBalance: BigDecimal,\n  transactionCount: int, categoryBreakdown: List<CategoryBreakdownResponse>\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Posting Detail by Transaction",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ledger/transactions/{{transactionId}}/posting",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ledger", "transactions", "{{transactionId}}", "posting"],
+              "variable": [
+                { "key": "transactionId", "value": "550e8400-e29b-41d4-a716-446655440099" }
+              ]
+            },
+            "description": "Get the double-entry posting (debit + credit pair) for a transaction.\n\nResponse 200: PostingDetailResponse {\n  postingId, transactionId, sagaId,\n  debitEntry: { entryId, accountId, amount, runningBalance, postedAt },\n  creditEntry: { entryId, accountId, amount, runningBalance, postedAt },\n  description, postingType, postedAt\n}\nResponse 404: Not Found if no posting yet"
+          },
+          "response": []
+        },
+        {
+          "name": "Explain Transactions (AI SSE Stream)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User-Id", "value": "{{userId}}" },
+              { "key": "Accept", "value": "text/event-stream" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Explain my spending pattern this month and how it compares to last month\",\n  \"sessionId\": \"explain-550e8400-e29b-41d4-a716-446655440000-session1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ledger/accounts/{{accountId}}/explain",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ledger", "accounts", "{{accountId}}", "explain"],
+              "variable": [
+                { "key": "accountId", "value": "550e8400-e29b-41d4-a716-446655440000" }
+              ]
+            },
+            "description": "AI-powered SSE streaming explanation of ledger transactions. Returns text/event-stream tokens as they are generated.\n\nRequest: ExplainRequest {\n  message: String (required) — the user's question about their transactions,\n  sessionId: String (optional) — auto-generated if null\n}\n\nResponse: Flux<String> — Server-Sent Events stream"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Internal Ledger (Service-to-Service)",
+      "item": [
+        {
+          "name": "Get Authoritative Ledger Balance",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Internal-Service", "value": "nexus-account-service" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/ledger/accounts/{{accountId}}/balance",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "ledger", "accounts", "{{accountId}}", "balance"],
+              "variable": [
+                { "key": "accountId", "value": "550e8400-e29b-41d4-a716-446655440000" }
+              ]
+            },
+            "description": "Authoritative ledger balance computed from all entries. Used by reconciliation and account service.\n\nResponse 200: { accountId, ledgerBalance: BigDecimal, currency, source: 'ledger-entries', queriedAt }"
+          },
+          "response": []
+        },
+        {
+          "name": "Create Manual Adjustment Posting",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User-Id", "value": "{{userId}}", "description": "Operator ID (admin)" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sourceAccountId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"targetAccountId\": \"00000000-0000-0000-0000-000000000001\",\n  \"amount\": 50.00,\n  \"currency\": \"MXN\",\n  \"reason\": \"Fee reversal — system error on 2026-06-10\",\n  \"approvalReference\": \"APPROVAL-TICKET-2026-001\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/ledger/postings/manual",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "ledger", "postings", "manual"]
+            },
+            "description": "Admin-only manual balance adjustment. Creates a double-entry posting between user account and suspense.\n\nRequest: ManualPostingRequest {\n  sourceAccountId: UUID (required),\n  targetAccountId: UUID (required),\n  amount: BigDecimal (required),\n  currency: String (default MXN),\n  reason: String (required),\n  approvalReference: String (required)\n}\n\nResponse 201: { postingId, debitEntryId, creditEntryId, description, createdAt }\nResponse 422: ProblemDetail on failure"
+          },
+          "response": []
+        },
+        {
+          "name": "Reverse a Posting",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User-Id", "value": "{{userId}}", "description": "Operator ID" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"CHARGEBACK: Transaction disputed by customer per case TKT-2026-042\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/ledger/postings/{{postingId}}/reverse",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "ledger", "postings", "{{postingId}}", "reverse"],
+              "variable": [
+                { "key": "postingId", "value": "550e8400-e29b-41d4-a716-446655440077", "description": "UUID of the posting to reverse" }
+              ]
+            },
+            "description": "Create reversal entries that cancel an existing posting.\n\nRequest: ReversePostingRequest { reason: String (required) }\n\nResponse 200: { originalPostingId, reversalPostingId, debitEntryId, creditEntryId, reversedAt }\nResponse 409: ProblemDetail on conflict"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Reconciliation Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/ledger/reconciliation/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "ledger", "reconciliation", "status"]
+            },
+            "description": "Latest reconciliation run status.\n\nResponse 200: { status: 'OK', lastRunAt, note }"
+          },
+          "response": []
+        },
+        {
+          "name": "Reconstruct Account Balance from Ledger",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/ledger/accounts/{{accountId}}/reconstruct",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "ledger", "accounts", "{{accountId}}", "reconstruct"],
+              "variable": [
+                { "key": "accountId", "value": "550e8400-e29b-41d4-a716-446655440000" }
+              ]
+            },
+            "description": "Force balance reconstruction from ledger entries. Used after reconciliation failures.\n\nResponse 200: { accountId, reconstructedBalance: BigDecimal, source, reconstructedAt }"
+          },
+          "response": []
+        },
+        {
+          "name": "Verify Ledger Integrity",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/ledger/integrity/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "ledger", "integrity", "verify"]
+            },
+            "description": "Trigger immediate checksum and global balance verification.\n\nResponse 200: { status: 'VERIFICATION_COMPLETE', verifiedAt }"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8088", "type": "string" },
+    { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001", "type": "string" },
+    { "key": "accountId", "value": "550e8400-e29b-41d4-a716-446655440000", "type": "string" },
+    { "key": "transactionId", "value": "550e8400-e29b-41d4-a716-446655440099", "type": "string" },
+    { "key": "postingId", "value": "550e8400-e29b-41d4-a716-446655440077", "type": "string" }
+  ]
+}

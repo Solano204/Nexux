@@ -1,0 +1,98 @@
+{
+  "info": {
+    "name": "NEXUS - Saga Orchestrator",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Orchestrates distributed sagas (TransferSaga, OnboardingSaga). All endpoints are internal for monitoring, debugging, and recovery. Port: 8095"
+  },
+  "item": [
+    {
+      "name": "Internal Sagas (Service-to-Service)",
+      "item": [
+        {
+          "name": "Get Transfer Saga by Transaction ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/sagas/transfer/{{transactionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "sagas", "transfer", "{{transactionId}}"],
+              "variable": [
+                { "key": "transactionId", "value": "550e8400-e29b-41d4-a716-446655440099", "description": "Transaction UUID as string" }
+              ]
+            },
+            "description": "Get the TransferSaga state for a transaction.\n\nResponse 200: TransferSagaState {\n  sagaId: UUID,\n  transactionId: UUID,\n  currentStep: BALANCE_RESERVING | FRAUD_CHECKING | LEDGER_POSTING | BALANCE_FINALIZING | NOTIFICATION_SENDING | COMPLETED | COMPENSATION_COMPLETED | PERMANENTLY_FAILED,\n  sourceAccountId: UUID,\n  targetAccountId: UUID,\n  amount: BigDecimal,\n  startedAt: Instant,\n  expiresAt: Instant,\n  completedAt: Instant (null if in-flight)\n}\nResponse 404: Not Found"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Onboarding Saga by User ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/sagas/onboarding/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "sagas", "onboarding", "{{userId}}"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001", "description": "User UUID as string" }
+              ]
+            },
+            "description": "Get the OnboardingSaga state for a user.\n\nResponse 200: OnboardingSagaState {\n  sagaId: UUID,\n  userId: UUID,\n  currentStep: USER_REGISTERED | KYC_INITIATED | KYC_APPROVED | ACCOUNTS_CREATED | COMPLETED | FAILED,\n  startedAt: Instant, completedAt: Instant (null if in-flight)\n}\nResponse 404: Not Found"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Transfer Saga Step History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/sagas/transfer/{{transactionId}}/history",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "sagas", "transfer", "{{transactionId}}", "history"],
+              "variable": [
+                { "key": "transactionId", "value": "550e8400-e29b-41d4-a716-446655440099" }
+              ]
+            },
+            "description": "Full chronological step history for a TransferSaga.\n\nResponse 200: List<SagaStepHistory> [\n  {\n    stepId, sagaId, step, status, occurredAt,\n    durationMs: Long (null if compensation),\n    errorMessage: String (null if successful)\n  }\n]\nResponse 404: Not Found if transaction has no saga"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Saga Statistics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/sagas/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "sagas", "stats"]
+            },
+            "description": "Real-time saga processing statistics.\n\nResponse 200: { activeTransferSagas: long, activeOnboardingSagas: long, status: 'OPERATIONAL' }"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Stuck Sagas",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/sagas/stuck",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "sagas", "stuck"]
+            },
+            "description": "Returns TransferSagas that are past their expiry time and not in a terminal state. Used by monitoring and the nightly cleanup job.\n\nResponse 200: { stuckTransferSagas: List<TransferSagaState> }"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8095", "type": "string" },
+    { "key": "transactionId", "value": "550e8400-e29b-41d4-a716-446655440099", "type": "string" },
+    { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001", "type": "string" }
+  ]
+}

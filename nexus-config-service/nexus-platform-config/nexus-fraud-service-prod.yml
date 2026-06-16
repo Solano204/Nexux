@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:nexus-postgres}:5432/nexus_fraud
+    username: ${POSTGRES_USER:nexus}
+    password: ${POSTGRES_PASSWORD}
+  data:
+    mongodb:
+      uri: mongodb://${MONGO_USER:nexus}:${MONGO_PASSWORD}@${MONGO_HOST:nexus-mongodb}:27017/nexus_fraud?authSource=admin
+    redis:
+      host: ${REDIS_HOST:nexus-redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}

@@ -1,0 +1,5 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:nexus-postgres}:5432/nexus_saga
+    username: ${POSTGRES_USER:nexus}
+    password: ${POSTGRES_PASSWORD}

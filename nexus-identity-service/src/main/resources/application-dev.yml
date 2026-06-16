@@ -1,29 +1,30 @@
 # ══════════════════════════════════════════════════════════════
 # nexus-identity-service — DEV profile
 # Active when: SPRING_PROFILES_ACTIVE=dev
-# Purpose: run from IDE or  mvn spring-boot:run  on your machine,
-#          with services started via Docker but NOT inside a container.
-#
-# Prerequisites (start manually or via partial compose):
-#   docker compose up -d nexus-postgres nexus-redis nexus-kafka
-#   docker compose up -d nexus-config-service nexus-discovery-service
-#   docker compose up -d nexus-localstack
+# Purpose: run from terminal on your machine with direct JVM
+#          without being overridden by config server remote data.
 # ══════════════════════════════════════════════════════════════
 
 spring:
+  config:
+    import: ""
+
   cloud:
     config:
-      enabled: false      # Don't wait for Config Service in dev
+      uri: http://localhost:8888
       fail-fast: false
-    bus:
-      enabled: false      # No Kafka bus in dev
+      retry:
+        max-attempts: 3
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
 
   threads:
     virtual:
-      enabled: true
+      enabled: true       # Activación de Virtual Threads para Java 25
 
+  # ── JPA + POSTGRESQL (LOCALHOST DEV OVERRIDES) ────────────────
   datasource:
-    url: jdbc:postgresql://localhost:5432/nexus_identity
+    url: jdbc:postgresql://localhost:5433/nexus_identity
     username: nexus
     password: nexus_dev_password
     hikari:
@@ -34,7 +35,7 @@ spring:
   jpa:
     hibernate:
       ddl-auto: validate
-    show-sql: true        # SQL logging helpful in dev
+    show-sql: true        # Habilita el log de queries SQL en consola
     properties:
       hibernate:
         format_sql: true
@@ -43,13 +44,15 @@ spring:
     enabled: true
     baseline-on-migrate: true
 
+  # ── REDIS (LOCALHOST) ─────────────────────────────────────────
   data:
     redis:
       host: localhost
       port: 6379
-      password: ""         # No password in dev Redis
+      password: ""
       timeout: 500ms
 
+  # ── KAFKA (LOCALHOST) ─────────────────────────────────────────
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
@@ -60,20 +63,19 @@ spring:
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:}
-      chat:
-        options:
-          model: gpt-4o-mini
-          temperature: 0.3
 
 server:
   port: 8083
 
+# ════════════════════════════════════════════════════════════════
+# EUREKA CLIENTE — CREDENCIALES FIJAS REQUERIDAS DE INFRAESTRUCTURA
+# ════════════════════════════════════════════════════════════════
 eureka:
   client:
-    service-url:
-      defaultZone: http://localhost:8761/eureka/
     register-with-eureka: true
     fetch-registry: true
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
   instance:
     prefer-ip-address: true
 
@@ -82,7 +84,7 @@ nexus:
     keystore:
       path: ${JWT_KEYSTORE_PATH:./keys/nexus-identity.jks}
       password: ${JWT_KEYSTORE_PASSWORD:dev_keystore_password}
-    access-token-expiry-seconds: 3600   # 1 hour in dev (less token refreshing)
+    access-token-expiry-seconds: 3600
     issuer: nexus-identity-service
     audience: nexus-platform
     key:
@@ -91,9 +93,7 @@ nexus:
 
   aws:
     region: us-east-1
-    endpoint-override: http://localhost:4566   # LocalStack
-    access-key-id: test
-    secret-access-key: test
+    endpoint-override: http://localhost:4566  # Redirección a LocalStack local
     kyc-bucket: nexus-kyc-documents
     kyc-queue-url: http://localhost:4566/000000000000/nexus-kyc-documents-pending
 

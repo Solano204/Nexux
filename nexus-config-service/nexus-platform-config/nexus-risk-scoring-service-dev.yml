@@ -1,6 +1,6 @@
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/nexus_risk
+    url: jdbc:postgresql://localhost:5433/nexus_risk
     username: nexus
     password: nexus_dev_password
   data:

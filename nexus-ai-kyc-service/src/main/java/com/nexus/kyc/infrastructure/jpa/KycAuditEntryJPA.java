@@ -56,16 +56,14 @@ public class KycAuditEntryJPA {
     private String documentStorageRef;
 
     // Stage 1 AI extraction results
-    @Column(name = "stage1_extraction_confidence",
-            precision = 5, scale = 4)
+    @Column(name = "stage1_extraction_confidence")
     private Double stage1ExtractionConfidence;
 
     @Column(name = "stage1_duration_ms")
     private Integer stage1DurationMs;
 
     // Stage 2 AI comparison results
-    @Column(name = "stage2_comparison_confidence",
-            precision = 5, scale = 4)
+    @Column(name = "stage2_comparison_confidence")
     private Double stage2ComparisonConfidence;
 
     @Column(name = "stage2_duration_ms")
@@ -82,7 +80,7 @@ public class KycAuditEntryJPA {
     @Column(name = "user_facing_message", columnDefinition = "text")
     private String userFacingMessage;
 
-    @Column(name = "confidence_score", precision = 5, scale = 4)
+    @Column(name = "confidence_score")
     private Double confidenceScore;
 
     // Field-level match results
@@ -130,3 +128,4 @@ public class KycAuditEntryJPA {
     @Column(name = "retention_until", nullable = false)
     private Instant retentionUntil;
 }
+

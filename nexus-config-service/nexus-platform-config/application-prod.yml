@@ -1,27 +1,86 @@
 # nexus-platform-config/application-prod.yml
-# Overrides application.yml for ALL services when profile=production
-# Applied on top of application.yml (base) → application-prod.yml (overrides)
-
-management:
-  tracing:
-    sampling:
-      probability: 0.1              # 10% tracing in production — control cost
-  endpoint:
-    health:
-      show-details: when-authorized
+# Applied to ALL services when spring.profiles.active=prod
 
 spring:
+  threads:
+    virtual:
+      enabled: true
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    producer:
+      acks: all
+      enable-idempotence: true
+      retries: 2147483647
+      max-in-flight-requests-per-connection: 1
+      compression-type: snappy
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      enable-auto-commit: false
+      isolation-level: read_committed
+      max-poll-records: 100
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      ack-mode: manual
+
   jpa:
-    show-sql: false                  # never log SQL in production
+    show-sql: false
     hibernate:
-      ddl-auto: validate            # validate only — never mutate schema
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: public
+        jdbc:
+          batch_size: 50
+          order_inserts: true
+          order_updates: true
+        format_sql: false
 
   flyway:
-    baseline-on-migrate: false      # no auto-baseline in production
+    enabled: true
+    validate-on-migrate: true
+    baseline-on-migrate: false
+    locations: classpath:db/migration
 
   data:
     mongodb:
-      auto-index-creation: false    # manage indexes explicitly
+      auto-index-creation: false
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+    registry-fetch-interval-seconds: 30
+    instance-info-replication-interval-seconds: 30
+  instance:
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 30
+    lease-expiration-duration-in-seconds: 90
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,refresh
+  endpoint:
+    health:
+      show-details: when-authorized
+  tracing:
+    enabled: true
+    sampling:
+      probability: 0.05
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: 0.5, 0.9, 0.95, 0.99
 
 logging:
   level:
@@ -59,7 +118,23 @@ nexus:
         max-messages-per-day: 100
         max-tokens-per-hour: 100000
 
-# ── Swagger UI: disabled in production ───────────────────────
+  kafka:
+    topics:
+      transactions-initiated: transactions.initiated
+      transactions-completed: transactions.completed
+      transactions-failed: transactions.failed
+      fraud-flagged: fraud.flagged
+      fraud-result: fraud.result
+      accounts-created: accounts.created
+      identity-verified: identity.verified
+      identity-rejected: identity.rejected
+      users-registered: users.registered
+      saga-commands: saga.commands
+      saga-replies: saga.replies
+      ledger-posted: ledger.posted
+      analytics-anomalies: analytics.anomalies.detected
+      ai-query-logged: ai.query.logged
+
 springdoc:
   swagger-ui:
     enabled: false

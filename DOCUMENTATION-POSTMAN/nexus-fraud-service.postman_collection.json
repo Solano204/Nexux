@@ -1,0 +1,212 @@
+{
+  "info": {
+    "name": "NEXUS - Fraud Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "AI-powered fraud detection. All endpoints are internal (not exposed to end users). Handles direct analysis, decision retrieval, merchant blacklisting, compliance review outcomes, SAR filing, and real-time metrics. Port: 8087"
+  },
+  "item": [
+    {
+      "name": "Internal Fraud (Service-to-Service)",
+      "item": [
+        {
+          "name": "Direct Fraud Analysis",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Internal-Service", "value": "nexus-saga-orchestrator" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"550e8400-e29b-41d4-a716-446655440099\",\n  \"sagaId\": \"saga-550e8400-e29b-41d4-a716-446655440098\",\n  \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n  \"sourceAccountId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"targetAccountId\": \"550e8400-e29b-41d4-a716-446655440002\",\n  \"amount\": 1500.00,\n  \"currency\": \"MXN\",\n  \"transactionType\": \"TRANSFER\",\n  \"description\": \"Rent payment June 2026\",\n  \"merchantId\": null,\n  \"merchantName\": null,\n  \"merchantCategoryCode\": null,\n  \"sourceIp\": \"192.168.1.100\",\n  \"deviceFingerprint\": \"fp-device-abc123\",\n  \"isKnownDevice\": true,\n  \"accountAgeDays\": 180,\n  \"totalTransactionCount\": 42,\n  \"preComputedSignals\": {\n    \"velocityScore\": 0.15,\n    \"geoRisk\": \"LOW\"\n  },\n  \"traceId\": \"trace-abc123xyz\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/fraud/analyze",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "fraud", "analyze"]
+            },
+            "description": "Direct AI fraud analysis bypassing Kafka. Used for emergency cases, compliance 'what-if', and integration testing.\n\nRequest: FraudAnalysisRequest {\n  transactionId, sagaId, userId, sourceAccountId, targetAccountId,\n  amount: BigDecimal, currency, transactionType, description,\n  merchantId, merchantName, merchantCategoryCode,\n  sourceIp, deviceFingerprint, isKnownDevice: boolean,\n  accountAgeDays: int, totalTransactionCount: int,\n  preComputedSignals: Map<String,Object>, traceId\n}\n\nResponse 200: FraudDecisionResponse {\n  decisionId, transactionId, userId, sourceAccountId, targetAccountId,\n  amount, currency, transactionType,\n  decisionOutcome: APPROVE | REJECT | REVIEW,\n  riskScore: BigDecimal (0.0-1.0), confidenceLevel: BigDecimal,\n  recommendedAction, reviewPriority: LOW | MEDIUM | HIGH | CRITICAL,\n  reasoning: String, toolsCalled: List<String>,\n  analysisStartedAt, analysisCompletedAt, analysisTimeMs: int,\n  modelUsed, traceId, reviewedBy, reviewOutcome, reviewNotes, reviewedAt,\n  sarFiled: boolean, sarReference, createdAt\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Fraud Decision by Transaction ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/fraud/decisions/{{transactionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "fraud", "decisions", "{{transactionId}}"],
+              "variable": [
+                { "key": "transactionId", "value": "550e8400-e29b-41d4-a716-446655440099", "description": "UUID of the transaction" }
+              ]
+            },
+            "description": "Retrieve the fraud decision for a specific transaction.\n\nResponse 200: FraudDecisionResponse (see analyze endpoint)\nResponse 404: ProblemDetail { title, status: 404, detail }"
+          },
+          "response": []
+        },
+        {
+          "name": "Get User Fraud Decisions (Paginated)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/fraud/decisions/user/{{userId}}?page=0&size=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "fraud", "decisions", "user", "{{userId}}"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001" }
+              ],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" }
+              ]
+            },
+            "description": "All fraud decisions for a user, newest first. Used by compliance officers.\n\nResponse 200: Page<FraudDecisionResponse>"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Pending Review Decisions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/fraud/decisions/pending-reviews",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "fraud", "decisions", "pending-reviews"]
+            },
+            "description": "All REVIEW decisions awaiting compliance officer action. Sorted HIGH priority first, then oldest first.\n\nResponse 200: List<FraudDecisionResponse>"
+          },
+          "response": []
+        },
+        {
+          "name": "Blacklist Merchant",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}", "description": "Operator ID (optional)" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/fraud/merchants/blacklist/{{merchantId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "fraud", "merchants", "blacklist", "{{merchantId}}"],
+              "variable": [
+                { "key": "merchantId", "value": "merchant-abc-xyz-001", "description": "Merchant identifier" }
+              ]
+            },
+            "description": "Add a merchant to the Redis blacklist. Immediate effect — next transaction to this merchant is blocked.\n\nResponse 200: { merchantId, action: 'BLACKLISTED', effectiveImmediately: true, blacklistedAt, blacklistedBy }"
+          },
+          "response": []
+        },
+        {
+          "name": "Remove Merchant from Blacklist",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}", "description": "Operator ID (optional)" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/fraud/merchants/blacklist/{{merchantId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "fraud", "merchants", "blacklist", "{{merchantId}}"],
+              "variable": [
+                { "key": "merchantId", "value": "merchant-abc-xyz-001" }
+              ]
+            },
+            "description": "Remove a merchant from the blacklist (used if incorrectly blacklisted).\n\nResponse 200: { merchantId, action: 'REMOVED_FROM_BLACKLIST', removedAt, removedBy }"
+          },
+          "response": []
+        },
+        {
+          "name": "Record Review Outcome",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reviewerId\": \"550e8400-e29b-41d4-a716-446655440010\",\n  \"outcome\": \"CONFIRMED_FRAUD\",\n  \"notes\": \"Pattern matches known money laundering scheme. Account flagged.\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/fraud/review/{{decisionId}}/outcome",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "fraud", "review", "{{decisionId}}", "outcome"],
+              "variable": [
+                { "key": "decisionId", "value": "550e8400-e29b-41d4-a716-446655440088", "description": "UUID of the fraud decision" }
+              ]
+            },
+            "description": "Compliance officer records manual review outcome for a REVIEW decision.\n\nRequest: ReviewOutcomeRequest {\n  reviewerId: UUID (required),\n  outcome: String (CONFIRMED_FRAUD | CLEARED | ESCALATED, required),\n  notes: String (optional)\n}\n\nResponse 200: { decisionId, outcome, reviewedAt }\nResponse 409: ProblemDetail if decision not found or already reviewed\n\nNote: If outcome is CONFIRMED_FRAUD, the source account is automatically flagged in Redis."
+          },
+          "response": []
+        },
+        {
+          "name": "Record SAR Filing",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sarReference\": \"SAR-2026-06-15-001\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/fraud/review/{{decisionId}}/sar",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "fraud", "review", "{{decisionId}}", "sar"],
+              "variable": [
+                { "key": "decisionId", "value": "550e8400-e29b-41d4-a716-446655440088" }
+              ]
+            },
+            "description": "Record that a Suspicious Activity Report (SAR) was filed. Regulatory compliance requirement.\n\nRequest: SarFilingRequest { sarReference: String (required) }\n\nResponse 200: { decisionId, sarReference, sarFiledAt }\nResponse 404: ProblemDetail if decision not found"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Fraud Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/fraud/metrics",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "fraud", "metrics"]
+            },
+            "description": "Real-time fraud processing statistics for Grafana dashboard.\n\nResponse 200: {\n  lastHour: { total, approves, rejects, reviews, rejectionRatePercent },\n  pendingReviewCount: int,\n  sarsFiledLast24h: long,\n  generatedAt: String\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Fraud Policies (RAG)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/fraud/policies/search?query=unusual+velocity+Mexico+City",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "fraud", "policies", "search"],
+              "query": [
+                { "key": "query", "value": "unusual velocity Mexico City", "description": "Natural language query against the fraud policy RAG store" }
+              ]
+            },
+            "description": "Compliance officer query to the fraud policy RAG store. Returns policy fragments relevant to the query.\n\nResponse 200: { query, note, searchedAt }"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8087", "type": "string" },
+    { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001", "type": "string" },
+    { "key": "transactionId", "value": "550e8400-e29b-41d4-a716-446655440099", "type": "string" },
+    { "key": "decisionId", "value": "550e8400-e29b-41d4-a716-446655440088", "type": "string" },
+    { "key": "merchantId", "value": "merchant-abc-xyz-001", "type": "string" }
+  ]
+}

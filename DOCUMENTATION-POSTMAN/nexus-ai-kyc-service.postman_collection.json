@@ -1,0 +1,225 @@
+{
+  "info": {
+    "name": "NEXUS - AI KYC Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "AI-powered identity verification service. User-facing verification submission and status check; internal endpoints for compliance officers, audit retrieval, retry eligibility, SAR filing, and manual review. Port: 8091"
+  },
+  "item": [
+    {
+      "name": "KYC Verification (User-Facing)",
+      "item": [
+        {
+          "name": "Submit KYC Verification",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}", "description": "User UUID (required in header)" }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "document", "type": "file", "src": "/path/to/ine-front.jpg", "description": "Identity document image (JPEG or PNG)" },
+                { "key": "fullName", "value": "Carlos Josue Lopez Solano", "type": "text", "description": "Full legal name as on document (required)" },
+                { "key": "dateOfBirth", "value": "1995-04-15", "type": "text", "description": "Date of birth ISO format YYYY-MM-DD (required)" },
+                { "key": "documentNumber", "value": "LOSC950415HMCPLS09", "type": "text", "description": "Document number/CURP (required)" },
+                { "key": "documentType", "value": "NATIONAL_ID", "type": "text", "description": "INE | PASSPORT | DRIVER_LICENSE | NATIONAL_ID (required)" },
+                { "key": "nationality", "value": "MX", "type": "text", "description": "ISO country code (optional)" },
+                { "key": "language", "value": "es", "type": "text", "description": "Language for AI responses: es | en (optional, default: es)" }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/kyc/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "kyc", "verify"]
+            },
+            "description": "Submit identity verification documents. AI processes the document and returns a decision.\n\nRequest (multipart/form-data):\n- document (file, required): Document image\n- fullName (text, required)\n- dateOfBirth (text, required): YYYY-MM-DD\n- documentNumber (text, required)\n- documentType (text, required): INE | PASSPORT | DRIVER_LICENSE | NATIONAL_ID\n- nationality (text, optional)\n- language (text, optional, default: es)\n\nResponse 200: KycVerificationResult {\n  verificationId: String (or null on error),\n  status: PENDING | PROCESSING | APPROVED | REJECTED | REVIEW_REQUIRED,\n  userFacingMessage: String,\n  canRetry: boolean,\n  retryDelayHours: int,\n  requiresAction: boolean\n}\nResponse 400: KycVerificationResult with error message for invalid documentType\nResponse 500: KycVerificationResult with generic error"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Verification Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}", "description": "User UUID (required in header)" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/kyc/status/{{verificationId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "kyc", "status", "{{verificationId}}"],
+              "variable": [
+                { "key": "verificationId", "value": "ver-550e8400-e29b-41d4-a716", "description": "Verification ID returned from POST /verify" }
+              ]
+            },
+            "description": "Check the status of a KYC verification by verification ID.\n\nResponse 200: StatusResponse {\n  verificationId: String,\n  status: String,\n  submittedAt: String (ISO-8601),\n  decidedAt: String (empty if pending),\n  userFacingMessage: String,\n  canRetry: boolean,\n  requiresManualReview: boolean\n}\nResponse 404: Not Found"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Internal KYC (Service-to-Service)",
+      "item": [
+        {
+          "name": "Get Verification Record",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/kyc/verifications/{{verificationId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "kyc", "verifications", "{{verificationId}}"],
+              "variable": [
+                { "key": "verificationId", "value": "ver-550e8400-e29b-41d4-a716" }
+              ]
+            },
+            "description": "Full verification record (MongoDB document). Used by Identity Service and compliance.\n\nResponse 200: KycDocumentMongoDB {\n  verificationId, userId, status, fullName, dateOfBirth, documentNumber, documentType,\n  submittedAt, decidedAt, decision: { approved, confidence, reason, canRetry, retryDelayHours, userFacingRejectionMessage }\n}\nResponse 404: Not Found"
+          },
+          "response": []
+        },
+        {
+          "name": "Get All Verifications for User",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/kyc/verifications/user/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "kyc", "verifications", "user", "{{userId}}"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001" }
+              ]
+            },
+            "description": "All verification attempts for a user, newest first. Compliance dashboard view.\n\nResponse 200: List<KycDocumentMongoDB>"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Audit Trail for Verification",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/kyc/verifications/{{verificationId}}/audit",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "kyc", "verifications", "{{verificationId}}", "audit"],
+              "variable": [
+                { "key": "verificationId", "value": "ver-550e8400-e29b-41d4-a716" }
+              ]
+            },
+            "description": "Full PostgreSQL audit trail for one verification (all state transitions).\n\nResponse 200: List<KycAuditEntryJPA> [{ id, verificationId, action, performedBy, performedAt, details }]"
+          },
+          "response": []
+        },
+        {
+          "name": "Check Retry Eligibility",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/kyc/retry-eligibility/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "kyc", "retry-eligibility", "{{userId}}"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001" }
+              ]
+            },
+            "description": "Check if a user can retry KYC. Max 3 attempts per 30-day window. Infrastructure failures do NOT count against the limit.\n\nResponse 200: {\n  userId, eligible: boolean, remainingAttempts: int,\n  recentRejections: int, windowDays: 30, totalLifetimeAttempts: long\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Submit Manual Review Outcome",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reviewOutcome\": \"APPROVED\",\n  \"reviewNotes\": \"Document is authentic. Blurry edge on photo is acceptable per policy §3.2.\",\n  \"reviewedBy\": \"compliance-officer-jose\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/kyc/review/{{verificationId}}/outcome",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "kyc", "review", "{{verificationId}}", "outcome"],
+              "variable": [
+                { "key": "verificationId", "value": "ver-550e8400-e29b-41d4-a716" }
+              ]
+            },
+            "description": "Compliance officer submits manual review decision for a REVIEW_REQUIRED verification.\n\nRequest body (Map<String,String>):\n- reviewOutcome: APPROVED | REJECTED (required)\n- reviewNotes: String (optional)\n- reviewedBy: String (required, operator ID)\n\nResponse 200: { verificationId, reviewOutcome, status, reviewedAt }\nResponse 404: Not Found"
+          },
+          "response": []
+        },
+        {
+          "name": "Record SAR Filing",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sarReferenceNumber\": \"SAR-KYC-2026-06-15-001\",\n  \"filedBy\": \"compliance-officer-jose\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/kyc/verifications/{{verificationId}}/sar",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "kyc", "verifications", "{{verificationId}}", "sar"],
+              "variable": [
+                { "key": "verificationId", "value": "ver-550e8400-e29b-41d4-a716" }
+              ]
+            },
+            "description": "Record that a SAR was filed for a verification. Regulatory compliance.\n\nRequest body (Map<String,String>): { sarReferenceNumber, filedBy }\n\nResponse 200: { verificationId, sarReferenceNumber, filedAt, status: 'SAR_RECORDED' }"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Daily KYC Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/kyc/metrics/daily",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "kyc", "metrics", "daily"]
+            },
+            "description": "Daily KYC processing metrics for compliance dashboard.\n\nResponse 200: { totalVerifications: long, pendingProcessing: long, serviceStatus: 'OPERATIONAL', generatedAt }"
+          },
+          "response": []
+        },
+        {
+          "name": "Trigger Re-Verification",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"COMPLIANCE_REQUESTED\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/kyc/re-verify/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "kyc", "re-verify", "{{userId}}"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001" }
+              ]
+            },
+            "description": "Trigger manual re-verification for a user (compliance request or 90-day review).\n\nRequest body (Map<String,String>): { reason: String (default: COMPLIANCE_REQUESTED) }\n\nResponse 202 Accepted: { userId, status: 'RE_VERIFICATION_QUEUED', reason, queuedAt }"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8091", "type": "string" },
+    { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001", "type": "string" },
+    { "key": "verificationId", "value": "ver-550e8400-e29b-41d4-a716", "type": "string" }
+  ]
+}

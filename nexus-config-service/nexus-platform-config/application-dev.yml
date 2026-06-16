@@ -7,7 +7,7 @@
 spring:
   # ── Kafka → localhost ─────────────────────────────────────
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: localhost:19092
 
   # ── JPA dev settings ─────────────────────────────────────
   jpa:
@@ -28,7 +28,7 @@ spring:
 
     # ── MongoDB → localhost ─────────────────────────────────
     mongodb:
-      uri: mongodb://nexus:nexus_dev_password@localhost:27017/nexus_${spring.application.name}?authSource=admin
+      uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_platform?authSource=admin
 
 # ── Eureka → localhost ───────────────────────────────────────
 eureka:
@@ -44,6 +44,10 @@ management:
   zipkin:
     tracing:
       endpoint: http://localhost:9411/api/v2/spans
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,refresh
 
 # ── Logging ──────────────────────────────────────────────────
 logging:

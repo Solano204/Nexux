@@ -1,49 +1,43 @@
-# nexus-fraud-service — PRODUCTION profile
-# All values come from environment variables — no hardcoded secrets.
-
 spring:
   cloud:
     config:
-      uri: ${CONFIG_SERVER_URI}
-      enabled: true
-      fail-fast: true
-      username: ${CONFIG_SERVER_USERNAME}
-      password: ${CONFIG_SERVER_PASSWORD}
-      retry:
-        max-attempts: 15
-        initial-interval: 2000
-        max-interval: 10000
-        multiplier: 1.5
+      enabled: false
+      fail-fast: false
     bus:
-      enabled: true
+      enabled: false
 
-  kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
-
-server:
-  port: 8087
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration
+      - org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration
 
 eureka:
-  client:
-    service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE}
-    register-with-eureka: true
-    fetch-registry: true
   instance:
-    prefer-ip-address: true
-    lease-renewal-interval-in-seconds: 30
-    lease-expiration-duration-in-seconds: 90
+    hostname: localhost
+    prefer-ip-address: false
+  client:
+    register-with-eureka: false
+    fetch-registry: false
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+  server:
+    enable-self-preservation: false
+    eviction-interval-timer-in-ms: 5000
+    response-cache-update-interval-ms: 2000
+    wait-time-in-ms-when-sync-empty: 0
+    peer-node-connect-timeout-ms: 200
+    peer-node-read-timeout-ms: 200
+    renewal-percent-threshold: 0.49
 
 management:
   tracing:
-    enabled: true
-    sampling:
-      probability: ${TRACING_SAMPLE_RATE:0.1}
+    enabled: false
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT}
+      endpoint: http://localhost:9411/api/v2/spans
 
 logging:
   level:
-    root: WARN
-    com.nexus: INFO
+    com.netflix.eureka: INFO
+    com.netflix.discovery: INFO
+    org.springframework.cloud.netflix.eureka: INFO

@@ -1,27 +1,23 @@
 # ══════════════════════════════════════════════════════════════
 # nexus-account-service — DEV profile
 # Active when: SPRING_PROFILES_ACTIVE=dev
-# Run from IDE or  mvn spring-boot:run  directly on your machine.
-#
-# Prerequisites (start these first):
-#   docker compose up -d nexus-postgres nexus-mongodb nexus-redis \
-#     nexus-kafka nexus-config-service nexus-discovery-service
+# Purpose: Isolated JVM runtime connected to local Docker Infra
 # ══════════════════════════════════════════════════════════════
 
 spring:
+  # ── DESACTIVAR CONFIG SERVER REMOTO ─────────────────────────
   cloud:
     config:
-      enabled: false
+      enabled: false      # Forzar apagado de la búsqueda externa en Git
       fail-fast: false
-    bus:
-      enabled: false
 
   threads:
     virtual:
-      enabled: true
+      enabled: true       # Virtual Threads nativos para Java 25
 
+  # ── JPA + POSTGRESQL CON PGVECTOR (CONTENEDOR PUERTO 5433) ──
   datasource:
-    url: jdbc:postgresql://localhost:5432/nexus_account
+    url: jdbc:postgresql://localhost:5433/nexus_accounts
     username: nexus
     password: nexus_dev_password
     hikari:
@@ -29,7 +25,7 @@ spring:
       minimum-idle: 2
       pool-name: nexus-account-dev-pool
       data-source-properties:
-        lock_timeout: 10000          # More lenient in dev (debugging)
+        lock_timeout: 10000
         statement_timeout: 60000
 
   jpa:
@@ -44,20 +40,24 @@ spring:
     enabled: true
     baseline-on-migrate: true
 
+  # ── MONGODB REDIRIGIDO AL PUERTO LIBRE 27018 ────────────────
   data:
     mongodb:
-      uri: mongodb://nexus:nexus_dev_password@localhost:27017/nexus_account?authSource=admin
+      # 🔐 CADENA ESTÁTICA LIMPIA: Sin llaves dinámicas para evitar romper el ASM Reader
+      uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_accounts?authSource=admin
     redis:
       host: localhost
       port: 6379
       password: ""
       timeout: 500ms
 
+  # ── KAFKA NATIVO LOCAL ──────────────────────────────────────
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
       group-id: account-service-saga-commands-dev
 
+  # ── CONFIGURACIÓN VECTORIAL (SPRING AI) ──────────────────────
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:}
@@ -67,7 +67,7 @@ spring:
           temperature: 0.7
     vectorstore:
       pgvector:
-        initialize-schema: true    # Creates transaction_embeddings table
+        initialize-schema: true    # Creará la tabla transaction_embeddings en el Docker con pgvector
         index-type: HNSW
         distance-type: COSINE_DISTANCE
         dimensions: 1536
@@ -76,10 +76,11 @@ spring:
 server:
   port: 8085
 
+# ── HANDSHAKE DE EUREKA LOCAL ─────────────────────────────────
 eureka:
   client:
     service-url:
-      defaultZone: http://localhost:8761/eureka/
+      defaultZone: http://eureka-admin:eureka-admin-password@localhost:8761/eureka/
     register-with-eureka: true
     fetch-registry: true
   instance:

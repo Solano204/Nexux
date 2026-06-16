@@ -1,0 +1,175 @@
+{
+  "info": {
+    "name": "NEXUS - Notification Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "User notification management: in-app notifications, unread counts, mark-as-read, and device/preference management for push notifications. Port: 8089"
+  },
+  "item": [
+    {
+      "name": "Notifications",
+      "item": [
+        {
+          "name": "Get Notifications (Paginated)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/notifications?page=0&size=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "notifications"],
+              "query": [
+                { "key": "page", "value": "0", "description": "Page number (0-based)" },
+                { "key": "size", "value": "20", "description": "Page size" }
+              ]
+            },
+            "description": "Returns paginated notifications for the user, newest first.\n\nResponse 200: Page<Notification> {\n  content: [{\n    notificationId: String,\n    userId: String,\n    type: String (TRANSACTION_CONFIRMED | FRAUD_ALERT | KYC_RESULT | TRANSFER_RECEIVED | etc.),\n    title: String,\n    body: String,\n    read: boolean,\n    createdAt: Instant,\n    readAt: Instant (null if unread)\n  }],\n  totalElements, totalPages, number, size\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Unread Count",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/notifications/unread-count",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "notifications", "unread-count"]
+            },
+            "description": "Returns the number of unread notifications from Redis cache.\n\nResponse 200: { unreadCount: long }"
+          },
+          "response": []
+        },
+        {
+          "name": "Mark Notification as Read",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/notifications/{{notificationId}}/read",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "notifications", "{{notificationId}}", "read"],
+              "variable": [
+                { "key": "notificationId", "value": "notif-abc123xyz", "description": "Notification ID (MongoDB document ID)" }
+              ]
+            },
+            "description": "Mark a specific notification as read. Also decrements Redis unread count.\n\nResponse 200: No body"
+          },
+          "response": []
+        },
+        {
+          "name": "Mark All Notifications as Read",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/notifications/read-all",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "notifications", "read-all"]
+            },
+            "description": "Mark all notifications as read via MongoDB bulk update. Resets Redis unread count to zero.\n\nResponse 200: No body"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Notification Preferences",
+      "item": [
+        {
+          "name": "Get Preferences",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/notifications/preferences",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "notifications", "preferences"]
+            },
+            "description": "Get user's notification preferences. Creates and returns default preferences if not yet configured.\n\nResponse 200: UserNotificationPreferences {\n  userId: String,\n  language: String (es | en),\n  timezone: String (e.g. America/Mexico_City),\n  globalOptOut: boolean,\n  inAppConfig: ChannelConfig { enabled: boolean },\n  pushConfig: ChannelConfig { enabled: boolean, deviceArns: List<String> },\n  emailConfig: ChannelConfig (optional),\n  eventPreferences: Map<String, EventPref> {\n    'FRAUD_ALERT': { enabled: true },  // Cannot be disabled\n    'TRANSACTION_CONFIRMED': { enabled: boolean },\n    'KYC_RESULT': { enabled: boolean },\n    ...\n  },\n  updatedAt: Instant\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Preferences",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"language\": \"es\",\n  \"timezone\": \"America/Mexico_City\",\n  \"globalOptOut\": false,\n  \"inAppConfig\": { \"enabled\": true },\n  \"pushConfig\": { \"enabled\": true },\n  \"eventPreferences\": {\n    \"FRAUD_ALERT\": { \"enabled\": true },\n    \"TRANSACTION_CONFIRMED\": { \"enabled\": true },\n    \"KYC_RESULT\": { \"enabled\": true },\n    \"TRANSFER_RECEIVED\": { \"enabled\": false }\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/notifications/preferences",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "notifications", "preferences"]
+            },
+            "description": "Update notification preferences. FRAUD_ALERT channel cannot be disabled (regulatory requirement).\n\nValidation: If eventPreferences.FRAUD_ALERT.enabled is false, returns 400 CANNOT_DISABLE_FRAUD_ALERTS.\n\nResponse 200: Updated UserNotificationPreferences\nResponse 400: { error: 'CANNOT_DISABLE_FRAUD_ALERTS', message: '...' }"
+          },
+          "response": []
+        },
+        {
+          "name": "Register Push Device",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceToken\": \"fcm-token-abc123xyz456def789ghi\",\n  \"platform\": \"FCM\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/notifications/preferences/device",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "notifications", "preferences", "device"]
+            },
+            "description": "Register a push notification device token (Firebase FCM or Apple APNs).\n\nRequest body (Map<String,String>):\n- deviceToken: String (required) — FCM or APNs device token\n- platform: String (optional, default: FCM) — FCM | APNs\n\nResponse 200: { deviceArn: String (AWS SNS ARN), platform: String, registeredAt: Instant }\nResponse 400: { error: 'MISSING_DEVICE_TOKEN' }"
+          },
+          "response": []
+        },
+        {
+          "name": "Unregister Push Device",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/notifications/preferences/device/{{deviceToken}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "notifications", "preferences", "device", "{{deviceToken}}"],
+              "variable": [
+                { "key": "deviceToken", "value": "fcm-token-abc123xyz456def789ghi", "description": "Device token to unregister" }
+              ]
+            },
+            "description": "Unregister a push notification device (e.g. on logout). Removes token from user's preferences and invalidates Redis cache.\n\nResponse 200: No body"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8089", "type": "string" },
+    { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001", "type": "string" },
+    { "key": "notificationId", "value": "notif-abc123xyz", "type": "string" },
+    { "key": "deviceToken", "value": "fcm-token-abc123xyz456def789ghi", "type": "string" }
+  ]
+}

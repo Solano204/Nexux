@@ -137,5 +137,10 @@ public class WebhookHmacFilter
         return exchange.getResponse().writeWith(Mono.just(buffer));
     }
 
+    @Override
+    public String name() {
+        return "WebhookHmac";
+    }
+
     public static class Config {}
 }

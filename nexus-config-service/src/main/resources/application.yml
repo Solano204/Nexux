@@ -17,7 +17,7 @@ spring:
           search-paths:
             - "."
           username: ${GIT_USERNAME:Solano204}
-          password: ${GIT_TOKEN:your-token-here}
+          password: ${GIT_TOKEN}
     bus:
       enabled: true
       refresh:

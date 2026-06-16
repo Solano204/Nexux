@@ -1,50 +1,43 @@
-# nexus-config-service — PRODUCTION profile
-
 spring:
   cloud:
     config:
       server:
         git:
-          uri: ${GIT_CONFIG_REPO_URI}
-          default-label: main
+          uri: ${GIT_CONFIG_REPO_URI:https://github.com/Solano204/nexus-platform-config.git}
           clone-on-start: true
           force-pull: true
           refresh-rate: 60
-          search-paths:
-            - "."
-          username: ${GIT_USERNAME}
+          username: ${GIT_USERNAME:Solano204}
           password: ${GIT_TOKEN}
     bus:
       enabled: true
 
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
 
   security:
     user:
-      name: ${CONFIG_SERVER_USERNAME}
-      password: ${CONFIG_SERVER_PASSWORD}
+      name: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
 
 eureka:
-  instance:
-    hostname: nexus-config-service
-    prefer-ip-address: true
   client:
     service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE}
-    register-with-eureka: true
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+    register-with-eureka: false
     fetch-registry: false
 
 management:
   tracing:
+    enabled: true
     sampling:
-      probability: 0.1
-  zipkin:
-    tracing:
-      endpoint: ${ZIPKIN_ENDPOINT}
+      probability: 0.05
+  endpoint:
+    health:
+      show-details: when-authorized
 
 logging:
   level:
     root: WARN
     com.nexus: INFO
-    org.springframework.cloud.config.server: WARN
+    org.springframework.cloud.config: INFO

@@ -1,0 +1,11 @@
+spring:
+  data:
+    elasticsearch:
+      uris: http://${ELASTICSEARCH_HOST:nexus-elasticsearch}:9200
+    redis:
+      host: ${REDIS_HOST:nexus-redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+  kafka:
+    streams:
+      state-dir: /var/kafka-streams/analytics

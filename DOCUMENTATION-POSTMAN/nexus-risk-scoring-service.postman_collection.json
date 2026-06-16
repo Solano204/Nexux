@@ -1,0 +1,128 @@
+{
+  "info": {
+    "name": "NEXUS - Risk Scoring Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "AI-powered user risk profiling. Computes composite risk scores (credit, behavioral, compliance, velocity). All endpoints are internal — not exposed to end users. Port: 8094"
+  },
+  "item": [
+    {
+      "name": "Internal Risk (Service-to-Service)",
+      "item": [
+        {
+          "name": "Get Current Risk Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/risk/profiles/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "risk", "profiles", "{{userId}}"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001", "description": "User UUID as string" }
+              ]
+            },
+            "description": "Returns the latest risk profile for a user.\n\nResponse 200: RiskProfile {\n  userId, computedAt,\n  overallRiskScore: BigDecimal (0.0-1.0),\n  riskTier: VERY_LOW | LOW | MEDIUM | HIGH | VERY_HIGH,\n  confidenceLevel: BigDecimal,\n  creditRiskScore: { score, grade, details },\n  behavioralRiskScore: { score, anomalyFlags },\n  complianceRiskScore: { score, kycStatus, sarFlags },\n  velocityRiskScore: { score, hourlyTransactionCount, dailyVolume }\n}\nResponse 404: Not Found (no profile yet)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Risk Tier (Quick Redis Lookup)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/risk/profiles/{{userId}}/tier",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "risk", "profiles", "{{userId}}", "tier"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001" }
+              ]
+            },
+            "description": "Quick risk tier lookup from Redis cache. Falls back to database if cache miss.\n\nResponse 200: { userId: String, riskTier: String (VERY_LOW | LOW | MEDIUM | HIGH | VERY_HIGH | UNKNOWN) }"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Risk Profile History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/risk/profiles/{{userId}}/history",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "risk", "profiles", "{{userId}}", "history"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001" }
+              ]
+            },
+            "description": "All historical risk profiles for a user, newest first.\n\nResponse 200: List<RiskProfile> sorted by computedAt descending"
+          },
+          "response": []
+        },
+        {
+          "name": "Trigger Manual Risk Recomputation",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/risk/profiles/{{userId}}/compute",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "risk", "profiles", "{{userId}}", "compute"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001" }
+              ]
+            },
+            "description": "Manually trigger AI risk score recomputation for a user. Runs the full AI agent pipeline.\n\nResponse 200: {\n  status: 'COMPUTED',\n  userId: String,\n  overallRiskScore: BigDecimal,\n  riskTier: String,\n  confidence: BigDecimal\n}\nResponse 500: { status: 'FAILED', userId, error: String }"
+          },
+          "response": []
+        },
+        {
+          "name": "Trigger Nightly Batch (Manual)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/risk/batch/trigger",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "risk", "batch", "trigger"]
+            },
+            "description": "Manually trigger the nightly risk scoring batch job. Normally runs at 2 AM America/Mexico_City.\n\nResponse 200: { status, jobId, triggeredAt, estimatedDuration }"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Batch Job Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/risk/batch/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "risk", "batch", "status"]
+            },
+            "description": "Current status of the nightly batch scoring job.\n\nResponse 200: { status: String, lastRunAt, nextRunAt, processedCount, failedCount }"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Risk Distribution Stats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/risk/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "risk", "stats"]
+            },
+            "description": "Platform-wide risk tier distribution and recomputation candidates.\n\nResponse 200: {\n  veryLow: long, low: long, medium: long, high: long, veryHigh: long,\n  candidatesForRecomputation: int\n}"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8094", "type": "string" },
+    { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001", "type": "string" }
+  ]
+}

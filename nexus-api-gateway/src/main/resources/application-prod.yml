@@ -1,49 +1,57 @@
-# nexus-api-gateway — PRODUCTION profile
-# All values come from environment variables — no hardcoded secrets.
-
 spring:
   cloud:
     config:
-      uri: ${CONFIG_SERVER_URI}
       enabled: true
       fail-fast: true
-      username: ${CONFIG_SERVER_USERNAME}
-      password: ${CONFIG_SERVER_PASSWORD}
-      retry:
-        max-attempts: 15
-        initial-interval: 2000
-        max-interval: 10000
-        multiplier: 1.5
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
     bus:
       enabled: true
 
-  kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+  data:
+    redis:
+      host: ${REDIS_HOST:nexus-redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 100ms
 
-server:
-  port: 8080
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
 
 eureka:
   client:
     service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE}
-    register-with-eureka: true
-    fetch-registry: true
-  instance:
-    prefer-ip-address: true
-    lease-renewal-interval-in-seconds: 30
-    lease-expiration-duration-in-seconds: 90
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+
+nexus:
+  gateway:
+    jwt:
+      jwks-uri: ${JWT_JWKS_URI:http://nexus-identity-service:8083/api/v1/auth/.well-known/jwks.json}
+    global-rate-limit:
+      enabled: true
+      requests-per-second: 5000
+    security:
+      cors:
+        allowed-origins: ${CORS_ALLOWED_ORIGINS:https://app.nexusbank.com}
 
 management:
   tracing:
     enabled: true
     sampling:
-      probability: ${TRACING_SAMPLE_RATE:0.1}
+      probability: ${TRACING_SAMPLE_RATE:0.05}
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT}
+      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+  endpoint:
+    health:
+      show-details: when-authorized
 
 logging:
   level:
     root: WARN
-    com.nexus: INFO
+    com.nexus.gateway: INFO
+    org.springframework.cloud.gateway: WARN
+    org.springframework.security: WARN
+    io.github.resilience4j: WARN
+    com.netflix.eureka: WARN
+    com.netflix.discovery: WARN

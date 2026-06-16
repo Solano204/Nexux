@@ -7,8 +7,12 @@ spring:
 
   cloud:
     config:
-      uri: http://nexus-config-service:8888
-      fail-fast: true
+      uri: http://localhost:8888
+      fail-fast: false
+      retry:
+        max-attempts: 3
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
 
   threads:
     virtual:
@@ -18,7 +22,7 @@ spring:
   # POSTGRESQL — Immutable audit trail (kyc_audit_entries)
   # ════════════════════════════════════════════════════════
   datasource:
-    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5432/nexus_kyc}
+    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5433/nexus_kyc}
     username: ${POSTGRES_USER:nexus}
     password: ${POSTGRES_PASSWORD:}
     hikari:
@@ -41,7 +45,7 @@ spring:
   # ════════════════════════════════════════════════════════
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev@nexus-mongodb:27017/nexus_kyc?authSource=admin}
+      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev@nexus-mongodb:27018/nexus_kyc?authSource=admin}
       auto-index-creation: true
 
   # ════════════════════════════════════════════════════════

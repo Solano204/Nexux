@@ -5,114 +5,46 @@ spring:
   application:
     name: nexus-discovery-service
 
-  # Fetch own configuration from config service
   config:
     import: "optional:configserver:"
 
   cloud:
     config:
-      uri: ${CONFIG_SERVER_URI:http://nexus-config-service:8888}
-      fail-fast: false        # don't block if config server not ready
-      # — discovery must start with minimal deps
-      username: ${CONFIG_SERVER_USERNAME:nexus-config}
-      password: ${CONFIG_SERVER_PASSWORD:nexus-config-pass}
+      uri: http://localhost:8888
+      fail-fast: false
+#      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+#      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
 
-  # ── Security: protect Eureka admin dashboard ───────────────
-  security:
-    user:
-      name: ${EUREKA_USERNAME:eureka-admin}
-      password: ${EUREKA_PASSWORD:eureka-admin-password}
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration
+      - org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration
 
-# ════════════════════════════════════════════════════════════════
-# EUREKA SERVER CONFIGURATION
-# ════════════════════════════════════════════════════════════════
 eureka:
-
   instance:
-    hostname: nexus-discovery-service
-    # Use hostname (Docker service name) rather than IP for
-    # stable addressing within the Docker network
+    hostname: localhost
     prefer-ip-address: false
-
   client:
-    # The discovery service is the registry itself.
-    # It does NOT register with itself — there is no peer to register with.
-    # In a production HA setup, two Eureka instances would register
-    # with each other (peer awareness). One instance is sufficient
-    # for the local Docker environment.
     register-with-eureka: false
     fetch-registry: false
-
-    service-url:
-      defaultZone: http://localhost:8761/eureka/
-
   server:
-    # ── Instance eviction ──────────────────────────────────────
-    # How often to check for and remove expired (no heartbeat) instances.
-    # A missed heartbeat after this interval marks the instance DOWN.
-    eviction-interval-timer-in-ms: 10000       # check every 10 seconds
-
-    # ── Self-preservation ──────────────────────────────────────
-    # Self-preservation prevents mass deregistration during network
-    # partitions. Disabled in local dev:
-    # - Faster cleanup of dead instances during development
-    # - No production-style network partitions in Docker
-    # ENABLE in production with: enable-self-preservation: true
     enable-self-preservation: false
-
-    # If self-preservation is enabled: minimum % of instances
-    # that must be sending heartbeats before self-preservation
-    # activates (default 0.85 = 85%)
-    renewal-percent-threshold: 0.85
-
-    # ── Registry cache ─────────────────────────────────────────
-    # How often the server-side registry cache is refreshed.
-    # Clients see updates within this interval + their 30s poll cycle.
-    response-cache-update-interval-ms: 5000    # 5 seconds
-
-    # How long to wait (ms) before serving the registry after startup.
-    # 0 in dev for fast startup — reduces wait when iterating.
-    # Production: use default (30000ms) to avoid serving stale registry.
+    eviction-interval-timer-in-ms: 5000
+    response-cache-update-interval-ms: 2000
     wait-time-in-ms-when-sync-empty: 0
 
-    # ── Peer sync ──────────────────────────────────────────────
-    # Interval for syncing state with peer Eureka nodes.
-    # No peers in local dev — but set low for responsiveness.
-    peer-eureka-nodes-update-interval-ms: 10000
-
-    # ── Response compression ───────────────────────────────────
-    # Enable gzip compression for registry responses.
-    # With 15 services registered, uncompressed registry is ~50KB.
-    # Compression reduces it to ~5KB — meaningful for 30s polling
-    # across all 13 client services.
-    enable-replicated-request-compression: true
-
-# ════════════════════════════════════════════════════════════════
-# ACTUATOR
-# ════════════════════════════════════════════════════════════════
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: always
-  metrics:
-    tags:
-      application: ${spring.application.name}
+  tracing:
+    enabled: false
 
-# ════════════════════════════════════════════════════════════════
-# EUREKA IS VERY CHATTY — reduce log noise
-# ════════════════════════════════════════════════════════════════
 logging:
   level:
-    root: INFO
-    com.nexus: INFO
     com.netflix.eureka: WARN
     com.netflix.discovery: WARN
-    org.springframework.cloud.netflix.eureka: INFO
-  pattern:
-    console: >
-      %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
-      service=nexus-discovery-service %logger{36} - %msg%n

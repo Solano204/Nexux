@@ -10,8 +10,12 @@
 spring:
   cloud:
     config:
-      enabled: false
+      uri: http://localhost:8888
       fail-fast: false
+      retry:
+        max-attempts: 3
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
 
   threads:
     virtual:
@@ -19,7 +23,7 @@ spring:
 
   data:
     mongodb:
-      uri: mongodb://nexus:nexus_dev_password@localhost:27017/nexus_notification?authSource=admin
+      uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_notification?authSource=admin
     redis:
       host: localhost
       port: 6379

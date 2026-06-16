@@ -10,17 +10,19 @@
 spring:
   cloud:
     config:
-      enabled: false
+      uri: http://localhost:8888
       fail-fast: false
-    bus:
-      enabled: false
+      retry:
+        max-attempts: 3
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
 
   threads:
     virtual:
       enabled: true
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/nexus_kyc
+    url: jdbc:postgresql://localhost:5433/nexus_kyc
     username: nexus
     password: nexus_dev_password
     hikari:
@@ -39,7 +41,7 @@ spring:
 
   data:
     mongodb:
-      uri: mongodb://nexus:nexus_dev_password@localhost:27017/nexus_kyc?authSource=admin
+      uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_kyc?authSource=admin
       auto-index-creation: true
 
   kafka:

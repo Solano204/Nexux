@@ -1,8 +1,8 @@
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/nexus_ledger
+    url: jdbc:postgresql://localhost:5433/nexus_ledger
     username: nexus
     password: nexus_dev_password
   data:
     mongodb:
-      uri: mongodb://nexus:nexus_dev_password@localhost:27017/nexus_ledger?authSource=admin
+      uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_ledger?authSource=admin

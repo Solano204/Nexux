@@ -1,49 +1,35 @@
-# nexus-audit-query-jvm — PRODUCTION profile
-# All values come from environment variables — no hardcoded secrets.
-
 spring:
   cloud:
     config:
-      uri: ${CONFIG_SERVER_URI}
       enabled: true
       fail-fast: true
-      username: ${CONFIG_SERVER_USERNAME}
-      password: ${CONFIG_SERVER_PASSWORD}
-      retry:
-        max-attempts: 15
-        initial-interval: 2000
-        max-interval: 10000
-        multiplier: 1.5
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
     bus:
       enabled: true
 
-  kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
-
-server:
-  port: 8097
+  data:
+    mongodb:
+      auto-index-creation: false
 
 eureka:
   client:
     service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE}
-    register-with-eureka: true
-    fetch-registry: true
-  instance:
-    prefer-ip-address: true
-    lease-renewal-interval-in-seconds: 30
-    lease-expiration-duration-in-seconds: 90
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
 
 management:
   tracing:
     enabled: true
     sampling:
-      probability: ${TRACING_SAMPLE_RATE:0.1}
+      probability: 0.05
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT}
+      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
 
 logging:
   level:
     root: WARN
-    com.nexus: INFO
+    com.nexus.audit: INFO
+    org.springframework.ai: WARN
+    com.netflix.eureka: WARN
+    com.netflix.discovery: WARN

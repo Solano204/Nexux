@@ -1,102 +1,70 @@
-# src/main/resources/application.yml
+# ══════════════════════════════════════════════════════════════
+# nexus-account-service — DEV profile
+# Active when: SPRING_PROFILES_ACTIVE=dev
+# Run from IDE or  mvn spring-boot:run  directly on your machine.
+#
+# Prerequisites (start these first):
+#   docker compose up -d nexus-postgres nexus-mongodb nexus-redis \
+#     nexus-kafka nexus-config-service nexus-discovery-service
+# ══════════════════════════════════════════════════════════════
 
 spring:
-  application:
-    name: nexus-account-service
 
   config:
-    import: "optional:configserver:"
+    import: "configserver:"
+
 
   cloud:
     config:
-      uri: http://nexus-config-service:8888
-      fail-fast: true
+      uri: http://localhost:8888
+      fail-fast: false
       retry:
-        max-attempts: 10
+        max-attempts: 3
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
 
-  # ════════════════════════════════════════════════════════════
-  # VIRTUAL THREADS — Java 25
-  # SELECT FOR UPDATE blocking is transparent to carrier threads
-  # ════════════════════════════════════════════════════════════
   threads:
     virtual:
       enabled: true
 
-  # ════════════════════════════════════════════════════════════
-  # POSTGRESQL — Critical tuning for balance operations
-  # ════════════════════════════════════════════════════════════
   datasource:
-    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5432/nexus_account}
-    username: ${POSTGRES_USER:nexus}
-    password: ${POSTGRES_PASSWORD:}
-    driver-class-name: org.postgresql.Driver
+    url: jdbc:postgresql://localhost:5433/nexus_accounts
+    username: nexus
+    password: nexus_dev_password
     hikari:
-      maximum-pool-size: 50
-      # Large pool: needed because SELECT FOR UPDATE holds connections
-      # while locks are held by concurrent SAGA operations
-      minimum-idle: 10
-      connection-timeout: 30000
-      idle-timeout: 600000
-      pool-name: nexus-account-pool
-      # PostgreSQL lock_timeout: fail fast on lock contention
+      maximum-pool-size: 10
+      minimum-idle: 2
+      pool-name: nexus-account-dev-pool
       data-source-properties:
-        lock_timeout: 5000
-        statement_timeout: 30000
-        application_name: nexus-account-service
+        lock_timeout: 10000
+        statement_timeout: 60000
 
   jpa:
     hibernate:
       ddl-auto: validate
-    show-sql: false
+    show-sql: true
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.PostgreSQLDialect
-        connection:
-          provider_disables_autocommit: true
-        jdbc:
-          batch_size: 20
-          order_inserts: true
-          order_updates: true
+        format_sql: true
 
   flyway:
     enabled: true
-    locations: classpath:db/migration
     baseline-on-migrate: true
 
-  # ════════════════════════════════════════════════════════════
-  # MONGODB — Account analytics documents
-  # ════════════════════════════════════════════════════════════
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev@nexus-mongodb:27017/nexus_account?authSource=admin}
-      auto-index-creation: true
+      uri: mongodb://nexus:nexus_dev_password@localhost:27017/nexus_account?authSource=admin
     redis:
-      host: ${REDIS_HOST:nexus-redis}
-      port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD:}
-      timeout: 100ms
+      host: localhost
+      port: 6379
+      password: ""
+      timeout: 500ms
 
-  # ════════════════════════════════════════════════════════════
-  # KAFKA — Saga commands consumer + Outbox producer
-  # ════════════════════════════════════════════════════════════
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
-    producer:
-      acks: all
-      enable-idempotence: true
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    bootstrap-servers: localhost:9092
     consumer:
-      group-id: account-service-saga-commands
-      auto-offset-reset: earliest
-      enable-auto-commit: false
-      isolation-level: read_committed
-    listener:
-      ack-mode: manual
+      group-id: account-service-saga-commands-dev
 
-  # ════════════════════════════════════════════════════════════
-  # SPRING AI — Account advisor RAG pipeline
-  # ════════════════════════════════════════════════════════════
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:}
@@ -110,9 +78,7 @@ spring:
         index-type: HNSW
         distance-type: COSINE_DISTANCE
         dimensions: 1536
-        schema-name: public
         table-name: transaction_embeddings
-        schema-validation: true
 
 server:
   port: 8085
@@ -120,45 +86,26 @@ server:
 eureka:
   client:
     service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+      defaultZone: http://localhost:8761/eureka/
     register-with-eureka: true
     fetch-registry: true
   instance:
     prefer-ip-address: true
-    health-check-url-path: /actuator/health
 
 management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,prometheus,metrics,loggers,busrefresh
-  endpoint:
-    health:
-      show-details: always
-  metrics:
-    distribution:
-      percentiles-histogram:
-        account.balance.reservation.duration: true
-        account.balance.lock.wait.duration: true
-      percentiles:
-        account.balance.reservation.duration: 0.5, 0.9, 0.95, 0.99
-        http.server.requests: 0.5, 0.9, 0.95, 0.99
-    tags:
-      application: ${spring.application.name}
   tracing:
     enabled: true
     sampling:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+      endpoint: http://localhost:9411/api/v2/spans
 
 logging:
   level:
-    com.nexus.account: INFO
-    org.hibernate.SQL: WARN
-  pattern:
-    console: >
-      %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
-      traceId=%X{traceId} spanId=%X{spanId}
-      service=nexus-account-service %logger{36} - %msg%n
+    com.nexus.account: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql: TRACE
+    org.flywaydb: DEBUG
+    org.springframework.data.mongodb: DEBUG
+    org.springframework.kafka: DEBUG

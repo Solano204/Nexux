@@ -1,0 +1,40 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:nexus-postgres}:5432/nexus_identity
+    username: ${POSTGRES_USER:nexus}
+    password: ${POSTGRES_PASSWORD}
+  data:
+    redis:
+      host: ${REDIS_HOST:nexus-redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+nexus:
+  identity:
+    jwt:
+      access-token-expiry-minutes: 60
+      refresh-token-expiry-days: 30
+      key-rotation-days: 90
+
+    password:
+      bcrypt-strength: 12
+      min-length: 8
+      max-length: 128
+      require-uppercase: true
+      require-digit: true
+
+    kyc:
+      max-attempts: 3
+      attempt-window-days: 30
+      s3-bucket: ${KYC_S3_BUCKET:nexus-kyc-documents}
+      sqs-queue: ${KYC_SQS_QUEUE:nexus-kyc-pending}
+
+    session:
+      max-concurrent-sessions: 5
+      session-timeout-minutes: 30
+      suspicious-login-cooldown-minutes: 15
+
+    mfa:
+      totp-window-steps: 1
+      sms-otp-expiry-minutes: 5
+      max-otp-attempts: 3

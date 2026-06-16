@@ -1,0 +1,209 @@
+{
+  "info": {
+    "name": "NEXUS - API Gateway",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Spring Cloud Gateway — central entry point for all public NEXUS API traffic. Handles JWT validation, circuit breakers, rate limiting, and routing. The fallback endpoints are returned by circuit breakers when downstream services are unavailable. Port: 8080\n\nNote: In normal usage you call services THROUGH the gateway at port 8080 (not directly on each service port). These fallback endpoints are what you receive when a circuit breaker opens."
+  },
+  "item": [
+    {
+      "name": "Circuit Breaker Fallbacks",
+      "item": [
+        {
+          "name": "Transaction Service Fallback",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/fallback/transaction",
+              "host": ["{{baseUrl}}"],
+              "path": ["fallback", "transaction"]
+            },
+            "description": "Returned when the Transaction Service circuit breaker is open.\n\nResponse 503: {\n  error: 'TRANSACTION_SERVICE_UNAVAILABLE',\n  message: 'Transaction service temporarily unavailable. Your account has NOT been charged. Please try again in 30 seconds.',\n  retryAfter: 30,\n  timestamp: String\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Account Service Fallback",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/fallback/account",
+              "host": ["{{baseUrl}}"],
+              "path": ["fallback", "account"]
+            },
+            "description": "Returned when the Account Service circuit breaker is open.\n\nResponse 503: {\n  error: 'ACCOUNT_SERVICE_UNAVAILABLE',\n  message: 'Account service temporarily unavailable. Your account data is safe. Please retry shortly.',\n  retryAfter: 15,\n  timestamp: String\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "AI Assistant Fallback",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/fallback/ai-assistant",
+              "host": ["{{baseUrl}}"],
+              "path": ["fallback", "ai-assistant"]
+            },
+            "description": "Returned when the AI Assistant circuit breaker is open. AI is non-critical — standard banking features still work.\n\nResponse 503: {\n  error: 'AI_ASSISTANT_UNAVAILABLE',\n  message: 'AI assistant is temporarily unavailable. You can still use all standard banking features at /api/v1/',\n  alternativeEndpoints: { accounts, transactions, ledger },\n  timestamp: String\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Identity Service Fallback",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/fallback/identity",
+              "host": ["{{baseUrl}}"],
+              "path": ["fallback", "identity"]
+            },
+            "description": "Returned when the Identity Service circuit breaker is open.\n\nResponse 503: {\n  error: 'IDENTITY_SERVICE_UNAVAILABLE',\n  message: 'Authentication service temporarily unavailable. Existing sessions remain valid. Please retry login shortly.',\n  timestamp: String\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Ledger Service Fallback",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/fallback/ledger",
+              "host": ["{{baseUrl}}"],
+              "path": ["fallback", "ledger"]
+            },
+            "description": "Returned when the Ledger Service circuit breaker is open.\n\nResponse 503: {\n  error: 'LEDGER_SERVICE_UNAVAILABLE',\n  message: 'Financial records temporarily unavailable. No transactions have been affected.',\n  timestamp: String\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Analytics Service Fallback",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/fallback/analytics",
+              "host": ["{{baseUrl}}"],
+              "path": ["fallback", "analytics"]
+            },
+            "description": "Returned when the Analytics Service circuit breaker is open.\n\nResponse 503: {\n  error: 'ANALYTICS_SERVICE_UNAVAILABLE',\n  message: 'Analytics data temporarily unavailable. Please check back shortly.',\n  timestamp: String\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Fraud Service Fallback",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/fallback/fraud",
+              "host": ["{{baseUrl}}"],
+              "path": ["fallback", "fraud"]
+            },
+            "description": "Returned when the Fraud Service circuit breaker is open.\n\nResponse 503: {\n  error: 'FRAUD_SERVICE_UNAVAILABLE',\n  message: 'Security verification service temporarily unavailable.',\n  timestamp: String\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Webhook Fallback",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/fallback/webhook",
+              "host": ["{{baseUrl}}"],
+              "path": ["fallback", "webhook"]
+            },
+            "description": "Returned when the webhook handler circuit breaker is open.\n\nResponse 503: {\n  error: 'WEBHOOK_HANDLER_UNAVAILABLE',\n  message: 'Webhook processing temporarily unavailable.',\n  timestamp: String\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Generic Fallback",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/fallback/generic",
+              "host": ["{{baseUrl}}"],
+              "path": ["fallback", "generic"]
+            },
+            "description": "Generic fallback for any unspecified service.\n\nResponse 503: {\n  error: 'SERVICE_TEMPORARILY_UNAVAILABLE',\n  message: 'This service is temporarily unavailable. Please try again shortly.',\n  timestamp: String\n}"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Gateway Routes (via Gateway)",
+      "item": [
+        {
+          "name": "→ Login (via Gateway)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"carlos@nexus.com\",\n  \"password\": \"SecurePass@2026!\",\n  \"deviceFingerprint\": \"fp-device-abc123\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "login"]
+            },
+            "description": "Login through the API Gateway (port 8080). The gateway routes this to nexus-identity-service. JWT is returned in response; refresh token set as HttpOnly cookie."
+          },
+          "response": []
+        },
+        {
+          "name": "→ Get My Accounts (via Gateway)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "description": "JWT from /auth/login" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/accounts",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "accounts"]
+            },
+            "description": "Get accounts through the API Gateway. Gateway validates JWT and injects X-User-Id header before routing to nexus-account-service."
+          },
+          "response": []
+        },
+        {
+          "name": "→ Initiate Transfer (via Gateway)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "X-Device-Fingerprint", "value": "fp-device-abc123" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"idempotencyKey\": \"txn-key-20260615-001\",\n  \"sourceAccountId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"targetAccountId\": \"550e8400-e29b-41d4-a716-446655440001\",\n  \"amount\": 1500.00,\n  \"currency\": \"MXN\",\n  \"transactionType\": \"TRANSFER\",\n  \"channel\": \"APP\",\n  \"description\": \"Rent payment\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions/transfer",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transactions", "transfer"]
+            },
+            "description": "Initiate transfer through the API Gateway. Circuit breaker active — returns fallback if transaction service is down."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080", "type": "string" },
+    { "key": "accessToken", "value": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...", "type": "string" }
+  ]
+}
