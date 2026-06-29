@@ -1,7 +1,7 @@
 spring:
+  elasticsearch:
+    uris: http://${ELASTICSEARCH_HOST:nexus-elasticsearch}:9200
   data:
-    elasticsearch:
-      uris: http://${ELASTICSEARCH_HOST:nexus-elasticsearch}:9200
     redis:
       host: ${REDIS_HOST:nexus-redis}
       port: ${REDIS_PORT:6379}

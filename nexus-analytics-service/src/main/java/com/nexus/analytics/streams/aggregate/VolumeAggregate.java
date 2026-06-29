@@ -51,7 +51,9 @@ public class VolumeAggregate {
                                String transactionType) {
         Map<String, Long> updatedTypes =
                 new HashMap<>(byTransactionType);
-        updatedTypes.merge(transactionType, 1L, Long::sum);
+        updatedTypes.merge(
+                transactionType != null ? transactionType : "UNKNOWN",
+                1L, Long::sum);
 
         return new VolumeAggregate(
                 transactionCount + 1,

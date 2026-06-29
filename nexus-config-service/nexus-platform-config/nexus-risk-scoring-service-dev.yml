@@ -3,9 +3,9 @@ spring:
     url: jdbc:postgresql://localhost:5433/nexus_risk
     username: nexus
     password: nexus_dev_password
+  elasticsearch:
+    uris: http://localhost:9201
   data:
-    elasticsearch:
-      uris: http://localhost:9201
     redis:
       host: localhost
       port: 6380

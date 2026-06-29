@@ -1,5 +1,5 @@
 server:
-  port: 8083
+  port: 8010
 
 spring:
   application:
@@ -89,9 +89,9 @@ nexus:
 
   aws:
     region: ${AWS_REGION:us-east-1}
-    endpoint-override: ${AWS_ENDPOINT:http://localhost:4566}
+    endpoint-override: ${AWS_ENDPOINT:}
     kyc-bucket: ${KYC_S3_BUCKET:nexus-kyc-documents}
-    kyc-queue-url: ${KYC_QUEUE_URL:http://localhost:4566/000000000000/nexus-kyc-documents-pending}
+    kyc-queue-url: ${KYC_QUEUE_URL:}
 
 management:
   endpoints:
@@ -107,7 +107,7 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
 
 logging:
   level:

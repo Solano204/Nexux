@@ -2,11 +2,17 @@ package com.nexus.assistant.application;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.AbstractChatMemoryAdvisor; // ← M6 key location
+import org.springframework.ai.document.Document;
+import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeType;
 import reactor.core.publisher.Flux;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 /**
  * Document Analysis Service — Multimodal (Section 8).
@@ -21,7 +27,7 @@ import reactor.core.publisher.Flux;
  * M6 note:
  * ─ ChatMemory.CONVERSATION_ID does NOT exist in M6.
  *   The correct key in M6 is:
- *   AbstractChatMemoryAdvisor.CHAT_MEMORY_CONVERSATION_ID_KEY
+ *   "chat_memory_conversation_id"
  *
  * Use cases:
  * ─ Bill photos  → extract amount + due date → offer to pay
@@ -34,14 +40,18 @@ public class DocumentAnalysisService {
 
     private final ChatClient visionClient;
     private final ChatClient primaryClient;
+    private final VectorStore financialKnowledgeVectorStore;
 
     public DocumentAnalysisService(
             @Qualifier("aiAssistantVisionClient")
             ChatClient visionClient,
             @Qualifier("aiAssistantPrimaryClient")
-            ChatClient primaryClient) {
+            ChatClient primaryClient,
+            @Qualifier("financialKnowledgeVectorStore")
+            VectorStore financialKnowledgeVectorStore) {
         this.visionClient = visionClient;
         this.primaryClient = primaryClient;
+        this.financialKnowledgeVectorStore = financialKnowledgeVectorStore;
     }
 
     public Flux<String> analyzeAndRespond(
@@ -90,6 +100,15 @@ public class DocumentAnalysisService {
                     return;
                 }
 
+                // ── Step 2.5: Index document into financial_knowledge_base ──
+                // Fire-and-forget — indexing never blocks the streaming response
+                final DocumentExtractResult finalExtracted = extracted;
+                final String finalUserMessage = userMessage;
+                final String finalConversationId = conversationId;
+                Thread.startVirtualThread(() ->
+                        indexDocumentIntoKnowledgeBase(
+                                finalExtracted, finalUserMessage, finalConversationId));
+
                 // ── Step 3: Enrich prompt with extracted data ─────────
                 String enriched = """
                         User uploaded a %s document.
@@ -110,12 +129,12 @@ public class DocumentAnalysisService {
                 // ── Step 4: Stream response via primary client ────────
                 //
                 // M6: conversation ID is passed via the advisor param key
-                // AbstractChatMemoryAdvisor.CHAT_MEMORY_CONVERSATION_ID_KEY,
+                // "chat_memory_conversation_id",
                 // NOT via ChatMemory.CONVERSATION_ID (that constant is M7+).
                 primaryClient.prompt()
                         .user(enriched)
                         .advisors(a -> a.param(
-                                AbstractChatMemoryAdvisor.CHAT_MEMORY_CONVERSATION_ID_KEY,
+                                "chat_memory_conversation_id",
                                 conversationId))
                         .stream()
                         .content()
@@ -132,6 +151,50 @@ public class DocumentAnalysisService {
                 sink.complete();
             }
         });
+    }
+
+    private void indexDocumentIntoKnowledgeBase(DocumentExtractResult extracted,
+                                                 String userMessage,
+                                                 String conversationId) {
+        try {
+            String content = String.format(
+                    "[%s] Document analyzed — type: %s, merchant: %s, " +
+                    "amount: %s %s, due date: %s. User context: %s",
+                    Instant.now(),
+                    extracted.documentType(),
+                    extracted.merchant() != null ? extracted.merchant() : "unknown",
+                    extracted.totalAmount() != null
+                            ? extracted.totalAmount().toString() : "N/A",
+                    extracted.currency() != null ? extracted.currency() : "",
+                    extracted.dueDate() != null ? extracted.dueDate() : "N/A",
+                    userMessage);
+
+            String docId = UUID.nameUUIDFromBytes(
+                    (conversationId + "-" + Instant.now().toEpochMilli())
+                            .getBytes()).toString();
+
+            Document doc = Document.builder()
+                    .id(docId)
+                    .text(content)
+                    .metadata("source", "document_analysis")
+                    .metadata("document_type", extracted.documentType() != null
+                            ? extracted.documentType() : "UNKNOWN")
+                    .metadata("merchant", extracted.merchant() != null
+                            ? extracted.merchant() : "")
+                    .metadata("currency", extracted.currency() != null
+                            ? extracted.currency() : "MXN")
+                    .metadata("conversation_id", conversationId)
+                    .metadata("indexed_at", Instant.now().toString())
+                    .build();
+
+            financialKnowledgeVectorStore.add(List.of(doc));
+            log.debug("Indexed analyzed document into financial_knowledge_base: " +
+                    "conversationId={} type={}", conversationId, extracted.documentType());
+
+        } catch (Exception e) {
+            log.warn("Failed to index document into financial_knowledge_base: {}",
+                    e.getMessage());
+        }
     }
 
     /**

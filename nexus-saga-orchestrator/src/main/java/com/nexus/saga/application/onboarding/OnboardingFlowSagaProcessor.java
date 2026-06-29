@@ -83,6 +83,11 @@ public class OnboardingFlowSagaProcessor {
     public void handleKycApproved(JsonNode event) {
         UUID userId = UUID.fromString(event.path("userId").asText());
         sagaRepository.findByUserIdAndCompletedAtIsNull(userId).ifPresent(state -> {
+            if (state.getCurrentStep() != OnboardingStep.KYC_INITIATED) {
+                log.debug("KYC approved duplicate: sagaId={} alreadyAt={}",
+                        state.getSagaId(), state.getCurrentStep());
+                return;
+            }
             state.setCurrentStep(OnboardingStep.ACCOUNTS_CREATING);
             sagaRepository.save(state);
 
@@ -104,22 +109,33 @@ public class OnboardingFlowSagaProcessor {
     public void handleKycRejected(JsonNode event) {
         UUID userId = UUID.fromString(event.path("userId").asText());
         sagaRepository.findByUserIdAndCompletedAtIsNull(userId).ifPresent(state -> {
+            if (state.getCurrentStep() != OnboardingStep.KYC_INITIATED) {
+                log.debug("KYC rejected duplicate: sagaId={} alreadyAt={}",
+                        state.getSagaId(), state.getCurrentStep());
+                return;
+            }
+            boolean canRetry = event.path("canRetry").asBoolean(true);
+
             state.setCurrentStep(OnboardingStep.KYC_REJECTED);
             state.setFailureReason("KYC rejected");
 
             var ctx = SagaFailureContext.builder()
                     .failureType(SagaFailureContext.FailureType.KYC_REJECTED)
                     .userId(userId.toString())
-                    .canRetry(event.path("canRetry").asBoolean(true))
+                    .canRetry(canRetry)
                     .language(state.getLanguage())
                     .build();
 
             state.setFailureExplanation(explainerService.explain(ctx));
-            state.setCurrentStep(OnboardingStep.REGISTRATION_CANCELLED);
-            state.setCompletedAt(Instant.now());
-            sagaRepository.save(state);
 
-            log.info("OnboardingFlowSaga KYC rejected: sagaId={}", state.getSagaId());
+            if (!canRetry) {
+                state.setCurrentStep(OnboardingStep.REGISTRATION_CANCELLED);
+                state.setCompletedAt(Instant.now());
+            }
+            // canRetry=true: keep completedAt=null so next approval finds this saga
+
+            sagaRepository.save(state);
+            log.info("OnboardingFlowSaga KYC rejected: sagaId={} canRetry={}", state.getSagaId(), canRetry);
         });
     }
 
@@ -127,10 +143,11 @@ public class OnboardingFlowSagaProcessor {
     public void handleAccountsCreated(JsonNode reply) {
         UUID sagaId = UUID.fromString(reply.path("sagaId").asText());
         sagaRepository.findById(sagaId).ifPresent(state -> {
-            state.setCheckingAccountId(UUID.fromString(
-                    reply.path("checkingAccountId").asText()));
-            state.setSavingsAccountId(UUID.fromString(
-                    reply.path("savingsAccountId").asText()));
+            JsonNode payload = reply.path("payload");
+            String checkingId = payload.path("checkingAccountId").asText("");
+            String savingsId  = payload.path("savingsAccountId").asText("");
+            if (!checkingId.isBlank()) state.setCheckingAccountId(UUID.fromString(checkingId));
+            if (!savingsId.isBlank())  state.setSavingsAccountId(UUID.fromString(savingsId));
             state.setCurrentStep(OnboardingStep.ACCOUNTS_CREATED);
             sagaRepository.save(state);
 

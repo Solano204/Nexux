@@ -41,14 +41,6 @@ public interface NotificationRepository
      * Uses MongoDB's updateMulti under the hood.
      */
     @Query("{'userId': ?0, 'isRead': false}")
-    @Update("{'$set': {'isRead': true, 'readAt': ?1}}")
+    @Update("{'$set': {'isRead': true}}")
     long markAllReadForUser(String userId);
-
-    /**
-     * Overloaded for simple call without timestamp param.
-     */
-    default void markAllReadForUser(String userId,
-                                    java.time.Instant readAt) {
-        // MongoDB @Update handles the bulk update
-    }
 }

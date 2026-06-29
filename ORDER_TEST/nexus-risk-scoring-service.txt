@@ -1,0 +1,121 @@
+================================================================
+ NEXUS — nexus-risk-scoring-service — Complete Workflow Test Order
+================================================================
+Port: 8094 | Stack: Spring Boot | DB: PostgreSQL (nexus_risk)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  Computes user risk profiles on two triggers:
+  1. Event-triggered: consumes user.behavior.aggregated (from analytics-service)
+     Only fires for high-signal events: LARGE_TRANSACTION_DETECTED,
+     FRAUD_FLAG_ON_ACCOUNT, KYC_REVERIFICATION_COMPLETED, etc.
+  2. On-demand via REST: POST /api/v1/risk/compute/{userId}
+
+  Uses a ReAct AI agent (OpenAI) to reason over multiple risk dimensions:
+  transaction velocity, fraud history, account age, KYC status, etc.
+  Publishes risk.profile.updated after every computation.
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-postgres nexus-kafka nexus-zookeeper
+
+  Health checks:
+    PostgreSQL :5434  — risk_profiles table
+    Kafka      :9003  — Kafdrop
+
+  OPENAI_API_KEY must be set for the ReAct risk scoring agent.
+
+================================================================
+ STEP 2 — PLATFORM CORE
+================================================================
+  1. nexus-config-service   :8888
+  2. nexus-discovery-service :8761
+
+================================================================
+ STEP 3 — SERVICES NEEDED TO TRIGGER RISK RECOMPUTATION
+================================================================
+  Risk scoring is downstream. It reacts to what analytics produces.
+
+  AUTOMATIC TRIGGER path (via Kafka):
+  ├── nexus-analytics-service   :8092
+  │     WHY: produces user.behavior.aggregated which triggers risk recomputation
+  │          analytics needs transactions to compute; therefore:
+  ├── nexus-transaction-service :8086  — completes transactions
+  ├── nexus-saga-orchestrator   :8095  — runs TransferSaga to completion
+  ├── nexus-fraud-service       :8087  — clears fraud
+  └── nexus-ledger-service      :8088  — posts ledger
+
+  ON-DEMAND TRIGGER path (via REST, no saga needed):
+  └── Just run risk-scoring-service alone + postgres + kafka
+
+  DOWNSTREAM — what uses risk profiles:
+  ├── nexus-fraud-service       :8087
+  │     WHY: consumes risk.profile.updated to enrich fraud analysis
+  └── audit-write-native        :8096
+        WHY: may consume risk.profile.updated for compliance records
+
+================================================================
+ KAFKA TOPICS THIS SERVICE PARTICIPATES IN
+================================================================
+CONSUMES:
+  user.behavior.aggregated   [group: risk-scoring-behavior-events]
+    -> triggers recomputation ONLY for meaningful events:
+       LARGE_TRANSACTION_DETECTED, FRAUD_FLAG_ON_ACCOUNT,
+       KYC_REVERIFICATION_COMPLETED, ACCOUNT_DORMANCY_ENDED,
+       INCOME_PATTERN_BREAK_DETECTED, COUNTERPARTY_FLAGGED
+    -> throttled: skip if profile computed within last 6 hours
+
+PRODUCES:
+  risk.profile.updated
+    └── consumed by: fraud-service (enriches fraud analysis)
+                     audit-write-native (compliance)
+                     analytics-service (optional downstream)
+
+================================================================
+ FULL WORKFLOW — RISK SCORING
+================================================================
+  AUTOMATIC PATH:
+  1. Multiple transactions complete -> analytics-service processes streams
+  2. analytics-service detects large transaction
+  3. analytics-service publishes user.behavior.aggregated:
+     { "userId": "...", "trigger": "LARGE_TRANSACTION_DETECTED", ... }
+  4. risk-scoring-service consumes it
+  5. If trigger is meaningful AND profile not too recent:
+     -> async computation via Virtual Thread
+     -> ReAct AI agent calls tools: account age, fraud history,
+        transaction velocity, KYC status, geographic risk
+     -> produces risk profile with RiskTier: LOW / MEDIUM / HIGH / CRITICAL
+  6. Publishes risk.profile.updated
+
+  ON-DEMAND PATH:
+  1. POST /api/v1/risk/compute/{userId}
+  2. Same AI agent runs synchronously
+  3. risk.profile.updated published
+
+================================================================
+ HOW TO TEST RISK SCORING SERVICE
+================================================================
+  Isolated test (no other services):
+    POST /api/v1/risk/compute/{userId}
+    -> triggers immediate computation
+    -> watch Kafdrop: risk.profile.updated
+
+  Full flow test:
+    1. Complete several transactions (different amounts, merchants)
+    2. analytics-service produces user.behavior.aggregated
+    3. risk-scoring-service auto-triggers
+    4. GET /api/v1/risk/profile/{userId} — see the computed profile
+
+  Query risk profile:
+    GET /api/v1/risk/profile/{userId}
+    -> returns: overallRiskScore, riskTier, componentScores
+       (transactionRisk, behaviorRisk, identityRisk, complianceRisk)
+
+================================================================
+ OBSERVE IN KAFDROP (http://localhost:9003)
+================================================================
+  user.behavior.aggregated  -> arrives from analytics-service
+  risk.profile.updated      -> published after each computation
+                               (includes riskTier, riskTierChanged flag)

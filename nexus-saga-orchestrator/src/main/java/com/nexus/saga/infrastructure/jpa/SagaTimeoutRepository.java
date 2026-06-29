@@ -16,7 +16,7 @@ public interface SagaTimeoutRepository
 
     List<SagaTimeout> findByFiresAtBeforeAndIsCancelledFalseAndFiredAtIsNull(Instant now);
 
-    Optional<SagaTimeout> findBySagaIdAndTimeoutTypeAndIsCancelledFalse(
+    List<SagaTimeout> findBySagaIdAndTimeoutTypeAndIsCancelledFalse(
             UUID sagaId, String timeoutType);
 
     List<SagaTimeout> findBySagaId(UUID sagaId);

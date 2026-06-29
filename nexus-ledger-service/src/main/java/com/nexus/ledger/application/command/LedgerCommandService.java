@@ -301,7 +301,7 @@ public class LedgerCommandService {
 
             // ── Step 8: Outbox entry ───────────────────────
             outboxRepository.save(OutboxEntry.of(
-                    "LEDGER_POSTING", postingId,
+                    "ledger.posted", postingId,
                     "LedgerPosted",
                     buildLedgerPostedPayload(
                             posting, debitEntry, creditEntry)));
@@ -452,7 +452,7 @@ public class LedgerCommandService {
 
         // Write outbox event
         outboxRepository.save(OutboxEntry.of(
-                "LEDGER_POSTING", originalPostingId,
+                "ledger.reversed", originalPostingId,
                 "LedgerReversed",
                 objectMapper.createObjectNode()
                         .put("originalPostingId", originalPostingId.toString())

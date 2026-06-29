@@ -4,8 +4,7 @@ spring:
     username: nexus
     password: nexus_dev_password
   data:
-    mongodb:
-      uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_fraud?authSource=admin
+
     redis:
       host: localhost
       port: 6380

@@ -17,7 +17,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
@@ -28,14 +27,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /**
  * Risk Scoring Agent — Plan-then-Act implementation.
@@ -71,14 +63,6 @@ public class RiskScoringAgent {
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
     private final Tracer tracer;
-
-    // Parallel tool execution — plain cached thread-pool, no preview API needed
-    private final ExecutorService parallelToolExecutor =
-            Executors.newCachedThreadPool(r -> {
-                Thread t = new Thread(r, "risk-tool-parallel");
-                t.setDaemon(true);
-                return t;
-            });
 
     private final Timer   computationTimer;
     private final Counter successCounter;
@@ -323,24 +307,12 @@ public class RiskScoringAgent {
                 // AssistantMessage.ToolCall is the correct type in Spring AI 1.x
                 // It is a nested record inside AssistantMessage (chat.messages package).
                 // Accessor: call.name()  call.id()  call.arguments()
-                AssistantMessage assistantOutput =
-                        (AssistantMessage) response.getResult().getOutput();
-
-                List<AssistantMessage.ToolCall> pendingCalls =
-                        assistantOutput.getToolCalls();
-
-                if (pendingCalls.size() > 1 && areParallelInPlan(pendingCalls, plan)) {
-                    executeParallelToolCalls(pendingCalls, messages, prompt);
-                    prompt = new org.springframework.ai.chat.prompt.Prompt(
-                            new ArrayList<>(messages), toolOptions);
-                } else {
-                    ToolExecutionResult result =
-                            toolCallingManager.executeToolCalls(prompt, response);
-                    prompt = new org.springframework.ai.chat.prompt.Prompt(
-                            result.conversationHistory(), toolOptions);
-                    messages.clear();
-                    messages.addAll(result.conversationHistory());
-                }
+                ToolExecutionResult result =
+                        toolCallingManager.executeToolCalls(prompt, response);
+                prompt = new org.springframework.ai.chat.prompt.Prompt(
+                        result.conversationHistory(), toolOptions);
+                messages.clear();
+                messages.addAll(result.conversationHistory());
 
                 response = executionClient.prompt()
                         .messages(prompt.getInstructions())
@@ -357,50 +329,6 @@ public class RiskScoringAgent {
         }
 
         return synthesizeProfile(userId, version, startedAt, triggeredBy, plan, prompt);
-    }
-
-    // ══════════════════════════════════════════════════════════
-    // PARALLEL TOOL EXECUTION
-    // ══════════════════════════════════════════════════════════
-
-    private void executeParallelToolCalls(
-            List<AssistantMessage.ToolCall> calls,
-            List<Message> messages,
-            org.springframework.ai.chat.prompt.Prompt currentPrompt) {
-
-        final org.springframework.ai.chat.prompt.Prompt snap = currentPrompt;
-
-        List<CompletableFuture<List<Message>>> futures = calls.stream()
-                .map(call -> CompletableFuture.supplyAsync(() -> {
-                    try {
-                        ToolExecutionResult result =
-                                toolCallingManager.executeToolCalls(snap, null);
-                        return result.conversationHistory().stream()
-                                .filter(m -> m instanceof ToolResponseMessage)
-                                .<Message>map(m -> m)
-                                .toList();
-                    } catch (Exception ex) {
-                        log.warn("Parallel tool call failed for {}: {}",
-                                call.name(), ex.getMessage());
-                        return List.<Message>of();
-                    }
-                }, parallelToolExecutor))
-                .toList();
-
-        try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                    .get(30, TimeUnit.SECONDS);
-
-            for (CompletableFuture<List<Message>> f : futures) {
-                messages.addAll(f.getNow(List.of()));
-            }
-
-        } catch (TimeoutException te) {
-            log.warn("Parallel tool execution timed out — sequential fallback will apply");
-            futures.forEach(f -> f.cancel(true));
-        } catch (Exception e) {
-            log.warn("Parallel tool execution failed, sequential fallback: {}", e.getMessage());
-        }
     }
 
     // ══════════════════════════════════════════════════════════
@@ -473,16 +401,6 @@ public class RiskScoringAgent {
         if (response == null || response.getResult() == null) return false;
         var output = response.getResult().getOutput();
         return output instanceof AssistantMessage am && am.hasToolCalls();
-    }
-
-    /** Returns true only if every pending call is flagged canParallel in the plan. */
-    private boolean areParallelInPlan(List<AssistantMessage.ToolCall> calls,
-                                      RiskScoringPlan plan) {
-        Set<String> callNames = new HashSet<>();
-        calls.forEach(c -> callNames.add(c.name()));    // record accessor
-        return plan.steps().stream()
-                .filter(s -> callNames.contains(s.toolName()))
-                .allMatch(RiskScoringPlan.RiskScoringStep::canParallel);
     }
 
     private String serialize(Object obj) {

@@ -47,10 +47,6 @@ nexus:
       path: ./keys/nexus-identity.jks
       password: dev_keystore_password
 
-  aws:
-    endpoint-override: http://localhost:4566
-    kyc-queue-url: http://localhost:4566/000000000000/nexus-kyc-documents-pending
-
 management:
   tracing:
     sampling:

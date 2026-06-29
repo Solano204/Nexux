@@ -3,8 +3,8 @@ spring:
     url: jdbc:postgresql://${POSTGRES_HOST:nexus-postgres}:5432/nexus_audit
     username: ${POSTGRES_USER:nexus}
     password: ${POSTGRES_PASSWORD}
+  elasticsearch:
+    uris: http://${ELASTICSEARCH_HOST:nexus-elasticsearch}:9200
   data:
-    elasticsearch:
-      uris: http://${ELASTICSEARCH_HOST:nexus-elasticsearch}:9200
     mongodb:
       uri: mongodb://${MONGO_USER:nexus}:${MONGO_PASSWORD}@${MONGO_HOST:nexus-mongodb}:27017/nexus_audit?authSource=admin

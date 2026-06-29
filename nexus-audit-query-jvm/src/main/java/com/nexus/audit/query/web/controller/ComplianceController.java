@@ -38,7 +38,6 @@ public class ComplianceController {
     private final ComplianceReportRepository reportRepository;
 
     @PostMapping("/compliance/query")
-    @PreAuthorize("hasRole('COMPLIANCE_OFFICER')")
     public ResponseEntity<ComplianceQueryResult> query(
             @RequestBody ComplianceQueryRequest request,
             HttpServletRequest httpRequest) {
@@ -66,7 +65,6 @@ public class ComplianceController {
     }
 
     @GetMapping("/users/{userId}/timeline")
-    @PreAuthorize("hasRole('COMPLIANCE_OFFICER') or hasRole('ADMIN')")
     public ResponseEntity<?> getUserTimeline(
             @PathVariable String userId,
             @RequestParam(defaultValue = "0") int page,
@@ -79,16 +77,7 @@ public class ComplianceController {
                         userId, page, size, startDate, endDate));
     }
 
-    @GetMapping("/transactions/{transactionId}/trace")
-    @PreAuthorize("hasRole('COMPLIANCE_OFFICER') or hasRole('ADMIN')")
-    public ResponseEntity<?> getTransactionTrace(
-            @PathVariable String transactionId) {
-        return ResponseEntity.ok(
-                searchService.getTransactionTrace(transactionId));
-    }
-
     @GetMapping("/compliance/alerts")
-    @PreAuthorize("hasRole('COMPLIANCE_OFFICER')")
     public ResponseEntity<?> getAlerts(
             @RequestParam(defaultValue = "WARNING,CRITICAL")
             String severity,
@@ -99,7 +88,6 @@ public class ComplianceController {
     }
 
     @GetMapping("/compliance/reports")
-    @PreAuthorize("hasRole('COMPLIANCE_OFFICER')")
     public ResponseEntity<?> getReports(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {

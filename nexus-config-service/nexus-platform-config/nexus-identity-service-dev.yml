@@ -3,21 +3,10 @@ spring:
     url: jdbc:postgresql://localhost:5433/nexus_identity
     username: nexus
     password: nexus_dev_password
-
-  kafka:
-    bootstrap-servers: localhost:19092
-
   data:
     redis:
       host: localhost
       port: 6380
       password: ""
-
-eureka:
-  client:
-    register-with-eureka: true
-    fetch-registry: true
-    service-url:
-      defaultZone: http://localhost:8761/eureka/
-  instance:
-    prefer-ip-address: true
+  kafka:
+    bootstrap-servers: localhost:19092

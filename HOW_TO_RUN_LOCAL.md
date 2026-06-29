@@ -1,218 +1,241 @@
-# How to Run NEXUS Services Locally (dev profile)
+# HOW TO RUN NEXUS LOCALLY — DEV MODE
 
-All services run on **localhost**. External dependencies (Kafka, DBs, Redis, Zipkin)
-run in Docker. Business services run as local JVM processes.
+All services run on **localhost**. Infrastructure (Kafka, DBs, Redis, Zipkin…) runs in
+Docker. Each service needs Java 25 set **per terminal** before running.
 
 ---
 
-## Step 0 — Start Docker infra (always first)
+## STEP 0 — Start Docker Infrastructure (always first)
 
 ```bash
-cd kafka
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/kafka
 docker compose up -d
 ```
 
-Wait until Kafka is healthy before starting any service (~30s).
-Check: `docker compose ps`
+Wait ~30 s for Kafka to become healthy, then verify:
+
+```bash
+docker compose ps
+```
+
+All containers should show **healthy** before starting any service.
 
 ---
 
-## Step 1 — Config Service (port 8888)
+## STEP 1 — Config Service (port 8888)
+
+> Always start this first. All other services pull config from here.
 
 ```bash
-cd nexus-config-service
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-config-service
+
+export JAVA_HOME="/c/Program Files/Java/jdk-25"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+mvn dependency:copy-dependencies -DoutputDirectory=target/libs
+
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
+
 ```
 
 Wait until you see: `Started NexusConfigServiceApplication`
 
 ---
 
-## Step 2 — Discovery / Eureka (port 8761)
+## STEP 2 — Discovery / Eureka (port 8761)
 
-The discovery service uses a custom classpath (Java 25 + preview features).
-Build once, then run:
+> Start this second. All services register here.
 
 ```bash
-cd nexus-discovery-service
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-discovery-service
 
-# Build first (only needed after code changes)
-mvn package -DskipTests
-
-# Run
+export JAVA_HOME="/c/Program Files/Java/jdk-25"
+export PATH="$JAVA_HOME/bin:$PATH"
+mvn dependency:copy-dependencies -DoutputDirectory=target/libs
 java --enable-preview \
-  -Dspring.profiles.active=dev \
-  -cp "target/classes;$(cat classpath.txt)" \
-  com.nexus.discovery.Main
+     -Dspring.profiles.active=dev \
+     -cp "target/classes;target/libs/*" \
+     com.nexus.discovery.Main
 ```
 
-> On Windows Git Bash use the semicolon separator as shown.
-> Wait until you see: `Started Main` and Eureka dashboard at http://localhost:8761
+Wait until Eureka dashboard is reachable: http://localhost:8761
 
 ---
 
-## Step 3 — Identity Service (port 8083)
+## STEP 3 — Identity Service (port 8083)
+
+> Required for JWT login and KYC. Start before the gateway.
 
 ```bash
-cd nexus-identity-service
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-identity-service
+
+export JAVA_HOME="/c/Program Files/Java/jdk-25"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+mvn clean package -DskipTests
+
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
 ---
 
-## Step 4 — API Gateway (port 8080)
+## STEP 4 — API Gateway (port 8080)
+
+> Start last among core services. Routes all external traffic.
 
 ```bash
-cd nexus-api-gateway
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-api-gateway
+
+export JAVA_HOME="/c/Program Files/Java/jdk-25"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+mvn clean package -DskipTests
+
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
 ---
 
-## Business Services (any order, any subset)
+## BUSINESS SERVICES — Run only what you need
 
-Run only the ones you need. See `INDEPENDENT_SERVICES.md` for which ones
-you actually need per feature.
+> Steps 0–4 must already be running. Open a new terminal for each service.
+
+---
 
 ### Account Service (port 8085)
+
+```bash
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-account-service
+
+export JAVA_HOME="/c/Program Files/Java/jdk-25"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+mvn clean package -DskipTests
+ mvn spring-boot:run -Dspring-boot.run.profiles=dev
+java --enable-preview \
+     -Dspring.classformat.ignore=true \
+     -Dspring.profiles.active=dev \
+     -Dspring.cloud.compatibility-verifier.enabled=false \
+     -cp "target/classes;target/libs/*" \
+     com.nexus.account.AccountApplication
 ```
 
-
-
-cd nexus-account-service
-# 1. Forzar la ruta física real del JDK 25
-export JAVA_HOME="C:/Program Files/Java/jdk-25"
-
-# 2. Correr el Config Server en modo desarrollo
-mvn spring-boot:run -Dspring-boot.run.profiles=dev
-
-
-```
+---
 
 ### Transaction Service (port 8086)
-Step 2 — Rebuild with JAVA_HOME now correct
-bash
+
+```bash
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-transaction-service
+
 export JAVA_HOME="/c/Program Files/Java/jdk-25"
 export PATH="$JAVA_HOME/bin:$PATH"
 
 mvn clean package -DskipTests
-Step 3 — Verify libs folder was actually created
-bashls target/libs/ | wc -l
-# Should print 100+
-If it prints 0 or errors, the plugin isn't wired correctly.
-Step 4 — Run
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+
 java --enable-preview \
--Dspring.classformat.ignore=true \
--Dspring.profiles.active=dev \
--Dspring.cloud.compatibility-verifier.enabled=false \
--cp 'target/classes;target/libs/*' \
-com.nexus.transaction.TransactionApplication
-
-Important note on JAVA_HOME persistence
-Every time you open a new Git Bash terminal, JAVA_HOME resets. To make it permanent, add these two lines to ~/.bashrc:
-bashecho 'export JAVA_HOME="/c/Program Files/Java/jdk-25"' >> ~/.bashrc
-echo 'export PATH="$JAVA_HOME/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-
+     -Dspring.classformat.ignore=true \
+     -Dspring.profiles.active=dev \
+     -Dspring.cloud.compatibility-verifier.enabled=false \
+     -cp "target/classes;target/libs/*" \
+     com.nexus.transaction.TransactionApplication
 ```
+
+---
 
 ### Fraud Service (port 8087)
-```
 
+```bash
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-fraud-service
 
 export JAVA_HOME="/c/Program Files/Java/jdk-25"
 export PATH="$JAVA_HOME/bin:$PATH"
 
 mvn clean package -DskipTests
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
+java --enable-preview \
+     -Dspring.classformat.ignore=true \
+     -Dspring.profiles.active=dev \
+     -Dspring.cloud.compatibility-verifier.enabled=false \
+     -cp "target/classes;target/libs/*" \
+     com.nexus.fraud.FraudApplication
+```
+
+---
+
+### Ledger Service (port 8088)
+
+```bash
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-ledger-service
+
+export JAVA_HOME="/c/Program Files/Java/jdk-25"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+mvn clean package -DskipTests
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+
+java --enable-preview \
+     -Dspring.classformat.ignore=true \
+     -Dspring.profiles.active=dev \
+     -Dspring.cloud.compatibility-verifier.enabled=false \
+     -cp "target/classes;target/libs/*" \
+     com.nexus.ledger.LedgerApplication
+```
+
+---
+
+### Notification Service (port 8089)
+
+```bash
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-notification-service
+
+export JAVA_HOME="/c/Program Files/Java/jdk-25"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+mvn clean package -DskipTests
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+
+java --enable-preview \
+     -Dspring.classformat.ignore=true \
+     -Dspring.profiles.active=dev \
+     -Dspring.cloud.compatibility-verifier.enabled=false \
+     -cp "target/classes;target/libs/*" \
+     com.nexus.notification.NotificationApplication
+```
 java --enable-preview \
 -Dspring.classformat.ignore=true \
 -Dspring.profiles.active=dev \
 -Dspring.cloud.compatibility-verifier.enabled=false \
--cp 'target/classes;target/libs/*' \
-com.nexus.fraud.FraudApplication
-
-cd nexus-fraud-service
-mvn spring-boot:run -Dspring-boot.run.profiles=dev
-`
-cd ~/Music/PROJECT\ IA\ STARTUP/NEXUS/nexus-ledger-service
-
-# Set JAVA_HOME if new terminal
-export JAVA_HOME="/c/Program Files/Java/jdk-25"
-export PATH="$JAVA_HOME/bin:$PATH"
-
-# Confirm main class exists
-find src -name "*Application.java"
-
-mvn clean package -DskipTests
-
-# Verify libs were copied
-ls target/libs/ | wc -l   # expect 100+
-
-# Run
-java --enable-preview \
-     -Dspring.classformat.ignore=true \
-     -Dspring.profiles.active=dev \
-     -Dspring.cloud.compatibility-verifier.enabled=false \
-     -cp 'target/classes;target/libs/*' \
-     com.nexus.ledger.LedgerApplication
-     
-### Ledger Service (port 8088)
-```bash
-cd nexus-ledger-service
-mvn spring-boot:run -Dspring-boot.run.profiles=dev
-```
-
-### Notification Service (port 8089)
-```bash
-cd nexus-notification-
-mvn spring-boot:run -Dspring-boot.run.profiles=dev
-cd ~/Music/PROJECT\ IA\ STARTUP/NEXUS/nexus-notification-service
-
-export JAVA_HOME="/c/Program Files/Java/jdk-25"
-export PATH="$JAVA_HOME/bin:$PATH"
-
-mvn clean package -DskipTests
-
-ls target/libs/ | wc -l   # expect 100+
-
-java --enable-preview \
-     -Dspring.classformat.ignore=true \
-     -Dspring.profiles.active=dev \
-     -Dspring.cloud.compatibility-verifier.enabled=false \
-     -Dspring.cloud.config.username=nexus-config \
-     -Dspring.cloud.config.password=nexus-config-password \
-     -Dspring.data.mongodb.uri=mongodb://nexus:nexus_dev_password@localhost:27018/nexus_notification?authSource=admin \
-     -Dspring.data.redis.host=localhost \
-     -Dspring.data.redis.port=6379 \
-     -Dspring.data.redis.password= \
-     -Dspring.kafka.bootstrap-servers=localhost:19092 \
-     -Dspring.ai.openai.api-key=dummy \
-     -cp 'target/classes;target/libs/*' \
-     com.nexus.notification.NotificationApplication
-```
+-Dspring.cloud.config.enabled=false \
+-Dspring.config.import="" \
+-Dspring.kafka.bootstrap-servers=localhost:19092 \
+-Dspring.kafka.consumer.group-id=saga-orchestrator-debug \
+-Dspring.kafka.consumer.enable-auto-commit=false \
+-Dspring.kafka.consumer.auto-offset-reset=earliest \
+-Dlogging.level.org.springframework.kafka=TRACE \
+-Dlogging.level.org.apache.kafka=DEBUG \
+-Dlogging.level.org.springframework.context=DEBUG \
+-cp "target/classes;target/libs/*" \
+com.nexus.notification.NotificationApplication 2>&1 | head -200
+---
 
 ### AI Assistant Service (port 8090)
+
 ```bash
-cd nexus-ai-assistant-service
-mvn spring-boot:run -Dspring-boot.run.profiles=dev
-
-
-cd ~/Music/PROJECT\ IA\ STARTUP/NEXUS/nexus-ai-assistant-service
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-ai-assistant-service
 
 export JAVA_HOME="/c/Program Files/Java/jdk-25"
 export PATH="$JAVA_HOME/bin:$PATH"
 
 mvn clean package -DskipTests
-
-ls target/libs/ | wc -l
-
-
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 java --enable-preview \
      -Dspring.classformat.ignore=true \
      -Dspring.profiles.active=dev \
      -Dspring.cloud.compatibility-verifier.enabled=false \
+     -Dspring.autoconfigure.exclude=org.springframework.ai.autoconfigure.ollama.OllamaAutoConfiguration \
      -Dspring.cloud.config.username=nexus-config \
      -Dspring.cloud.config.password=nexus-config-password \
      -Dspring.datasource.url=jdbc:postgresql://localhost:5433/nexus_ai_assistant \
@@ -220,156 +243,157 @@ java --enable-preview \
      -Dspring.datasource.password=nexus_dev_password \
      -Dspring.data.redis.host=localhost \
      -Dspring.data.redis.port=6379 \
-     -Dspring.data.redis.password= \
      -Dspring.kafka.bootstrap-servers=localhost:19092 \
      -Dspring.ai.openai.api-key=dummy \
-     -Dspring.ai.ollama.base-url=http://localhost:11434 \
-     -Dspring.jpa.hibernate.ddl-auto=update \
-     -cp 'target/classes;target/libs/*' \
+     -cp "target/classes;target/libs/*" \
      com.nexus.assistant.AiAssistantApplication
 ```
 
+---
+
 ### AI KYC Service (port 8091)
+
 ```bash
-cd nexus-ai-kyc-service
-mvn spring-boot:run -Dspring-boot.run.profiles=dev
-
-cd ~/Music/PROJECT\ IA\ STARTUP/NEXUS/nexus-ai-kyc-service
-
-find src/main/resources -name "*.yml" -o -name "*.properties"
-cat src/main/resources/application.yml
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-ai-kyc-service
 
 export JAVA_HOME="/c/Program Files/Java/jdk-25"
 export PATH="$JAVA_HOME/bin:$PATH"
 
 mvn clean package -DskipTests
-ls target/libs/ | wc -l
+ mvn spring-boot:run -Dspring-boot.run.profiles=dev
+
 java --enable-preview \
-     -Dspring.classformat.ignore=true \
      -Dspring.profiles.active=dev \
-     -Dspring.cloud.compatibility-verifier.enabled=false \
-     -Dspring.cloud.config.username=nexus-config \
-     -Dspring.cloud.config.password=nexus-config-password \
-     -Dspring.datasource.url=jdbc:postgresql://localhost:5433/nexus_kyc \
-     -Dspring.datasource.username=nexus \
-     -Dspring.datasource.password=nexus_dev_password \
      -Dspring.data.mongodb.uri=mongodb://localhost:27018/nexus_kyc \
-     -Dspring.kafka.bootstrap-servers=localhost:19092 \
-     -Dspring.ai.openai.api-key=dummy \
-     -cp 'target/classes;target/libs/*' \
+     -cp "target/classes;target/libs/*" \
      com.nexus.kyc.AiKycApplication
 ```
 
+---
+
 ### Analytics Service (port 8092)
+
 ```bash
-cd nexus-analytics-service
-mvn spring-boot:run -Dspring-boot.run.profiles=
-
-
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-analytics-service
 
 export JAVA_HOME="/c/Program Files/Java/jdk-25"
 export PATH="$JAVA_HOME/bin:$PATH"
 
 mvn clean package -DskipTests
-ls target/libs/ | wc -l
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
-
-
+java --enable-preview \
+     -Dspring.classformat.ignore=true \
+     -Dspring.profiles.active=dev \
+     -Dspring.cloud.compatibility-verifier.enabled=false \
+     -cp "target/classes;target/libs/*" \
+     com.nexus.analytics.AnalyticsApplication
 ```
+
+---
 
 ### Risk Scoring Service (port 8094)
+
 ```bash
-cd nexus-risk-scoring-service
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-risk-scoring-service
+
+export JAVA_HOME="/c/Program Files/Java/jdk-25"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+mvn clean package -DskipTests
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
+
+java --enable-preview \
+     -Dspring.classformat.ignore=true \
+     -Dspring.profiles.active=dev \
+     -Dspring.cloud.compatibility-verifier.enabled=false \
+     -cp "target/classes;target/libs/*" \
+     com.nexus.risk.RiskScoringApplication
+```
+
+---
+
+### Saga Orchestrator (port 8095)
+
+```bash
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-saga-orchestrator
 
 export JAVA_HOME="/c/Program Files/Java/jdk-25"
 export PATH="$JAVA_HOME/bin:$PATH"
 
 mvn clean package -DskipTests
 
-ls target/libs/ | wc -l   # expect 100+
-
-
-java --enable-preview \
-     -Dspring.classformat.ignore=true \
-     -Dspring.profiles.active=dev \
-     -Dspring.cloud.compatibility-verifier.enabled=false \
-     -Dspring.cloud.config.username=nexus-config \
-     -Dspring.cloud.config.password=nexus-config-password \
-     -Dspring.datasource.url=jdbc:postgresql://localhost:5433/nexus_risk \
-     -Dspring.datasource.username=nexus \
-     -Dspring.datasource.password=nexus_dev_password \
-     -Dspring.data.redis.host=localhost \
-     -Dspring.data.redis.port=6379 \
-     -Dspring.data.redis.password= \
-     -Dspring.kafka.bootstrap-servers=localhost:19092 \
-     -Dspring.ai.openai.api-key=dummy \
-     -cp 'target/classes;target/libs/*' \
-     com.nexus.risk.RiskScoringApplication
-     
-     
-```
-
-### Saga Orchestrator (port 8095)
-```bash
-cd nexus-saga-orchestrator
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
-mvn clean package -DskipTests
+
 
 java --enable-preview \
      -Dspring.classformat.ignore=true \
      -Dspring.profiles.active=dev \
      -Dspring.cloud.compatibility-verifier.enabled=false \
-     -Dspring.cloud.config.username=nexus-config \
-     -Dspring.cloud.config.password=nexus-config-password \
-     -Dspring.datasource.url=jdbc:postgresql://localhost:5433/nexus_saga \
-     -Dspring.datasource.username=nexus \
-     -Dspring.datasource.password=nexus_dev_password \
-     -Dspring.kafka.bootstrap-servers=localhost:19092 \
-     -Dspring.ai.openai.api-key=dummy \
-     -Dspring.flyway.repair-on-migrate=true \
-     -cp 'target/classes;target/libs/*' \
+     -cp "target/classes;target/libs/*" \
      com.nexus.saga.SagaOrchestratorApplication
 ```
 
-### Audit Query JVM (port 8097)
+---
+
+### Audit Write Native — Quarkus (port 8096)
+
 ```bash
-cd nexus-audit-query-jvm
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/audit-write-native
+
+export JAVA_HOME="/c/Program Files/Java/jdk-25"
+export PATH="$JAVA_HOME/bin:$PATH"
+
 mvn quarkus:dev
 ```
-cd ~/Music/PROJECT\ IA\ STARTUP/NEXUS/nexus-audit-query-jvm
 
-find src/main/resources -name "*.yml" -o -name "*.properties"
-cat src/main/resources/application.yml
+---
+
+### Audit Query JVM (port 8097)
+
+```bash
+cd ~/Music/"PROJECT IA STARTUP"/NEXUS/nexus-audit-query-jvm
 
 export JAVA_HOME="/c/Program Files/Java/jdk-25"
 export PATH="$JAVA_HOME/bin:$PATH"
 
 mvn clean package -DskipTests
-ls target/libs/ | wc -l---
-java --enable-preview \
--Dspring.classformat.ignore=true \
--Dspring.profiles.active=dev \
--Dspring.cloud.compatibility-verifier.enabled=false \
--Dspring.cloud.config.username=nexus-config \
--Dspring.cloud.config.password=nexus-config-password \
--Dspring.datasource.url=jdbc:postgresql://localhost:5433/nexus_audit \
--Dspring.datasource.username=nexus \
--Dspring.datasource.password=nexus_dev_password \
--Dspring.data.elasticsearch.uris=http://localhost:9200 \
--Dspring.data.mongodb.uri=mongodb://localhost:27018/nexus_audit \
--Dspring.ai.openai.api-key=dummy \
--Dspring.jpa.hibernate.ddl-auto=update \
--cp 'target/classes;target/libs/*' \
-com.nexus.audit.query.AuditQueryApplication
-## Quick Reference — Ports
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
-| Service | Port | URL |
+java --enable-preview \
+     -Dspring.classformat.ignore=true \
+     -Dspring.profiles.active=dev \
+     -Dspring.cloud.compatibility-verifier.enabled=false \
+     -cp "target/classes;target/libs/*" \
+     com.nexus.audit.query.AuditQueryApplication
+```
+
+---
+
+## PORTS REFERENCE
+
+### Infrastructure (Docker — always running)
+
+| Container | Host Port | URL |
+|---|---|---|
+| PostgreSQL | 5433 | `jdbc:postgresql://localhost:5433` |
+| MongoDB | 27018 | `mongodb://localhost:27018` |
+| Redis | 6380 | `redis://localhost:6380` |
+| Kafka | 19092 | `localhost:19092` |
+| Elasticsearch | 9201 | http://localhost:9201 |
+| Zipkin | 9412 | http://localhost:9412 |
+| Prometheus | 9091 | http://localhost:9091 |
+| Grafana | 3001 | http://localhost:3001 (admin / admin) |
+| Kafka UI | 8190 | http://localhost:8190 |
+
+### Services
+
+| Service | Port | Health |
 |---|---|---|
 | Config Service | 8888 | http://localhost:8888/actuator/health |
-| Eureka (Discovery) | 8761 | http://localhost:8761 |
-| API Gateway | 8080 | http://localhost:8080/actuator/health |
+| Discovery / Eureka | 8761 | http://localhost:8761 |
 | Identity Service | 8083 | http://localhost:8083/actuator/health |
+| API Gateway | 8080 | http://localhost:8080/actuator/health |
 | Account Service | 8085 | http://localhost:8085/actuator/health |
 | Transaction Service | 8086 | http://localhost:8086/actuator/health |
 | Fraud Service | 8087 | http://localhost:8087/actuator/health |
@@ -380,28 +404,22 @@ com.nexus.audit.query.AuditQueryApplication
 | Analytics Service | 8092 | http://localhost:8092/actuator/health |
 | Risk Scoring Service | 8094 | http://localhost:8094/actuator/health |
 | Saga Orchestrator | 8095 | http://localhost:8095/actuator/health |
-| Audit Query JVM | 8097 | http://localhost:8097/q/health |
-| Kafka UI | 8190 | http://localhost:8190 |
-| Zipkin | 9411 | http://localhost:9411 |
-| Prometheus | 9090 | http://localhost:9090 |
-| Grafana | 3001 | http://localhost:3001  (admin / admin) |
-| Elasticsearch | 9200 | http://localhost:9200 |
-| PostgreSQL | 5432 | — |
-| MongoDB | 27017 | — |
-| Redis | 6379 | — |
+| Audit Write Native | 8096 | http://localhost:8096/q/health |
+| Audit Query JVM | 8097 | http://localhost:8097/actuator/health |
 
 ---
 
-## Minimum sets to test each feature
+## MINIMUM SETS PER FEATURE
 
-```
-Login / JWT only          → identity-service
-Account operations        → identity + account
-Full transaction flow     → identity + account + transaction + fraud + ledger + saga-orchestrator
-AI chat assistant         → identity + account + transaction + fraud + ai-assistant
-KYC pipeline              → identity + ai-kyc
-Notifications             → notification
-Analytics dashboards      → analytics
-```
+| Goal | Services to run |
+|---|---|
+| Login / JWT only | identity |
+| Account operations | identity + account |
+| Full transaction flow | identity + account + transaction + fraud + ledger + saga |
+| AI chat assistant | identity + account + transaction + fraud + ai-assistant |
+| KYC pipeline | identity + ai-kyc |
+| Audit trail | audit-write-native + audit-query-jvm |
+| Notifications | notification |
+| Analytics dashboards | analytics |
 
-Config service (:8888) + Eureka (:8761) + Docker infra are always required.
+> **Steps 0–4** (infra + config + discovery + identity + gateway) are always required.

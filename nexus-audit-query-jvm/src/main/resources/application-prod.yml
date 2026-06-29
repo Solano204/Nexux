@@ -17,11 +17,12 @@ spring:
       maximum-pool-size: 20
       minimum-idle: 5
 
+  elasticsearch:
+    uris: ${ELASTICSEARCH_URIS:http://nexus-elasticsearch:9200}
+
   data:
-    elasticsearch:
-      uris: ${ELASTICSEARCH_URIS:http://nexus-elasticsearch:9200}
     mongodb:
-      uri: ${MONGODB_URI:mongodb://nexus-mongodb:27017/nexus_audit}
+      uri: ${MONGODB_URI}
       auto-index-creation: false
 
   ai:

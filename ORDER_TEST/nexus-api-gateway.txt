@@ -1,0 +1,102 @@
+================================================================
+ NEXUS — nexus-api-gateway — Complete Workflow Test Order
+================================================================
+Port: 8080 | Stack: Spring Boot (Spring Cloud Gateway)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  Single entry point for ALL client requests.
+  Routes to downstream services via Eureka service discovery.
+  Handles JWT validation (delegates to identity-service).
+  Rate limiting, circuit breaking, request/response logging.
+
+  YOU TEST THE ENTIRE PLATFORM THROUGH THIS SERVICE.
+  Instead of calling :8083, :8085, :8086 directly, call :8080.
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-kafka nexus-zookeeper
+
+  The gateway itself has no DB. It relies on service discovery.
+
+================================================================
+ STEP 2 — PLATFORM CORE (CRITICAL — start in order)
+================================================================
+  1. nexus-config-service    :8888  — gateway reads routing config from here
+  2. nexus-discovery-service :8761  — gateway discovers all services here
+  3. nexus-api-gateway       :8080  — start LAST
+
+  The gateway WON'T route to a service unless that service is
+  registered in Eureka. Start gateway AFTER all target services are up.
+
+================================================================
+ STEP 3 — ALL SERVICES YOU WANT TO ROUTE THROUGH THE GATEWAY
+================================================================
+  Start each service you want to call via the gateway.
+  The gateway auto-discovers them via Eureka.
+
+  Minimum set for full platform:
+  ├── nexus-identity-service    :8083
+  ├── nexus-account-service     :8085
+  ├── nexus-transaction-service :8086
+  ├── nexus-fraud-service       :8087
+  ├── nexus-ledger-service      :8088
+  ├── nexus-notification-service :8089
+  ├── nexus-ai-assistant-service :8090
+  ├── nexus-ai-kyc-service      :8091
+  ├── nexus-analytics-service   :8092
+  ├── nexus-risk-scoring-service :8094
+  ├── nexus-saga-orchestrator   :8095
+  ├── audit-write-native        :8096
+  └── nexus-audit-query-jvm    :8097
+
+================================================================
+ ROUTING MAP — HOW THE GATEWAY FORWARDS REQUESTS
+================================================================
+  All Postman collections in DOCUMENTATION-POSTMAN/ use {{baseUrl}}
+  which should be set to http://localhost:8080.
+
+  /api/v1/auth/**         -> nexus-identity-service
+  /api/v1/users/**        -> nexus-identity-service
+  /api/v1/accounts/**     -> nexus-account-service
+  /api/v1/transactions/** -> nexus-transaction-service
+  /api/v1/fraud/**        -> nexus-fraud-service
+  /api/v1/ledger/**       -> nexus-ledger-service
+  /api/v1/kyc/**          -> nexus-ai-kyc-service
+  /api/v1/analytics/**    -> nexus-analytics-service
+  /api/v1/risk/**         -> nexus-risk-scoring-service
+  /api/v1/assistant/**    -> nexus-ai-assistant-service
+  /api/v1/audit/**        -> nexus-audit-query-jvm
+  /api/v1/saga/**         -> nexus-saga-orchestrator
+
+================================================================
+ HOW TO TEST THE COMPLETE PLATFORM VIA GATEWAY
+================================================================
+  1. Import DOCUMENTATION-POSTMAN/nexus-api-gateway.postman_collection.json
+     Set variable: {{baseUrl}} = http://localhost:8080
+
+  2. Test sequence (full OnboardingFlowSaga + TransferSaga):
+     a. POST {{baseUrl}}/api/v1/auth/register     -> register user 1
+     b. POST {{baseUrl}}/api/v1/auth/register     -> register user 2
+     c. POST {{baseUrl}}/api/v1/auth/login        -> get JWT for user 1
+     d. POST {{baseUrl}}/api/v1/users/me/kyc/initiate -> initiate KYC
+     e. Wait for OnboardingFlowSaga to complete
+     f. GET  {{baseUrl}}/api/v1/accounts          -> see created accounts
+     g. POST {{baseUrl}}/api/v1/transactions      -> initiate transfer
+     h. GET  {{baseUrl}}/api/v1/transactions/{id} -> check status
+     i. GET  {{baseUrl}}/api/v1/audit/events?userId={id} -> full audit trail
+
+  3. Monitor distributed traces:
+     Zipkin :9413 -> http://localhost:9413
+     (traceId propagated through gateway on every request)
+
+================================================================
+ GATEWAY HEALTH
+================================================================
+  GET http://localhost:8080/actuator/health
+  GET http://localhost:8080/actuator/gateway/routes   -> see all registered routes
+
+  If a route returns 503: the target service is not registered in Eureka.
+  Check: GET http://localhost:8761 -> Eureka dashboard

@@ -1,7 +1,7 @@
 spring:
+  elasticsearch:
+    uris: http://localhost:9201
   data:
-    elasticsearch:
-      uris: http://localhost:9201
     redis:
       host: localhost
       port: 6380

@@ -48,7 +48,9 @@ public class IncomeAggregate {
     public IncomeAggregate add(BigDecimal amount, String currency,
                                String transactionType) {
         Map<String, BigDecimal> updated = new HashMap<>(byTransactionType);
-        updated.merge(transactionType, amount, BigDecimal::add);
+        updated.merge(
+                transactionType != null ? transactionType : "UNKNOWN",
+                amount, BigDecimal::add);
 
         return new IncomeAggregate(
                 totalAmount.add(amount),

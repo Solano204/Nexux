@@ -74,8 +74,11 @@ management:
 
 logging:
   level:
-    com.nexus.transaction: DEBUG
-    org.hibernate.SQL: DEBUG
-    org.apache.kafka.streams: DEBUG
-    org.springframework.data.elasticsearch: DEBUG
-    org.flywaydb: DEBUG
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
+    org.hibernate.SQL: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN
+

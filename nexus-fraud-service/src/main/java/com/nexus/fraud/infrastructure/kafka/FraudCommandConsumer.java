@@ -84,7 +84,7 @@ public class FraudCommandConsumer {
             FraudAnalysisRequest request = new FraudAnalysisRequest(
                     payload.path("transactionId").asText(),
                     sagaId,
-                    payload.path("userId").asText(),
+                    payload.path("userId").asText(payload.path("sourceUserId").asText()),
                     payload.path("sourceAccountId").asText(),
                     payload.path("targetAccountId").asText(""),
                     new BigDecimal(payload.path("amount").asText("0")),

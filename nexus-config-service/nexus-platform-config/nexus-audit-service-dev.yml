@@ -3,8 +3,6 @@ spring:
     url: jdbc:postgresql://localhost:5433/nexus_audit
     username: nexus
     password: nexus_dev_password
-  data:
-    elasticsearch:
-      uris: http://localhost:9201
-    mongodb:
-      uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_audit?authSource=admin
+  elasticsearch:
+    uris: http://localhost:9201
+

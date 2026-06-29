@@ -1,11 +1,17 @@
 package com.nexus.risk.config.advisor;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.advisor.api.*;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
@@ -25,7 +31,7 @@ import java.util.regex.Pattern;
  * Order 100 — runs before ErrorWrappingAdvisor (order 200).
  */
 @Slf4j
-public class ContentSanitizerAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
+public class ContentSanitizerAdvisor implements CallAdvisor, StreamAdvisor {
 
     private static final Pattern CODE_FENCE =
             Pattern.compile("```(?:json)?\\s*(.*?)\\s*```",
@@ -43,30 +49,23 @@ public class ContentSanitizerAdvisor implements CallAroundAdvisor, StreamAroundA
     @Override
     public int getOrder() { return 100; }
 
-    // ── CallAroundAdvisor ────────────────────────────────────
-
     @Override
-    public AdvisedResponse aroundCall(AdvisedRequest request,
-                                      CallAroundAdvisorChain chain) {
-        AdvisedRequest sanitized = sanitizeRequest(request);
-        AdvisedResponse response = chain.nextAroundCall(sanitized);
+    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
+        ChatClientRequest sanitized = sanitizeRequest(request);
+        ChatClientResponse response = chain.nextCall(sanitized);
         return sanitizeResponse(response);
     }
 
-    // ── StreamAroundAdvisor ──────────────────────────────────
-
     @Override
-    public Flux<AdvisedResponse> aroundStream(AdvisedRequest request,
-                                              StreamAroundAdvisorChain chain) {
-        AdvisedRequest sanitized = sanitizeRequest(request);
-        return chain.nextAroundStream(sanitized).map(this::sanitizeResponse);
+    public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
+        ChatClientRequest sanitized = sanitizeRequest(request);
+        return chain.nextStream(sanitized).map(this::sanitizeResponse);
     }
 
-    // ── Request sanitization ─────────────────────────────────
-
-    private AdvisedRequest sanitizeRequest(AdvisedRequest request) {
+    private ChatClientRequest sanitizeRequest(ChatClientRequest request) {
         try {
-            var sanitizedMessages = request.messages().stream()
+            Prompt prompt = request.prompt();
+            var sanitizedMessages = prompt.getInstructions().stream()
                     .map(msg -> {
                         if (msg instanceof UserMessage um) {
                             String clean = sanitizeText(um.getText());
@@ -80,9 +79,8 @@ public class ContentSanitizerAdvisor implements CallAroundAdvisor, StreamAroundA
                     })
                     .toList();
 
-            return AdvisedRequest.from(request)
-                    .messages(sanitizedMessages)
-                    .build();
+            Prompt newPrompt = new Prompt(sanitizedMessages, prompt.getOptions());
+            return request.mutate().prompt(newPrompt).build();
 
         } catch (Exception e) {
             log.warn("ContentSanitizer: request sanitization failed, passing through: {}",
@@ -97,11 +95,9 @@ public class ContentSanitizerAdvisor implements CallAroundAdvisor, StreamAroundA
         return CONTROL_CHARS.matcher(r).replaceAll("");
     }
 
-    // ── Response sanitization ────────────────────────────────
-
-    private AdvisedResponse sanitizeResponse(AdvisedResponse response) {
+    private ChatClientResponse sanitizeResponse(ChatClientResponse response) {
         try {
-            ChatResponse chatResponse = response.response();
+            ChatResponse chatResponse = response.chatResponse();
             if (chatResponse == null) return response;
 
             boolean modified = false;
@@ -124,10 +120,13 @@ public class ContentSanitizerAdvisor implements CallAroundAdvisor, StreamAroundA
 
             if (!modified) return response;
 
-            ChatResponse cleanedResponse =
+            ChatResponse cleanedChatResponse =
                     new ChatResponse(cleaned, chatResponse.getMetadata());
 
-            return new AdvisedResponse(cleanedResponse, response.adviseContext());
+            return ChatClientResponse.builder()
+                    .chatResponse(cleanedChatResponse)
+                    .context(response.context())
+                    .build();
 
         } catch (Exception e) {
             log.warn("ContentSanitizer: response sanitization failed, passing through: {}",

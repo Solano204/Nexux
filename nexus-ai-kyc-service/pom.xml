@@ -1,37 +1,18 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
-         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-
     <parent>
         <groupId>com.nexus</groupId>
         <artifactId>nexus-financial-platform</artifactId>
         <version>1.0.0</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
-
     <artifactId>nexus-ai-kyc-service</artifactId>
     <name>Nexus AI KYC Service</name>
-    <description>
-        AI-powered identity verification for the OnboardingFlowSaga.
-        Two-stage AI pipeline:
-        Stage 1 — GPT-4o-mini vision extracts KycExtractedData
-        from passport/ID image (Section 8 image-to-text).
-        Stage 2 — GPT-4o-mini compares extracted vs submitted data
-        and produces KycVerificationDecision (Section 3 structured output).
-        Hard rule validation before any AI call (cost optimization).
-        MongoDB for KYC documents, PostgreSQL for immutable audit trail.
-    </description>
-
-    <!-- No <dependencyManagement> needed: fully inherited from root POM. -->
-
+    <description> AI-powered identity verification for the OnboardingFlowSaga. Two-stage AI pipeline: Stage 1 — GPT-4o-mini vision extracts KycExtractedData from passport/ID image (Section 8 image-to-text). Stage 2 — GPT-4o-mini compares extracted vs submitted data and produces KycVerificationDecision (Section 3 structured output). Hard rule validation before any AI call (cost optimization). MongoDB for KYC documents, PostgreSQL for immutable audit trail. </description>
+    <!--  NO <properties> — versions come from parent BOM  -->
+    <!--  NO <dependencyManagement> — parent owns it  -->
     <dependencies>
-
-        <!-- ══════════════════════════════════════════════════
-             SPRING BOOT CORE
-             ══════════════════════════════════════════════════ -->
+        <!--  Spring Boot Core  -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -48,10 +29,7 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
-
-        <!-- ══════════════════════════════════════════════════
-             DATA — PostgreSQL + Flyway
-             ══════════════════════════════════════════════════ -->
+        <!--  JPA & PostgreSQL  -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
@@ -69,18 +47,21 @@
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-database-postgresql</artifactId>
         </dependency>
-
-        <!-- ══════════════════════════════════════════════════
-             MONGODB
-             ══════════════════════════════════════════════════ -->
+        <!--  MongoDB (KYC-specific — stores KYC documents)  -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-mongodb</artifactId>
         </dependency>
-
-        <!-- ══════════════════════════════════════════════════
-             SPRING CLOUD
-             ══════════════════════════════════════════════════ -->
+        <!--  Redis  -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.lettuce</groupId>
+            <artifactId>lettuce-core</artifactId>
+        </dependency>
+        <!--  Spring Cloud  -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-config</artifactId>
@@ -89,34 +70,49 @@
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
         </dependency>
-
-        <!-- ══════════════════════════════════════════════════
-             KAFKA
-             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-bus</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-stream-binder-kafka</artifactId>
+        </dependency>
+        <!--  Kafka  -->
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
         </dependency>
-
-        <!-- ══════════════════════════════════════════════════
-             SPRING AI — Two-stage KYC pipeline
-             ══════════════════════════════════════════════════ -->
+        <!--  Spring AI — two-stage KYC pipeline  -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-openai-spring-boot-starter</artifactId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
         </dependency>
-
-        <!-- ══════════════════════════════════════════════════
-             RESILIENCE4J
-             ══════════════════════════════════════════════════ -->
+        <!--  Hypersistence Utils  -->
+        <dependency>
+            <groupId>io.hypersistence</groupId>
+            <artifactId>hypersistence-utils-hibernate-63</artifactId>
+        </dependency>
+        <!--  AWS SDK — S3 document download + SQS  -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>sqs</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>url-connection-client</artifactId>
+        </dependency>
+        <!--  Resilience4j — version kept: NOT in Spring BOM  -->
         <dependency>
             <groupId>io.github.resilience4j</groupId>
             <artifactId>resilience4j-spring-boot3</artifactId>
+            <version>2.2.0</version>
         </dependency>
-
-        <!-- ══════════════════════════════════════════════════
-             OBSERVABILITY
-             ══════════════════════════════════════════════════ -->
+        <!--  Observability  -->
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
@@ -133,22 +129,34 @@
             <groupId>net.logstash.logback</groupId>
             <artifactId>logstash-logback-encoder</artifactId>
         </dependency>
-
-        <!-- ══════════════════════════════════════════════════
-             UTILITIES
-             ══════════════════════════════════════════════════ -->
+        <!--  AspectJ — required by ObservedAspect (micrometer-observation)  -->
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+        </dependency>
+        <!--  Utilities  -->
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
-        <!-- lombok declared globally in root <dependencies> — no need here -->
-
-        <!-- ══════════════════════════════════════════════════
-             TESTING
-             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+        </dependency>
+        <!--  Test Dependencies  -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka-test</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -166,13 +174,30 @@
             <artifactId>mongodb</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>localstack</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
-
     <build>
         <plugins>
+            <!--  Spring Boot repackage — mirrors identity exactly, no version override  -->
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
                 <configuration>
                     <mainClass>com.nexus.kyc.AiKycApplication</mainClass>
                     <excludes>
@@ -181,18 +206,24 @@
                             <artifactId>lombok</artifactId>
                         </exclude>
                     </excludes>
-                    <jvmArguments>
-                        --enable-preview
-                        --add-opens java.base/java.lang=ALL-UNNAMED
-                    </jvmArguments>
+                    <jvmArguments> --enable-preview --add-opens java.base/java.lang=ALL-UNNAMED </jvmArguments>
                 </configuration>
             </plugin>
+            <!--  Flyway plugin — mirrors identity  -->
+            <plugin>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-maven-plugin</artifactId>
+            </plugin>
+            <!--  Compiler — mirrors identity exactly  -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
                     <release>25</release>
                     <enablePreview>true</enablePreview>
+                    <compilerArgs>
+                        <arg>-parameters</arg>
+                    </compilerArgs>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>org.projectlombok</groupId>
@@ -202,44 +233,30 @@
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-dependency-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>copy-dependencies</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>copy-dependencies</goal>
-                        </goals>
-                        <configuration>
-                            <outputDirectory>${project.build.directory}/libs</outputDirectory>
-                            <includeScope>runtime</includeScope>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <groupId>org.flywaydb</groupId>
-                <artifactId>flyway-maven-plugin</artifactId>
-            </plugin>
+            <!--  JaCoCo — single declaration, mirrors identity  -->
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
+                <configuration>
+                    <rules>
+                        <rule>
+                            <limits>
+                                <limit>
+                                    <counter>LINE</counter>
+                                    <value>COVEREDRATIO</value>
+                                    <minimum>0.85</minimum>
+                                </limit>
+                                <limit>
+                                    <counter>BRANCH</counter>
+                                    <value>COVEREDRATIO</value>
+                                    <minimum>0.80</minimum>
+                                </limit>
+                            </limits>
+                        </rule>
+                    </rules>
+                </configuration>
             </plugin>
         </plugins>
     </build>
-
-    <repositories>
-        <repository>
-            <id>central</id>
-            <url>https://repo.maven.apache.org/maven2</url>
-        </repository>
-        <repository>
-            <id>spring-milestones</id>
-            <name>Spring Milestones</name>
-            <url>https://repo.spring.io/milestone</url>
-            <snapshots><enabled>false</enabled></snapshots>
-        </repository>
-    </repositories>
+    <!--  NO <repositories> — parent or settings.xml handles Spring milestones  -->
 </project>

@@ -19,6 +19,8 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.tracing.Tracer;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -53,6 +55,11 @@ import java.util.concurrent.Executors;
 @Slf4j
 @Service
 public class AccountCommandService {
+
+    // Self-injection via proxy so @Transactional on saveAccountsTransactionally is honored
+    @Lazy
+    @Autowired
+    private AccountCommandService self;
 
     private final AccountRepository accountRepository;
     private final BalanceReservationRepository reservationRepository;
@@ -162,10 +169,11 @@ public class AccountCommandService {
             // otherwise fall back to a cached thread pool.
             ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
-            // Task A: PostgreSQL write (two accounts, atomic transaction)
+            // Task A: PostgreSQL write (two accounts, atomic transaction).
+            // Called via self-proxy so @Transactional(REQUIRES_NEW) is applied.
             CompletableFuture<List<Account>> pgTask = CompletableFuture
                     .supplyAsync(() ->
-                                    saveAccountsTransactionally(checking, savings, traceId),
+                                    self.saveAccountsTransactionally(checking, savings, traceId),
                             executor);
 
             // Task B: MongoDB analytics init
@@ -212,7 +220,7 @@ public class AccountCommandService {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    protected List<Account> saveAccountsTransactionally(
+    public List<Account> saveAccountsTransactionally(
             Account checking, Account savings, String traceId) {
 
         // Save both accounts
@@ -223,7 +231,7 @@ public class AccountCommandService {
         for (Account acct : List.of(checking, savings)) {
             accountEventRepository.save(buildCreateEvent(acct, traceId));
             outboxRepository.save(OutboxEntry.of(
-                    "ACCOUNT", acct.getAccountId(),
+                    "accounts.created", acct.getAccountId(),
                     "AccountCreated",
                     buildAccountCreatedPayload(acct)));
         }
@@ -317,7 +325,7 @@ public class AccountCommandService {
                 accountEventRepository.save(buildReserveEvent(
                         account, transactionId, amount, traceId));
                 outboxRepository.save(OutboxEntry.of(
-                        "ACCOUNT", accountId, "BalanceReserved",
+                        "account.events", accountId, "BalanceReserved",
                         buildBalanceReservedPayload(
                                 accountId, transactionId, amount,
                                 reservation.newAvailableBalance())));
@@ -357,7 +365,15 @@ public class AccountCommandService {
                     accountId, e.getMessage());
             return BalanceOperationResult.failure(
                     "LOCK_TIMEOUT", "Could not acquire account lock");
-        }catch (AccountingIntegrityException e) {
+        } catch (org.springframework.data.redis.RedisConnectionFailureException |
+                 org.springframework.data.redis.RedisSystemException e) {
+            obs.event(Observation.Event.of("reservation.redis_unavailable"));
+            log.error("Redis unavailable during lock acquisition for " +
+                    "accountId={}: {}", accountId, e.getMessage());
+            return BalanceOperationResult.failure(
+                    "INFRASTRUCTURE_UNAVAILABLE",
+                    "Lock service unavailable — retry later");
+        } catch (AccountingIntegrityException e) {
             negativePrevention.increment();
             obs.error(e);
             log.error("CRITICAL accounting integrity violation: {}",
@@ -387,8 +403,17 @@ public class AccountCommandService {
                     reservationRepository.findByAccountIdAndTransactionId(
                             accountId, transactionId);
 
-            if (reservation.isPresent() &&
-                    reservation.get().getStatus() != ReservationStatus.ACTIVE) {
+            if (reservation.isEmpty()) {
+                // ReserveBalance never committed (e.g. lock failure before DB write).
+                // Compensation on a non-existent reservation is a no-op.
+                log.warn("ReleaseBalance no-op: no reservation record found for " +
+                        "transactionId={} accountId={} — reserve likely never committed",
+                        transactionId, accountId);
+                return BalanceOperationResult.success(
+                        amount, null, transactionId.toString(), true);
+            }
+
+            if (reservation.get().getStatus() != ReservationStatus.ACTIVE) {
                 log.info("Idempotent replay: reservation already {} " +
                                 "for transactionId={}",
                         reservation.get().getStatus(), transactionId);
@@ -416,7 +441,7 @@ public class AccountCommandService {
             accountEventRepository.save(buildReleaseEvent(
                     account, transactionId, amount, traceId));
             outboxRepository.save(OutboxEntry.of(
-                    "ACCOUNT", accountId, "BalanceReleased",
+                    "account.events", accountId, "BalanceReleased",
                     buildBalanceReleasedPayload(accountId, transactionId,
                             amount, account.getAvailableBalance())));
 
@@ -490,11 +515,11 @@ public class AccountCommandService {
                     target, transactionId, amount, traceId));
 
             outboxRepository.save(OutboxEntry.of(
-                    "ACCOUNT", sourceAccountId, "BalanceFinalizedDebit",
+                    "account.events", sourceAccountId, "BalanceFinalizedDebit",
                     buildFinalizedPayload(sourceAccountId, targetAccountId,
                             transactionId, amount, source.getAvailableBalance())));
             outboxRepository.save(OutboxEntry.of(
-                    "ACCOUNT", targetAccountId, "BalanceCredited",
+                    "account.events", targetAccountId, "BalanceCredited",
                     buildCreditedPayload(targetAccountId, sourceAccountId,
                             transactionId, amount, target.getAvailableBalance())));
 
@@ -603,7 +628,7 @@ public class AccountCommandService {
                 .put("accountType", a.getAccountType().name())
                 .put("userId", a.getUserId().toString())
                 .put("currency", a.getCurrency())
-                .put("initialBalance", "0.0000")
+                .put("initialBalance", a.getAvailableBalance().toPlainString())
                 .put("createdAt", Instant.now().toString());
     }
 

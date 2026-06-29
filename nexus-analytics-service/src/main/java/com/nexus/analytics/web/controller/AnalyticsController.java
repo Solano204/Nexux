@@ -20,19 +20,19 @@ public class AnalyticsController {
 
     @GetMapping("/accounts/{accountId}/monthly/{yearMonth}")
     public ResponseEntity<?> getMonthlyAnalytics(
-            @PathVariable String accountId,
-            @PathVariable String yearMonth,
+            @PathVariable("accountId") String accountId,
+            @PathVariable("yearMonth") String yearMonth,
             HttpServletRequest request) {
 
         String userId = extractUserId(request);
         return ResponseEntity.ok(
-                queryService.getMonthlyAnalytics(
+                queryService.getMonthlyAnalyticsSafe(
                         userId, YearMonth.parse(yearMonth)));
     }
 
     @GetMapping("/accounts/{accountId}/trends")
     public ResponseEntity<?> getSpendingTrends(
-            @PathVariable String accountId,
+            @PathVariable("accountId") String accountId,
             HttpServletRequest request) {
         String userId = extractUserId(request);
         return ResponseEntity.ok(
@@ -42,8 +42,8 @@ public class AnalyticsController {
 
     @GetMapping("/accounts/{accountId}/merchants")
     public ResponseEntity<?> getTopMerchants(
-            @PathVariable String accountId,
-            @RequestParam(defaultValue = "10") int limit,
+            @PathVariable("accountId") String accountId,
+            @RequestParam(value = "limit", defaultValue = "10") int limit,
             HttpServletRequest request) {
         String userId = extractUserId(request);
         return ResponseEntity.ok(

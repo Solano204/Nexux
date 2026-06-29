@@ -47,7 +47,7 @@
 
         <spring-boot.version>3.5.3</spring-boot.version>
         <spring-cloud.version>2025.0.1</spring-cloud.version>
-        <spring-ai.version>1.0.0-M6</spring-ai.version>
+        <spring-ai.version>1.0.0</spring-ai.version>
         <!-- ✅ FIXED: bumped from 1.18.36 to 1.18.38 for Java 25 support -->
         <lombok.version>1.18.38</lombok.version>
 

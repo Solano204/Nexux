@@ -12,7 +12,7 @@ spring:
       uris: http://localhost:9201
     redis:
       host: localhost
-      port: 6380
+      port: 6381
       password: ""
       timeout: 500ms
 
@@ -20,7 +20,7 @@ spring:
     bootstrap-servers: localhost:19092
     streams:
       application-id: nexus-analytics-streams-dev
-      state-dir: /tmp/kafka-streams-dev
+      state-dir: ${java.io.tmpdir}/kafka-streams-dev
       processing-guarantee: at_least_once
       num-stream-threads: 2
 
@@ -45,6 +45,12 @@ eureka:
     prefer-ip-address: true
 
 management:
+  endpoint:
+    health:
+      show-details: always
+  health:
+    elasticsearch:
+      enabled: false
   tracing:
     enabled: true
     sampling:
@@ -55,8 +61,10 @@ management:
 
 logging:
   level:
-    com.nexus.analytics: DEBUG
-    org.apache.kafka.streams: DEBUG
-    org.springframework.data.elasticsearch: DEBUG
-    org.springframework.ai: DEBUG
-    io.lettuce: DEBUG
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
+    org.hibernate.SQL: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN

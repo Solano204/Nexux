@@ -2,7 +2,12 @@ package com.nexus.risk.config.advisor;
 
 import com.nexus.risk.domain.exception.RiskScoringException;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.advisor.api.*;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.model.ChatResponse;
 import reactor.core.publisher.Flux;
 
@@ -17,7 +22,7 @@ import reactor.core.publisher.Flux;
  * Order 200 — runs after ContentSanitizerAdvisor (100).
  */
 @Slf4j
-public class ErrorWrappingAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
+public class ErrorWrappingAdvisor implements CallAdvisor, StreamAdvisor {
 
     @Override
     public String getName() { return "ErrorWrappingAdvisor"; }
@@ -25,13 +30,10 @@ public class ErrorWrappingAdvisor implements CallAroundAdvisor, StreamAroundAdvi
     @Override
     public int getOrder() { return 200; }
 
-    // ── CallAroundAdvisor ────────────────────────────────────
-
     @Override
-    public AdvisedResponse aroundCall(AdvisedRequest request,
-                                      CallAroundAdvisorChain chain) {
+    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
         try {
-            AdvisedResponse response = chain.nextAroundCall(request);
+            ChatClientResponse response = chain.nextCall(request);
             validateResponse(response);
             return response;
 
@@ -45,12 +47,9 @@ public class ErrorWrappingAdvisor implements CallAroundAdvisor, StreamAroundAdvi
         }
     }
 
-    // ── StreamAroundAdvisor ──────────────────────────────────
-
     @Override
-    public Flux<AdvisedResponse> aroundStream(AdvisedRequest request,
-                                              StreamAroundAdvisorChain chain) {
-        return chain.nextAroundStream(request)
+    public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
+        return chain.nextStream(request)
                 .doOnNext(this::validateResponse)
                 .onErrorMap(e -> {
                     if (e instanceof RiskScoringException) return e;
@@ -60,14 +59,12 @@ public class ErrorWrappingAdvisor implements CallAroundAdvisor, StreamAroundAdvi
                 });
     }
 
-    // ── Helpers ──────────────────────────────────────────────
-
-    private void validateResponse(AdvisedResponse response) {
+    private void validateResponse(ChatClientResponse response) {
         if (response == null) {
             throw new RiskScoringException(
                     "AI model returned a null response", null);
         }
-        ChatResponse cr = response.response();
+        ChatResponse cr = response.chatResponse();
         if (cr == null || cr.getResults() == null || cr.getResults().isEmpty()) {
             throw new RiskScoringException(
                     "AI model returned an empty response with no generations", null);
@@ -79,10 +76,10 @@ public class ErrorWrappingAdvisor implements CallAroundAdvisor, StreamAroundAdvi
         }
     }
 
-    private String buildMessage(AdvisedRequest request, Throwable cause) {
+    private String buildMessage(ChatClientRequest request, Throwable cause) {
         String hint = "";
         try {
-            var msgs = request.messages();
+            var msgs = request.prompt().getInstructions();
             if (msgs != null && !msgs.isEmpty()) {
                 String text = msgs.get(msgs.size() - 1).getText();
                 if (text != null) {

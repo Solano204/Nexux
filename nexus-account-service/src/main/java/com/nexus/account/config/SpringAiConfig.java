@@ -2,53 +2,31 @@ package com.nexus.account.config;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.client.advisor.RetrievalAugmentationAdvisor;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
-import org.springframework.ai.chat.client.advisor.VectorStoreChatMemoryAdvisor;
+import org.springframework.ai.chat.client.advisor.vectorstore.VectorStoreChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.InMemoryChatMemory;
+import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
 import org.springframework.ai.rag.generation.augmentation.ContextualQueryAugmenter;
 import org.springframework.ai.rag.preretrieval.query.expansion.MultiQueryExpander;
 import org.springframework.ai.rag.retrieval.search.VectorStoreDocumentRetriever;
+import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.ai.vectorstore.VectorStore; //  CLEAN & DECOUPLED
-/**
- * SpringAiConfig — Account Advisor RAG pipeline.
- *
- * Implements the Advanced RAG pipeline from Section 10:
- * - Multi-query expansion (4 paraphrases)
- * - pgvector similarity search (top 20, cosine distance)
- * - Contextual query augmentation (allows empty context)
- *
- * Hybrid memory from Section 7:
- * - In-memory window memory (last 5 exchanges per session)
- * - pgvector semantic memory (relevant past sessions)
- *
- * Spring AI version: 1.0.0-M6
- * Package mappings verified against official 1.0.0-M6 javadoc:
- * - RetrievalAugmentationAdvisor → org.springframework.ai.chat.client.advisor
- * - VectorStoreDocumentRetriever → org.springframework.ai.rag.retrieval.search
- * - MultiQueryExpander → org.springframework.ai.rag.preretrieval.query.expansion
- * - ContextualQueryAugmenter → org.springframework.ai.rag.generation.augmentation
- */
+
 @Configuration
 public class SpringAiConfig {
 
-    /**
-     * Account Advisor ChatClient — the AI financial advisor.
-     * Uses Advanced RAG over user's transaction embeddings.
-     */
     @Bean("accountAdvisorClient")
     public ChatClient accountAdvisorClient(
             OpenAiChatModel chatModel,
             PgVectorStore transactionVectorStore,
             ChatMemory chatMemory) {
 
-        // Section 10: Advanced RAG pipeline
         RetrievalAugmentationAdvisor ragAdvisor =
                 RetrievalAugmentationAdvisor.builder()
                         .queryExpander(
@@ -68,14 +46,12 @@ public class SpringAiConfig {
                                         .build())
                         .build();
 
-        // Section 7: Hybrid Memory
         MessageChatMemoryAdvisor windowMemory =
                 MessageChatMemoryAdvisor.builder(chatMemory)
                         .build();
 
         VectorStoreChatMemoryAdvisor semanticMemory =
-                (VectorStoreChatMemoryAdvisor) VectorStoreChatMemoryAdvisor.builder(transactionVectorStore)
-                        .chatMemoryRetrieveSize(5) // ✅ Fixed: Matches the decompiled class property
+                VectorStoreChatMemoryAdvisor.builder(transactionVectorStore)
                         .build();
 
         return ChatClient.builder(chatModel)
@@ -99,15 +75,18 @@ public class SpringAiConfig {
                         .build())
                 .defaultAdvisors(
                         new SimpleLoggerAdvisor(),
-                        windowMemory,        // Section 7: window memory
-                        semanticMemory,      // Section 7: pgvector semantic
-                        ragAdvisor           // Section 10: Advanced RAG
+                        windowMemory,
+                        semanticMemory,
+                        ragAdvisor
                 )
                 .build();
     }
 
     @Bean
     public ChatMemory accountAdvisorChatMemory() {
-        return new InMemoryChatMemory();
+        return MessageWindowChatMemory.builder()
+                .chatMemoryRepository(new InMemoryChatMemoryRepository())
+                .maxMessages(10)
+                .build();
     }
 }

@@ -12,6 +12,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
+import java.time.LocalDate;
 import java.util.UUID;
 
 /**
@@ -75,8 +76,10 @@ public class LedgerExplainerService {
 
         Timer.Sample sample = Timer.start();
 
+        LocalDate today = LocalDate.now();
         String enrichedMessage = userMessage +
-                "\n[Account ID for tool calls: " + accountId + "]";
+                "\n[Account ID for tool calls: " + accountId + "]" +
+                "\n[Today's date: " + today + " — use this year and month for 'this month' / 'last month' queries]";
 
         return explainerClient.prompt()
                 .user(enrichedMessage)

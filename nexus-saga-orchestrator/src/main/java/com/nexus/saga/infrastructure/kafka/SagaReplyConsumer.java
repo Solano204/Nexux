@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.saga.application.transfer.TransferSagaProcessor;
 import com.nexus.saga.application.onboarding.OnboardingFlowSagaProcessor;
+import com.nexus.saga.domain.exception.InvalidSagaStateException;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -60,8 +61,14 @@ public class SagaReplyConsumer {
                         transferProcessor.handleBalanceFinalized(reply);
                 case "BalanceReleasedReply" ->
                         transferProcessor.handleBalanceReleased(reply);
-                case "NotificationSentReply" ->
+                case "NotificationSentReply" -> {
+                    String originalCommand = reply.path("originalCommand").asText("");
+                    if ("SendWelcomeNotificationCommand".equals(originalCommand)) {
+                        onboardingProcessor.handleWelcomeNotificationSent(reply);
+                    } else {
                         transferProcessor.handleNotificationSent(reply);
+                    }
+                }
 
                 // ── Onboarding saga replies ────────────────
                 case "AccountsCreatedReply" ->
@@ -69,8 +76,6 @@ public class SagaReplyConsumer {
                 case "AccountCreationFailedReply" ->
                         onboardingProcessor
                                 .handleAccountCreationFailed(reply);
-                case "WelcomeNotificationSentReply" ->
-                        onboardingProcessor.handleWelcomeNotificationSent(reply);
                 case "KycApprovedReply" ->
                         onboardingProcessor.handleKycApproved(reply);
                 case "KycRejectedReply" ->
@@ -82,6 +87,9 @@ public class SagaReplyConsumer {
 
             ack.acknowledge();
 
+        } catch (InvalidSagaStateException e) {
+            log.warn("Skipping stale reply for terminal saga: {}", e.getMessage());
+            ack.acknowledge();
         } catch (Exception e) {
             log.error("Failed to process saga reply: {}",
                     e.getMessage(), e);

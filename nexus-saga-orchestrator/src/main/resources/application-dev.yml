@@ -1,4 +1,7 @@
 spring:
+  config:
+    import: ""
+
   cloud:
     config:
       enabled: false
@@ -19,9 +22,9 @@ spring:
         lock_timeout: 10000
 
   jpa:
+    show-sql: true
     hibernate:
       ddl-auto: validate
-    show-sql: true
     properties:
       hibernate:
         format_sql: true
@@ -34,9 +37,7 @@ spring:
   kafka:
     bootstrap-servers: localhost:19092
     consumer:
-      enable-auto-commit: false
-      isolation-level: read_committed
-      auto-offset-reset: earliest
+      group-id: saga-orchestrator-dev
 
   ai:
     openai:
@@ -45,9 +46,6 @@ spring:
         options:
           model: gpt-4o-mini
           temperature: 0.3
-
-server:
-  port: 8095
 
 eureka:
   client:
@@ -67,10 +65,14 @@ management:
     tracing:
       endpoint: http://localhost:9412/api/v2/spans
 
+
+
 logging:
   level:
-    com.nexus.saga: DEBUG
-    org.springframework.ai: DEBUG
-    org.hibernate.SQL: DEBUG
-    org.flywaydb: DEBUG
-    org.springframework.kafka: DEBUG
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
+    org.hibernate.SQL: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN

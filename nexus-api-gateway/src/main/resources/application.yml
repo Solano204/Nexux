@@ -47,9 +47,6 @@ spring:
         - AddResponseHeader=X-Frame-Options, DENY
         - AddResponseHeader=X-XSS-Protection, 1; mode=block
         - AddResponseHeader=Referrer-Policy, no-referrer
-        - RemoveRequestHeader=X-User-Id
-        - RemoveRequestHeader=X-User-Roles
-        - RemoveRequestHeader=X-Gateway-Internal
         - DedupeResponseHeader=Access-Control-Allow-Credentials, RETAIN_UNIQUE
         - DedupeResponseHeader=Access-Control-Allow-Origin, RETAIN_UNIQUE
 
@@ -137,6 +134,17 @@ spring:
               args:
                 name: ai-assistant-service
                 fallbackUri: forward:/fallback/ai-assistant
+
+        - id: nexus-identity-service-internal
+          uri: lb://nexus-identity-service
+          predicates:
+            - Path=/internal/v1/users/**,/internal/v1/health/**
+            - RemoteAddr=172.20.0.0/16
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: identity-service
+                fallbackUri: forward:/fallback/identity
 
         - id: nexus-fraud-service-internal
           uri: lb://nexus-fraud-service

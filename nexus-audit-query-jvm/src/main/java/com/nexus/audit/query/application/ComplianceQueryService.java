@@ -14,7 +14,7 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.RetrievalAugmentationAdvisor;
+import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
 import org.springframework.ai.rag.generation.augmentation.ContextualQueryAugmenter;
 import org.springframework.ai.rag.preretrieval.query.expansion.MultiQueryExpander;
 import org.springframework.ai.rag.retrieval.search.VectorStoreDocumentRetriever;
@@ -24,7 +24,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.*;
 import java.util.*;
-import java.util.concurrent.StructuredTaskScope;
 
 /**
  * Compliance Query Service — Section 10 Advanced RAG.
@@ -103,17 +102,9 @@ public class ComplianceQueryService {
                     auditorId, query.getTargetUserId(),
                     query.getStartDate(), query.getEndDate());
 
-            // ── Step 1: Parallel data gathering ───────────────────
-            // Java 25 JEP 505: StructuredTaskScope.open()
-            List<AuditEventSummary> filteredEvents;
-            try (var taskScope = StructuredTaskScope.open()) {
-
-                var eventsFuture = taskScope.fork(() ->
-                        executeElasticsearchQuery(query));
-
-                taskScope.join();
-                filteredEvents = eventsFuture.get();
-            }
+            // ── Step 1: Elasticsearch pre-filter ──────────────────
+            List<AuditEventSummary> filteredEvents =
+                    executeElasticsearchQuery(query);
 
             if (filteredEvents.isEmpty()) {
                 return ComplianceQueryResult.noResults(

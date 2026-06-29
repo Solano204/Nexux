@@ -24,80 +24,11 @@
         PostgreSQL: full profile history. Redis: cached scores.
     </description>
 
-    <properties>
-        <java.version>25</java.version>
-        <spring-boot.version>3.4.0</spring-boot.version>
-        <spring-cloud.version>2024.0.0</spring-cloud.version>
-        <!--
-            ✅ FIXED: Removed spring-ai.version=1.0.0 (GA) override.
-            Inherits 1.0.0-M6 from root POM.
-        -->
-        <flyway.version>10.4.1</flyway.version>
-        <elasticsearch.version>8.13.0</elasticsearch.version>
-        <testcontainers.version>1.19.3</testcontainers.version>
-    </properties>
-
-    <!--
-        ✅ FIXED: This module is not yet listed in the root <modules> block,
-        so when built standalone the root dependencyManagement is NOT inherited.
-        We keep a local <dependencyManagement> but import the correct BOMs
-        (spring-boot, spring-cloud, spring-ai at 1.0.0-M6, testcontainers).
-        Once you add this module to the root <modules>, this block becomes
-        redundant but harmless.
-    -->
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-dependencies</artifactId>
-                <version>${spring-boot.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework.cloud</groupId>
-                <artifactId>spring-cloud-dependencies</artifactId>
-                <version>${spring-cloud.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework.ai</groupId>
-                <artifactId>spring-ai-bom</artifactId>
-                <version>1.0.0-M6</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.testcontainers</groupId>
-                <artifactId>testcontainers-bom</artifactId>
-                <version>${testcontainers.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>io.hypersistence</groupId>
-                <artifactId>hypersistence-utils-hibernate-63</artifactId>
-                <version>3.8.3</version>
-            </dependency>
-            <dependency>
-                <groupId>io.github.resilience4j</groupId>
-                <artifactId>resilience4j-spring-boot3</artifactId>
-                <version>2.2.0</version>
-            </dependency>
-            <dependency>
-                <groupId>net.logstash.logback</groupId>
-                <artifactId>logstash-logback-encoder</artifactId>
-                <version>7.4</version>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
+    <!-- NO <properties> — versions come from parent BOM -->
+    <!-- NO <dependencyManagement> — parent owns it -->
 
     <dependencies>
-
-        <!-- ══════════════════════════════════════════════════
-             SPRING BOOT CORE
-             ══════════════════════════════════════════════════ -->
+        <!-- Spring Boot Core -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -115,9 +46,7 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             DATA — PostgreSQL + JPA (risk profiles + job tracking)
-             ══════════════════════════════════════════════════ -->
+        <!-- JPA & PostgreSQL -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
@@ -130,22 +59,17 @@
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
-            <version>${flyway.version}</version>
         </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-database-postgresql</artifactId>
-            <version>${flyway.version}</version>
         </dependency>
         <dependency>
             <groupId>io.hypersistence</groupId>
             <artifactId>hypersistence-utils-hibernate-63</artifactId>
-            <!-- ✅ version managed by local dependencyManagement (3.8.3) -->
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             REDIS — Cached risk scores + behavioral profiles
-             ══════════════════════════════════════════════════ -->
+        <!-- Redis — cached risk scores + behavioral profiles -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
@@ -155,18 +79,18 @@
             <artifactId>lettuce-core</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             ELASTICSEARCH — Transaction history + audit queries
-             ══════════════════════════════════════════════════ -->
+        <!--
+            Elasticsearch — direct Java client (risk-specific).
+            co.elastic.clients is NOT in the Spring BOM so version is kept here.
+            Uses 8.13.0 to match the nexus-elasticsearch container image.
+        -->
         <dependency>
             <groupId>co.elastic.clients</groupId>
             <artifactId>elasticsearch-java</artifactId>
-            <version>${elasticsearch.version}</version>
+            <version>8.13.0</version>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             SPRING CLOUD — Config + Eureka
-             ══════════════════════════════════════════════════ -->
+        <!-- Spring Cloud -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-config</artifactId>
@@ -175,46 +99,48 @@
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-bus</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-stream-binder-kafka</artifactId>
+        </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             KAFKA — user.behavior.aggregated consumer
-             ══════════════════════════════════════════════════ -->
+        <!-- Kafka — user.behavior.aggregated consumer -->
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             SPRING AI — Plan-then-Act agent (Section 11)
-             GPT-4o for complex reasoning, temperature=0.0
-             Version managed by spring-ai-bom (1.0.0-M6)
-             ══════════════════════════════════════════════════ -->
+        <!-- Spring AI — Plan-then-Act agent, GPT-4o -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-openai-spring-boot-starter</artifactId>
-            <!-- ✅ FIXED: no version here — resolved by spring-ai-bom -->
+            <artifactId>spring-ai-starter-model-openai</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             RESILIENCE4J — Rate limiter + retry for AI calls
-             ══════════════════════════════════════════════════ -->
+        <!-- Hypersistence Utils -->
+        <dependency>
+            <groupId>io.hypersistence</groupId>
+            <artifactId>hypersistence-utils-hibernate-63</artifactId>
+        </dependency>
+
+        <!-- Resilience4j — rate limiter + retry for AI calls. NOT in Spring BOM -->
         <dependency>
             <groupId>io.github.resilience4j</groupId>
             <artifactId>resilience4j-spring-boot3</artifactId>
+            <version>2.2.0</version>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             STATISTICS — Apache Commons Math for risk calcs
-             ══════════════════════════════════════════════════ -->
+        <!-- Apache Commons Math — risk score calculations. NOT in Spring BOM -->
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-math3</artifactId>
             <version>3.6.1</version>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             OBSERVABILITY
-             ══════════════════════════════════════════════════ -->
+        <!-- Observability -->
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
@@ -230,27 +156,34 @@
         <dependency>
             <groupId>net.logstash.logback</groupId>
             <artifactId>logstash-logback-encoder</artifactId>
+            <!-- NO hardcoded version — parent BOM manages it -->
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             UTILITIES
-             ══════════════════════════════════════════════════ -->
+        <!-- AspectJ — required by ObservedAspect (micrometer-observation) -->
         <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <optional>true</optional>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
         </dependency>
+
+        <!-- Utilities -->
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+        </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             TESTING
-             ══════════════════════════════════════════════════ -->
+        <!-- Test Dependencies -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -261,23 +194,38 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <!-- ✅ version managed by testcontainers-bom -->
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>postgresql</artifactId>
-            <!-- ✅ version managed by testcontainers-bom -->
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>localstack</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <!-- Spring Boot repackage — mirrors identity exactly, no version override -->
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
-                <version>${spring-boot.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
                 <configuration>
                     <mainClass>com.nexus.risk.RiskScoringApplication</mainClass>
                     <excludes>
@@ -292,13 +240,23 @@
                     </jvmArguments>
                 </configuration>
             </plugin>
+
+            <!-- Flyway plugin — mirrors identity -->
+            <plugin>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-maven-plugin</artifactId>
+            </plugin>
+
+            <!-- Compiler — mirrors identity exactly -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
                 <configuration>
                     <release>25</release>
                     <enablePreview>true</enablePreview>
+                    <compilerArgs>
+                        <arg>-parameters</arg>
+                    </compilerArgs>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>org.projectlombok</groupId>
@@ -308,36 +266,33 @@
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
+
+            <!-- JaCoCo — single declaration, mirrors identity (LINE + BRANCH) -->
             <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-dependency-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>copy-dependencies</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>copy-dependencies</goal>
-                        </goals>
-                        <configuration>
-                            <outputDirectory>${project.build.directory}/libs</outputDirectory>
-                            <includeScope>runtime</includeScope>
-                        </configuration>
-                    </execution>
-                </executions>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <configuration>
+                    <rules>
+                        <rule>
+                            <limits>
+                                <limit>
+                                    <counter>LINE</counter>
+                                    <value>COVEREDRATIO</value>
+                                    <minimum>0.85</minimum>
+                                </limit>
+                                <limit>
+                                    <counter>BRANCH</counter>
+                                    <value>COVEREDRATIO</value>
+                                    <minimum>0.80</minimum>
+                                </limit>
+                            </limits>
+                        </rule>
+                    </rules>
+                </configuration>
             </plugin>
         </plugins>
     </build>
 
-    <repositories>
-        <repository>
-            <id>central</id>
-            <url>https://repo.maven.apache.org/maven2</url>
-        </repository>
-        <repository>
-            <id>spring-milestones</id>
-            <name>Spring Milestones</name>
-            <url>https://repo.spring.io/milestone</url>
-            <snapshots><enabled>false</enabled></snapshots>
-        </repository>
-    </repositories>
+    <!-- NO <repositories> — parent or settings.xml handles Spring milestones -->
+
 </project>

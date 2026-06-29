@@ -6,32 +6,19 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.mongodb.gridfs.GridFsTemplate;
 import org.springframework.stereotype.Service;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 
 import java.io.ByteArrayInputStream;
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.HexFormat;
 
-/**
- * Document Storage Service — S3 retrieval + MongoDB GridFS persistence.
- *
- * Pipeline:
- * 1. Download document bytes from AWS S3 (kyc/{userId}/{verificationId}/...)
- * 2. Validate file size (10KB-10MB) and content type
- * 3. Store encrypted copy in MongoDB GridFS (AES-256, key from Secrets Manager)
- * 4. Return raw bytes for AI Vision processing
- *
- * GridFS stores encrypted binary for 7-year regulatory retention.
- * No plaintext document persists on disk or in memory longer than processing.
- *
- * In local Docker: S3 is simulated. Encryption uses Base64 placeholder.
- * Production: AWS SDK v2 async client + Secrets Manager key.
- */
 @Slf4j
 @Service
 public class DocumentStorageService {
 
+    private final S3Client s3Client;
     private final GridFsTemplate gridFsTemplate;
     private final ObservationRegistry observationRegistry;
 
@@ -41,32 +28,31 @@ public class DocumentStorageService {
     @Value("${nexus.kyc.encryption.enabled:false}")
     private boolean encryptionEnabled;
 
-    public DocumentStorageService(GridFsTemplate gridFsTemplate,
+    public DocumentStorageService(S3Client s3Client,
+                                  GridFsTemplate gridFsTemplate,
                                   ObservationRegistry observationRegistry) {
+        this.s3Client = s3Client;
         this.gridFsTemplate = gridFsTemplate;
         this.observationRegistry = observationRegistry;
     }
 
-    /**
-     * Download document from S3 for AI processing.
-     * Returns raw bytes (NOT encrypted).
-     */
     public byte[] downloadFromS3(String s3Path) {
         Observation obs = Observation.createNotStarted(
                 "kyc.s3.download", observationRegistry).start();
         try (Observation.Scope scope = obs.openScope()) {
-            // Production: S3AsyncClient.getObject(...)
-            log.info("S3 download (simulated): bucket={} path={}",
-                    s3Bucket, s3Path);
-            byte[] bytes = simulateS3Download(s3Path);
+            byte[] bytes = s3Client.getObjectAsBytes(
+                    GetObjectRequest.builder()
+                            .bucket(s3Bucket)
+                            .key(s3Path)
+                            .build()
+            ).asByteArray();
             obs.event(Observation.Event.of("s3.download.complete"));
             log.info("Document downloaded: path={} size={}KB",
                     s3Path, bytes.length / 1024);
             return bytes;
         } catch (Exception e) {
             obs.error(e);
-            throw new RuntimeException(
-                    "S3 download failed: " + s3Path, e);
+            throw new RuntimeException("S3 download failed: " + s3Path, e);
         } finally {
             obs.stop();
         }
@@ -130,14 +116,8 @@ public class DocumentStorageService {
     }
 
     private byte[] encrypt(byte[] data) {
-        // Production: AES-256-GCM with key from AWS Secrets Manager
-        // Cipher.getInstance("AES/GCM/NoPadding")
-        log.warn("Using simulated encryption — NOT for production");
+        // TODO: AES-256-GCM with key from AWS Secrets Manager
+        log.warn("Using placeholder encryption — NOT for production");
         return Base64.getEncoder().encode(data);
-    }
-
-    private byte[] simulateS3Download(String s3Path) {
-        return ("SIMULATED_DOCUMENT:" + s3Path)
-                .getBytes(StandardCharsets.UTF_8);
     }
 }

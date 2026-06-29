@@ -1,8 +1,8 @@
 spring:
   data:
-    mongodb:
-      uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_notification?authSource=admin
     redis:
       host: localhost
       port: 6380
       password: ""
+  kafka:
+    bootstrap-servers: localhost:19092

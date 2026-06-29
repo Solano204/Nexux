@@ -199,18 +199,22 @@ public class FraudAnalysisService {
                 case REVIEW -> "FraudReviewReply";
             };
 
-            java.util.Map<String, Object> reply = java.util.Map.of(
-                    "replyType", replyType,
-                    "sagaId", request.sagaId(),
-                    "transactionId", request.transactionId(),
-                    "sourceService", "nexus-fraud-service",
-                    "decision", decision.decision().name(),
-                    "fraudScore", decision.riskScore().toPlainString(),
-                    "reasons", decision.triggeringFactors().stream()
-                            .map(FraudDecision.TriggeringFactor::category)
-                            .toList(),
-                    "traceId", request.traceId()
-            );
+            java.util.List<String> reasonList = decision.triggeringFactors().stream()
+                    .map(FraudDecision.TriggeringFactor::category)
+                    .toList();
+
+            // riskScore + fraudScore: both keys for compatibility
+            // (saga orchestrator reads riskScore, transaction service reads fraudScore)
+            java.util.Map<String, Object> reply = new java.util.HashMap<>();
+            reply.put("replyType", replyType);
+            reply.put("sagaId", request.sagaId());
+            reply.put("transactionId", request.transactionId());
+            reply.put("sourceService", "nexus-fraud-service");
+            reply.put("decision", decision.decision().name());
+            reply.put("riskScore", decision.riskScore().toPlainString());
+            reply.put("fraudScore", decision.riskScore().toPlainString());
+            reply.put("reasons", reasonList);
+            reply.put("traceId", request.traceId());
 
             kafkaTemplate.send("saga.replies",
                     request.sagaId(),
@@ -219,9 +223,45 @@ public class FraudAnalysisService {
             log.info("SAGA reply sent: type={} txnId={} decision={}",
                     replyType, request.transactionId(), decision.decision());
 
+            // Write fraud.result outbox for ALL decisions — audit indexing picks this up
+            writeFraudResultEvent(decision, request, replyType, reasonList);
+
         } catch (Exception e) {
             log.error("Failed to publish SAGA reply: {}",
                     e.getMessage(), e);
+        }
+    }
+
+    private void writeFraudResultEvent(FraudDecision decision,
+                                       FraudAnalysisRequest request,
+                                       String replyType,
+                                       java.util.List<String> reasons) {
+        try {
+            com.fasterxml.jackson.databind.node.ObjectNode payload =
+                    objectMapper.createObjectNode()
+                            .put("transactionId", request.transactionId())
+                            .put("userId", request.userId())
+                            .put("sourceAccountId", request.sourceAccountId())
+                            .put("riskScore", decision.riskScore().toPlainString())
+                            .put("decision", decision.decision().name())
+                            .put("replyType", replyType)
+                            .put("recommendedAction", decision.recommendedAction().name())
+                            .put("reasoning", decision.reasoning())
+                            .put("traceId", request.traceId())
+                            .put("analyzedAt", Instant.now().toString());
+
+            var reasonsArray = objectMapper.createArrayNode();
+            reasons.forEach(reasonsArray::add);
+            payload.set("reasons", reasonsArray);
+
+            outboxRepository.save(OutboxEntry.of(
+                    "fraud.result",
+                    UUID.fromString(request.transactionId()),
+                    "FraudDecision",
+                    payload));
+
+        } catch (Exception e) {
+            log.warn("Failed to write fraud.result outbox event: {}", e.getMessage());
         }
     }
 
@@ -244,7 +284,7 @@ public class FraudAnalysisService {
             payload.set("triggeringFactors", reasons);
 
             outboxRepository.save(OutboxEntry.of(
-                    "FRAUD_ALERT",
+                    "fraud.flagged",
                     UUID.fromString(request.transactionId()),
                     "FraudHighSeverityAlert",
                     payload));

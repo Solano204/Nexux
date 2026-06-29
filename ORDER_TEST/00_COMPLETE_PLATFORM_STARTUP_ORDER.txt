@@ -1,0 +1,217 @@
+================================================================
+ NEXUS PLATFORM — COMPLETE STARTUP ORDER & WORKFLOW MAP
+================================================================
+ For isolated service testing: see the individual .txt files.
+ This file: run the ENTIRE platform and both workflows end-to-end.
+================================================================
+
+================================================================
+ GLOBAL STARTUP ORDER
+================================================================
+Start in this EXACT order. Wait for each group to be healthy
+before starting the next group.
+
+GROUP 0 — INFRASTRUCTURE (docker compose)
+──────────────────────────────────────────
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-postgres \
+    nexus-mongodb \
+    nexus-redis \
+    nexus-zookeeper \
+    nexus-kafka \
+    nexus-elasticsearch \
+    nexus-zipkin \
+    nexus-kafdrop
+
+  Wait for:
+    Kafka   → Kafdrop at http://localhost:9003 loads
+    Elastic → GET http://localhost:9202/_cluster/health → green/yellow
+    Postgres → port 5434 accepting connections
+
+GROUP 1 — PLATFORM CORE (must be first)
+──────────────────────────────────────────
+  1. nexus-config-service      :8888
+     Wait: GET http://localhost:8888/actuator/health → UP
+
+  2. nexus-discovery-service   :8761
+     Wait: GET http://localhost:8761/actuator/health → UP
+
+GROUP 2 — IDENTITY (no saga deps yet, but others depend on it)
+──────────────────────────────────────────────────────────────
+  3. nexus-identity-service    :8083
+     Wait: GET http://localhost:8083/actuator/health → UP
+
+GROUP 3 — ACCOUNT + AUDIT WRITER (parallel)
+──────────────────────────────────────────
+  4a. nexus-account-service    :8085
+  4b. audit-write-native       :8096  ← Quarkus, starts fast
+     Wait: GET http://localhost:8085/actuator/health → UP
+           GET http://localhost:8096/q/health        → UP
+
+GROUP 4 — TRANSACTION + FRAUD + LEDGER (parallel)
+──────────────────────────────────────────────────
+  5a. nexus-transaction-service  :8086
+  5b. nexus-fraud-service        :8087
+  5c. nexus-ledger-service       :8088
+     Wait: all three /actuator/health → UP
+
+GROUP 5 — NOTIFICATIONS + AI SERVICES (parallel)
+──────────────────────────────────────────────────
+  6a. nexus-notification-service  :8089
+  6b. nexus-ai-assistant-service  :8090
+  6c. nexus-ai-kyc-service        :8091
+     Wait: all three /actuator/health → UP
+
+GROUP 6 — ANALYTICS + RISK (parallel)
+──────────────────────────────────────────────────
+  7a. nexus-analytics-service    :8092
+  7b. nexus-risk-scoring-service :8094
+  7c. nexus-audit-query-jvm      :8097
+     Wait: all three /actuator/health → UP
+
+GROUP 7 — ORCHESTRATOR (must come after all participants)
+──────────────────────────────────────────────────────────
+  8. nexus-saga-orchestrator     :8095
+     Wait: GET http://localhost:8095/actuator/health → UP
+
+GROUP 8 — GATEWAY (last — must find all services in Eureka)
+──────────────────────────────────────────────────────────
+  9. nexus-api-gateway           :8080
+     Wait: GET http://localhost:8080/actuator/health → UP
+     Check routes: GET http://localhost:8080/actuator/gateway/routes
+
+================================================================
+ KAFKA TOPIC MAP (complete platform)
+================================================================
+TOPIC                        PRODUCER              CONSUMERS
+─────────────────────────────────────────────────────────────────────
+users.registered             identity-service      saga-orchestrator
+                                                   notification-service
+                                                   audit-write-native
+accounts.created             account-service       notification-service
+                                                   audit-write-native
+transactions.initiated       transaction-service   saga-orchestrator
+                                                   audit-write-native
+transactions.completed       transaction-service   notification-service
+                                                   analytics-service
+                                                   audit-write-native
+transactions.failed          transaction-service   notification-service
+                                                   analytics-service
+                                                   audit-write-native
+saga.commands                saga-orchestrator     account-service
+                                                   fraud-service
+                                                   ledger-service
+                                                   notification-service
+                                                   identity-service
+saga.replies                 account-service       saga-orchestrator
+                             fraud-service         transaction-service
+                             ledger-service
+                             notification-service
+                             kyc-service
+identity.verified            kyc-service           saga-orchestrator
+                                                   notification-service
+                                                   audit-write-native
+identity.rejected            kyc-service           saga-orchestrator
+                                                   notification-service
+                                                   audit-write-native
+fraud.result                 fraud-service         transaction-service
+                                                   audit-write-native
+fraud.flagged                fraud-service         notification-service
+                                                   audit-write-native
+ledger.posted                ledger-service(CDC)   audit-write-native
+ledger.reversed              ledger-service        audit-write-native
+account.frozen               account-service       audit-write-native
+risk.profile.updated         risk-scoring-service  fraud-service
+                                                   audit-write-native
+user.behavior.aggregated     analytics-service     risk-scoring-service
+analytics.anomalies.detected analytics-service     audit-write-native
+                                                   notification-service
+kyc.review.required          kyc-service           (manual review)
+ai.query.logged              ai-assistant-service  audit-write-native
+saga.completed               saga-orchestrator     audit-write-native
+
+================================================================
+ WORKFLOW 1: OnboardingFlowSaga
+================================================================
+TRIGGER: POST /api/v1/auth/register
+
+  [identity]       → users.registered
+  [saga-orch]      ← users.registered → starts saga
+  [kyc waits]      (user must call POST /kyc/initiate manually)
+  [identity/kyc]   → (S3 upload → KYC pipeline) → identity.verified
+  [saga-orch]      ← identity.verified → KycApprovedReply
+  [saga-orch]      → saga.commands: CreateAccountsCommand
+  [account]        ← CreateAccountsCommand → creates checking+savings
+  [account]        → saga.replies: AccountsCreatedReply
+  [account]        → accounts.created
+  [saga-orch]      → saga.commands: SendWelcomeNotificationCommand
+  [notification]   ← SendWelcomeNotificationCommand → sends welcome
+  [notification]   → saga.replies: WelcomeNotificationSentReply
+  [saga-orch]      → saga.completed ✅
+
+  FAILURE PATH (KYC rejected):
+  [kyc]            → identity.rejected → KycRejectedReply
+  [saga-orch]      → saga.commands: CancelUserRegistrationCommand
+  [identity]       ← CancelUserRegistrationCommand → cancels user
+
+================================================================
+ WORKFLOW 2: TransferSaga
+================================================================
+TRIGGER: POST /api/v1/transactions (requires funded accounts)
+
+  [transaction]    → transactions.initiated
+  [saga-orch]      ← transactions.initiated → starts TransferSaga
+  [saga-orch]      → saga.commands: ReserveBalanceCommand
+  [account]        ← ReserveBalanceCommand → reserves funds
+  [account]        → saga.replies: BalanceReservedReply
+  [saga-orch]      → saga.commands: CheckFraudCommand
+  [fraud]          ← CheckFraudCommand → AI fraud analysis (OpenAI)
+  [fraud]          → saga.replies: FraudClearedReply
+  [saga-orch]      → saga.commands: PostLedgerCommand
+  [ledger]         ← PostLedgerCommand → double-entry journal
+  [ledger]         → saga.replies: LedgerPostedReply
+  [ledger]         → ledger.posted (via Debezium CDC)
+  [saga-orch]      → saga.commands: FinalizeTransferCommand
+  [account]        ← FinalizeTransferCommand → commits balance change
+  [account]        → saga.replies: BalanceFinalizedReply
+  [transaction]    → transactions.completed
+  [saga-orch]      → saga.commands: SendTransactionNotificationCommand
+  [notification]   → sends to sender + receiver
+  [notification]   → saga.replies: NotificationSentReply
+  [saga-orch]      → saga.completed ✅
+
+  DOWNSTREAM (parallel to saga completion):
+  [audit]          ← transactions.completed, ledger.posted, fraud.result
+  [analytics]      ← transactions.completed → Kafka Streams aggregation
+  [risk-scoring]   ← user.behavior.aggregated (from analytics)
+
+  FAILURE PATH (fraud rejected):
+  [fraud]          → saga.replies: FraudRejectedReply
+  [fraud]          → fraud.flagged (→ notification sends FRAUD_ALERT)
+  [saga-orch]      → saga.commands: ReleaseBalanceCommand
+  [account]        ← releases the hold → BalanceReleasedReply
+  [transaction]    → transactions.failed
+
+================================================================
+ MONITORING DURING TESTING
+================================================================
+  Kafdrop          http://localhost:9003   — watch all Kafka topics live
+  Eureka           http://localhost:8761   — see registered services
+  Zipkin           http://localhost:9413   — trace requests across services
+  Grafana          http://localhost:3002   — metrics (admin/admin or .env password)
+  Elasticsearch    http://localhost:9202   — query audit data directly
+
+================================================================
+ POSTMAN COLLECTIONS
+================================================================
+  DOCUMENTATION-POSTMAN/ folder contains one collection per service.
+  Set environment variable:  {{baseUrl}} = http://localhost:8080
+  Import all collections, create environment, test in order above.
+
+================================================================
+ EXTERNAL SERVICES REQUIRED
+================================================================
+  AWS S3          — KYC document storage (nexus-identity + nexus-ai-kyc)
+  AWS SQS         — KYC pipeline trigger (nexus-identity → Lambda → kyc)
+  OpenAI API      — fraud-service, analytics, notification, ai-assistant, kyc
+  (Optional) Ollama — ai-assistant local model fallback

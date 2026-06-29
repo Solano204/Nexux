@@ -3,6 +3,10 @@ spring:
     config:
       enabled: false
 
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
+
   datasource:
     url: jdbc:postgresql://localhost:5433/nexus_accounts
     username: nexus
@@ -11,6 +15,7 @@ spring:
       maximum-pool-size: 5
       minimum-idle: 1
       pool-name: nexus-account-dev-pool
+
 
   jpa:
     show-sql: true
@@ -23,7 +28,7 @@ spring:
 
   data:
     mongodb:
-      uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_accounts?authSource=admin
+      uri: mongodb://localhost:27018/nexus_accounts
     redis:
       host: localhost
       port: 6380
@@ -49,8 +54,10 @@ management:
 
 logging:
   level:
-    com.nexus.account: DEBUG
-    org.hibernate.SQL: DEBUG
-    org.flywaydb: DEBUG
-    org.springframework.data.mongodb: DEBUG
-    org.springframework.kafka: DEBUG
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
+    org.hibernate.SQL: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN

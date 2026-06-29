@@ -10,9 +10,9 @@ import com.nexus.audit.write.normalizer.AuditEventNormalizer;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.reactive.messaging.kafka.KafkaRecord;
+import io.smallrye.reactive.messaging.kafka.api.IncomingKafkaRecordMetadata;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.eclipse.microprofile.reactive.messaging.*;
 import org.jboss.logging.Logger;
 
@@ -162,20 +162,18 @@ public class AuditEventConsumer {
     // CORE PROCESSING
     // ══════════════════════════════════════════════════════════
 
-    /**
-     * Extracts the Kafka partition offset from the underlying ConsumerRecord.
-     * KafkaRecord does not expose getOffset() directly — metadata must be
-     * retrieved via getMetadata(ConsumerRecord.class).
-     */
+    @SuppressWarnings("unchecked")
     private long extractOffset(KafkaRecord<String, String> record) {
-        return record.getMetadata(ConsumerRecord.class)
-                .map(ConsumerRecord::offset)
+        return record.getMetadata(IncomingKafkaRecordMetadata.class)
+                .map(IncomingKafkaRecordMetadata::getOffset)
                 .orElse(-1L);
     }
 
     /**
      * Base processing: normalize + write to Elasticsearch.
      * Idempotent via op_type=create (409 = already exists = OK).
+     * ack() is called in both success and failure paths so the consumer
+     * never stalls waiting for an acknowledgement that never arrives.
      */
     private Uni<Void> processEvent(KafkaRecord<String, String> record,
                                    String topic) {
@@ -183,16 +181,20 @@ public class AuditEventConsumer {
                 .item(() -> parseAndNormalize(
                         record.getPayload(), topic, extractOffset(record)))
                 .flatMap(this::writeToElasticsearch)
-                .onItem().invoke(() -> record.ack())
-                .onFailure().invoke(t ->
+                .onItemOrFailure().invoke((v, t) -> {
+                    if (t != null) {
                         log.errorf("Failed to audit event from %s: %s",
-                                topic, t.getMessage()))
+                                topic, t.getMessage());
+                    }
+                    record.ack();
+                })
                 .onFailure().recoverWithNull();
     }
 
     /**
      * Enhanced processing: normalize + write + compliance rules.
      * Used for security and fraud events.
+     * ack() is always called regardless of processing outcome.
      */
     private Uni<Void> processEventWithRules(
             KafkaRecord<String, String> record, String topic) {
@@ -202,10 +204,13 @@ public class AuditEventConsumer {
                 .flatMap(event ->
                         writeToElasticsearch(event)
                                 .flatMap(v -> ruleEvaluator.evaluate(event)))
-                .onItem().invoke(() -> record.ack())
-                .onFailure().invoke(t ->
+                .onItemOrFailure().invoke((v, t) -> {
+                    if (t != null) {
                         log.errorf("Failed to audit+evaluate from %s: %s",
-                                topic, t.getMessage()))
+                                topic, t.getMessage());
+                    }
+                    record.ack();
+                })
                 .onFailure().recoverWithNull();
     }
 
@@ -244,8 +249,6 @@ public class AuditEventConsumer {
                 idx.index(indexName)
                         .id(event.eventId())
                         .opType(OpType.Create)
-                        .routing(event.userId() != null
-                                ? event.userId() : "global")
                         .document(event));
 
         return Uni.createFrom()

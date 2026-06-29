@@ -1,3 +1,27 @@
 .idea/
 target/
 *.jar
+
+
+# Terraform state — never commit this
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Variable files that may contain secrets
+terraform.tfvars
+terraform.tfvars.dev
+*.auto.tfvars
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Override files (local dev overrides)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+

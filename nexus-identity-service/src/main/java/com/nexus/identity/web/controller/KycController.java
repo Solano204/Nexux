@@ -39,6 +39,11 @@ public class KycController {
     public ResponseEntity<KycInitiationResponse> initiateKyc(
             @RequestParam("document") MultipartFile document,
             @RequestParam("documentType") String documentType,
+            @RequestParam("fullName") String fullName,
+            @RequestParam("dateOfBirth") String dateOfBirth,
+            @RequestParam("documentNumber") String documentNumber,
+            @RequestParam(value = "nationality", required = false) String nationality,
+            @RequestParam(value = "language", required = false) String language,
             HttpServletRequest request) throws Exception {
 
         UUID userId = extractUserId(request);
@@ -46,7 +51,9 @@ public class KycController {
         String ipAddress = getClientIp(request);
 
         KycInitiationResponse response = commandService.initiateKyc(
-                userId, document, documentType, ipAddress, traceId);
+                userId, document, documentType,
+                fullName, dateOfBirth, documentNumber, nationality, language,
+                ipAddress, traceId);
 
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
     }

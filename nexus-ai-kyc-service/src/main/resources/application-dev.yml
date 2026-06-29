@@ -24,11 +24,11 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
+    repair-on-migrate: true
 
   data:
     mongodb:
-      uri: mongodb://nexus:nexus_dev_password@localhost:27018/nexus_kyc?authSource=admin
-      auto-index-creation: true
+      uri: mongodb://localhost:27018/nexus_kyc
 
   kafka:
     bootstrap-servers: localhost:19092
@@ -77,20 +77,12 @@ management:
     tracing:
       endpoint: http://localhost:9412/api/v2/spans
 
-cloud:
-  aws:
-    region:
-      static: us-east-1
-    credentials:
-      access-key: test
-      secret-key: test
-    s3:
-      endpoint: http://localhost:4566
-
 logging:
   level:
-    com.nexus.kyc: DEBUG
-    org.springframework.ai: DEBUG
-    org.hibernate.SQL: DEBUG
-    org.flywaydb: DEBUG
-    org.springframework.data.mongodb: DEBUG
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
+    org.hibernate.SQL: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN

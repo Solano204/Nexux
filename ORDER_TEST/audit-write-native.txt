@@ -1,0 +1,136 @@
+================================================================
+ NEXUS — audit-write-native — Complete Workflow Test Order
+================================================================
+Port: 8096 | Stack: QUARKUS NATIVE | DB: Elasticsearch (nexus-audit-*)
+================================================================
+
+IMPORTANT: This is the ONLY Quarkus service in the platform.
+Health check: GET http://localhost:8096/q/health  (NOT /actuator/health)
+Build:        Quarkus native binary — Dockerfile under src/main/docker/
+
+WHAT THIS SERVICE DOES:
+  High-throughput audit write service. Consumes events from ALL critical
+  Kafka topics and writes them to Elasticsearch (nexus-audit-YYYY-MM index).
+  Runs compliance rule evaluation on security events (fraud.result, fraud.flagged,
+  account.frozen, analytics.anomalies).
+  Idempotent writes via Elasticsearch opType=CREATE (HTTP 409 = safe replay).
+  Uses Reactive Messaging (SmallRye/Quarkus) for non-blocking processing.
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-elasticsearch nexus-kafka nexus-zookeeper
+
+  Health checks:
+    Elasticsearch :9202   — audit-write-native writes here
+    Kafka         :9003   — Kafdrop (verify all topics exist)
+
+  INDEX PATTERN: nexus-audit-YYYY-MM (e.g. nexus-audit-2026-06)
+  Query them: GET http://localhost:9202/nexus-audit-*/_search
+
+================================================================
+ STEP 2 — PLATFORM CORE
+================================================================
+  NOTE: audit-write-native does NOT use Spring Cloud Config or Eureka.
+  It is Quarkus — configure via:
+    audit-write-native/src/main/resources/application.properties
+    Environment variables: KAFKA_BOOTSTRAP_SERVERS, ELASTICSEARCH_HOSTS
+
+  You do NOT need config-service or discovery-service for this service.
+  Start it independently after Kafka + Elasticsearch are up.
+
+================================================================
+ STEP 3 — WHAT PRODUCES EVENTS THAT THIS SERVICE AUDITS
+================================================================
+  audit-write-native passively consumes ALL platform events.
+  To fill the audit trail, you need services that produce events:
+
+  FOR FINANCIAL AUDIT:
+  ├── nexus-transaction-service :8086  -> transactions.initiated/completed/failed
+  ├── nexus-ledger-service      :8088  -> ledger.posted, ledger.reversed
+  └── nexus-account-service     :8085  -> accounts.created, account.frozen
+
+  FOR SECURITY AUDIT:
+  ├── nexus-fraud-service       :8087  -> fraud.result, fraud.flagged
+  └── nexus-account-service     :8085  -> account.frozen
+
+  FOR IDENTITY/COMPLIANCE AUDIT:
+  ├── nexus-identity-service    :8083  -> users.registered
+  └── nexus-ai-kyc-service      :8091  -> identity.verified, identity.rejected
+
+  FOR SAGA AUDIT:
+  └── nexus-saga-orchestrator   :8095  -> saga.completed
+
+  FOR AI AUDIT:
+  └── nexus-ai-assistant-service :8090 -> ai.query.logged
+
+  FOR ANOMALY COMPLIANCE:
+  └── nexus-analytics-service   :8092  -> analytics.anomalies.detected
+
+================================================================
+ KAFKA TOPICS THIS SERVICE CONSUMES (via Quarkus @Incoming channels)
+================================================================
+  transactions-completed      <- transactions.completed
+  transactions-failed         <- transactions.failed
+  transactions-initiated      <- transactions.initiated
+  ledger-posted               <- ledger.posted
+  ledger-reversed             <- ledger.reversed
+  fraud-result                <- fraud.result        (+ compliance rules)
+  fraud-flagged               <- fraud.flagged       (+ compliance rules)
+  account-frozen              <- account.frozen      (+ compliance rules)
+  users-registered            <- users.registered
+  identity-verified           <- identity.verified
+  identity-rejected           <- identity.rejected
+  accounts-created            <- accounts.created
+  saga-completed              <- saga.completed
+  ai-query-logged             <- ai.query.logged
+  analytics-anomalies         <- analytics.anomalies.detected (+ compliance rules)
+
+PRODUCES: nothing to Kafka — writes only to Elasticsearch.
+
+================================================================
+ FULL WORKFLOW — COMPLETE AUDIT TRAIL FOR ONE TRANSFER
+================================================================
+  After a full TransferSaga completes, these events land in Elasticsearch:
+
+  1. transactions.initiated  -> audit record: "transfer initiated"
+  2. fraud.result            -> audit record: "fraud check: CLEARED, score=0.1"
+  3. ledger.posted           -> audit record: "double-entry posted"
+  4. transactions.completed  -> audit record: "transfer completed"
+  5. saga.completed          -> audit record: "TransferSaga done"
+
+  After OnboardingFlowSaga:
+  1. users.registered        -> audit record: "user registration"
+  2. accounts.created        -> audit record: "accounts opened"
+  3. identity.verified       -> audit record: "KYC approved"
+  4. saga.completed          -> audit record: "onboarding complete"
+
+================================================================
+ HOW TO TEST audit-write-native
+================================================================
+  1. Start elasticsearch + kafka
+  2. Start audit-write-native:
+     java -jar audit-write-native/target/audit-write-native-runner   (JVM mode)
+     OR the native binary (Docker recommended)
+
+  3. Trigger any event on any platform service
+  4. Query Elasticsearch:
+     GET http://localhost:9202/nexus-audit-2026-06/_search
+     GET http://localhost:9202/nexus-audit-*/_count
+
+  5. Health check:
+     GET http://localhost:8096/q/health       (Quarkus health)
+     GET http://localhost:8096/q/metrics      (Quarkus metrics)
+
+================================================================
+ PAIR WITH nexus-audit-query-jvm
+================================================================
+  audit-write-native WRITES to Elasticsearch.
+  nexus-audit-query-jvm READS from Elasticsearch.
+  Always run both together for the complete audit experience.
+
+  Query examples via audit-query-jvm :8097:
+    GET /api/v1/audit/events?userId={id}&limit=50
+    GET /api/v1/audit/events?eventType=transactions.completed
+    GET /api/v1/audit/events?from=2026-06-01&to=2026-06-30

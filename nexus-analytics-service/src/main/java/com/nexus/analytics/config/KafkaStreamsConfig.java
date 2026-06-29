@@ -1,6 +1,8 @@
 package com.nexus.analytics.config;
 
+import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.errors.LogAndContinueExceptionHandler;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -40,6 +42,12 @@ public class KafkaStreamsConfig {
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG,
                 org.apache.kafka.common.serialization.Serdes.StringSerde.class);
         props.put(StreamsConfig.REPLICATION_FACTOR_CONFIG, 1);
+        props.put(StreamsConfig.DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG,
+                LogAndContinueExceptionHandler.class);
         return new KafkaStreamsConfiguration(props);
     }
+
+
+
+
 }

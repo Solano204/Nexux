@@ -3,9 +3,8 @@ spring:
     url: jdbc:postgresql://localhost:5433/nexus_transactions
     username: nexus
     password: nexus_dev_password
-  data:
-    elasticsearch:
-      uris: http://localhost:9201
+  elasticsearch:
+    uris: http://localhost:9201
   kafka:
     streams:
       state-dir: /tmp/kafka-streams/transaction

@@ -3,3 +3,5 @@ spring:
     url: jdbc:postgresql://localhost:5433/nexus_saga
     username: nexus
     password: nexus_dev_password
+  kafka:
+    bootstrap-servers: localhost:19092

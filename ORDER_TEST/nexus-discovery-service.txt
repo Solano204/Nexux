@@ -1,0 +1,77 @@
+================================================================
+ NEXUS — nexus-discovery-service — Complete Workflow Test Order
+================================================================
+Port: 8761 | Stack: Spring Boot (Netflix Eureka Server)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  Service registry. All Spring Boot microservices register here on startup
+  and heartbeat every 30 seconds to stay registered.
+  The API Gateway uses it to discover where to route requests.
+  Services call each other by name (e.g. "nexus-account-service") instead
+  of hardcoded IPs.
+
+  THIS IS THE SECOND SERVICE YOU MUST ALWAYS START.
+  (After config-service, before everything else.)
+
+================================================================
+ STEP 1 — DEPENDENCIES (just config-service)
+================================================================
+  1. nexus-config-service :8888 must be running first
+     (discovery-service pulls its config from there)
+
+================================================================
+ STEP 2 — START ORDER
+================================================================
+  Start in this sequence:
+    1. nexus-config-service   :8888  (no dependencies)
+    2. nexus-discovery-service :8761  (depends on config-service)
+    3. Everything else         (depends on both)
+
+  Health check:
+    GET http://localhost:8761/actuator/health -> {"status":"UP"}
+    Eureka UI: http://localhost:8761          -> browser dashboard
+
+================================================================
+ HOW TO VERIFY DISCOVERY IS WORKING
+================================================================
+  Open: http://localhost:8761
+  -> You should see all registered services listed with their instance IDs
+
+  What you expect to see registered (after all services start):
+    NEXUS-IDENTITY-SERVICE     :8083
+    NEXUS-ACCOUNT-SERVICE      :8085
+    NEXUS-TRANSACTION-SERVICE  :8086
+    NEXUS-FRAUD-SERVICE        :8087
+    NEXUS-LEDGER-SERVICE       :8088
+    NEXUS-NOTIFICATION-SERVICE :8089
+    NEXUS-AI-ASSISTANT-SERVICE :8090
+    NEXUS-AI-KYC-SERVICE       :8091
+    NEXUS-ANALYTICS-SERVICE    :8092
+    NEXUS-RISK-SCORING-SERVICE :8094
+    NEXUS-SAGA-ORCHESTRATOR    :8095
+    NEXUS-AUDIT-QUERY-JVM      :8097
+    NEXUS-API-GATEWAY          :8080
+
+  NOTE: audit-write-native (Quarkus :8096) does NOT register in Eureka.
+        It is standalone and routed directly.
+
+================================================================
+ WHAT HAPPENS IF DISCOVERY IS DOWN
+================================================================
+  - API gateway cannot route requests (503 on all endpoints)
+  - Services cannot discover each other for internal REST calls
+  - Sagas still work (they use Kafka, not REST between services)
+  - Services with fail-fast: false will start anyway but log warnings
+
+================================================================
+ NO WORKFLOW DEPENDENCIES
+================================================================
+  discovery-service does not participate in any business workflow.
+  It has no Kafka consumers or producers.
+  It does not interact with any saga.
+  It is pure infrastructure — start it once and forget it.
+
+  Eureka self-preservation mode activates if too many services
+  de-register suddenly (network partition protection).
+  This is NORMAL behavior — not a bug.

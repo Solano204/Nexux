@@ -66,6 +66,13 @@ public class SpringAiConfig {
               0.50 = < 3 months or data gaps
               0.30 = < 1 month or critical failures
 
+            regulatoryClassification MUST be exactly one of:
+              LOW_RISK    → riskTier VERY_LOW or LOW
+              MEDIUM_RISK → riskTier MEDIUM
+              HIGH_RISK   → riskTier HIGH
+              CRITICAL    → riskTier VERY_HIGH
+            No other value is accepted.
+
             Return ONLY valid JSON matching RiskProfile schema.
             Be deterministic: same data → same score.
             """;

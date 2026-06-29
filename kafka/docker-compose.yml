@@ -99,6 +99,8 @@ services:
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic users.registered            --partitions 3 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.verified           --partitions 3 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.rejected           --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.events             --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.kyc                --partitions 3 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.kyc.initiate       --partitions 3 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.kyc.initiations    --partitions 3 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.kyc.result         --partitions 3 --replication-factor 1
@@ -112,7 +114,7 @@ services:
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic tool.transfer.initiated     --partitions 3 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic tool.transfer.unauthorized  --partitions 3 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic springCloudBus             --partitions 1 --replication-factor 1
-        echo '✅ All 30 topics created!'
+        echo '✅ All 32 topics created!'
 
   # ── Kafka UI ─────────────────────────────────────────────────
   nexus-kafka-ui:
@@ -165,6 +167,14 @@ services:
     restart: unless-stopped
     ports:
       - "5433:5432"
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "max_wal_senders=10"
     environment:
       POSTGRES_USER: nexus
       POSTGRES_PASSWORD: nexus_dev_password
@@ -255,3 +265,48 @@ services:
     depends_on:
       nexus-prometheus:
         condition: service_healthy
+
+  # ── Debezium Kafka Connect ────────────────────────────────────
+  # Reads PostgreSQL WAL and publishes outbox events to Kafka.
+  # REST API: http://localhost:8083
+  nexus-kafka-connect:
+    image: debezium/connect:2.6
+    container_name: nexus-kafka-connect
+    restart: unless-stopped
+    depends_on:
+      nexus-kafka:
+        condition: service_healthy
+      nexus-postgres:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVERS: nexus-kafka:9092
+      GROUP_ID: nexus-debezium-connect
+      CONFIG_STORAGE_TOPIC: nexus.connect.configs
+      OFFSET_STORAGE_TOPIC: nexus.connect.offsets
+      STATUS_STORAGE_TOPIC: nexus.connect.status
+      KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  # ── Debezium Connector Registration ──────────────────────────
+  # Runs once on startup, registers the 6 outbox connectors.
+  # 409 = already registered (safe, idempotent).
+  nexus-debezium-init:
+    image: curlimages/curl:8.6.0
+    container_name: nexus-debezium-init
+    depends_on:
+      nexus-kafka-connect:
+        condition: service_healthy
+    environment:
+      POSTGRES_PASSWORD: nexus_dev_password
+    volumes:
+      - ../debezium:/scripts:ro
+    entrypoint: ["/bin/sh", "/scripts/register.sh"]
+    restart: "no"

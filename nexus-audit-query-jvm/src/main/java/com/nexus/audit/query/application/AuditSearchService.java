@@ -36,10 +36,9 @@ public class AuditSearchService {
         try {
             SearchRequest request = SearchRequest.of(s -> {
                 s.index("nexus-audit-*")
-                        .routing(userId)
                         .query(q -> q.bool(b -> {
-                            b.must(m -> m.term(t ->
-                                    t.field("userId").value(userId)));
+                            b.must(m -> m.match(t ->
+                                    t.field("userId").query(userId)));
                             if (startDate != null) {
                                 b.must(m -> m.range(r ->
                                         r.field("eventTimestamp")
@@ -54,7 +53,9 @@ public class AuditSearchService {
                         }))
                         .sort(so -> so.field(f ->
                                 f.field("eventTimestamp")
-                                        .order(SortOrder.Desc)))
+                                        .order(SortOrder.Desc)
+                                        .unmappedType(
+                                            co.elastic.clients.elasticsearch._types.mapping.FieldType.Date)))
                         .from(page * size)
                         .size(size);
                 return s;
@@ -94,9 +95,9 @@ public class AuditSearchService {
             // First find the transaction event to get traceId
             SearchRequest txRequest = SearchRequest.of(s -> s
                     .index("nexus-audit-*")
-                    .query(q -> q.term(t ->
+                    .query(q -> q.match(t ->
                             t.field("resourceId")
-                                    .value(transactionId)))
+                                    .query(transactionId)))
                     .size(1));
 
             SearchResponse<Map> txResponse =
@@ -119,11 +120,13 @@ public class AuditSearchService {
             // Find all events with this traceId
             SearchRequest traceRequest = SearchRequest.of(s -> s
                     .index("nexus-audit-*")
-                    .query(q -> q.term(t ->
-                            t.field("traceId").value(traceId)))
+                    .query(q -> q.match(t ->
+                            t.field("traceId").query(traceId)))
                     .sort(so -> so.field(f ->
                             f.field("eventTimestamp")
-                                    .order(SortOrder.Asc)))
+                                    .order(SortOrder.Asc)
+                                    .unmappedType(
+                                        co.elastic.clients.elasticsearch._types.mapping.FieldType.Date)))
                     .size(100));
 
             SearchResponse<Map> traceResponse =

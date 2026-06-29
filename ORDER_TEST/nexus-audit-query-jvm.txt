@@ -1,0 +1,113 @@
+================================================================
+ NEXUS — nexus-audit-query-jvm — Complete Workflow Test Order
+================================================================
+Port: 8097 | Stack: Spring Boot | DB: Elasticsearch (nexus-audit-*)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  Read-only query layer over the Elasticsearch audit index.
+  Provides REST endpoints to search, filter, and export audit events.
+  ALWAYS used together with audit-write-native (which writes the data).
+  No Kafka consumption — purely query-side.
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-elasticsearch nexus-kafka nexus-zookeeper
+
+  CRITICAL: Elasticsearch must have data in it.
+  If nexus-audit-* indices are empty, all queries return empty.
+  You MUST run audit-write-native first and trigger platform events
+  to populate the index.
+
+  Check Elasticsearch:
+    GET http://localhost:9202/nexus-audit-*/_count
+    -> If count = 0, no data written yet.
+
+================================================================
+ STEP 2 — PLATFORM CORE
+================================================================
+  1. nexus-config-service   :8888
+  2. nexus-discovery-service :8761
+
+================================================================
+ STEP 3 — FULL AUDIT QUERY EXPERIENCE
+================================================================
+  To have data to query, you need the write side first:
+
+  REQUIRED — the writer:
+  └── audit-write-native     :8096
+        WHY: writes ALL platform events to Elasticsearch
+             Without it, this service has nothing to query
+
+  TO GENERATE AUDIT DATA, run the complete platform:
+  ├── nexus-identity-service    :8083  — users.registered events
+  ├── nexus-account-service     :8085  — accounts.created events
+  ├── nexus-transaction-service :8086  — transaction events
+  ├── nexus-saga-orchestrator   :8095  — saga.completed events
+  ├── nexus-fraud-service       :8087  — fraud.result events
+  ├── nexus-ledger-service      :8088  — ledger.posted events
+  └── nexus-ai-kyc-service      :8091  — identity.verified events
+
+================================================================
+ KAFKA TOPICS THIS SERVICE PARTICIPATES IN
+================================================================
+  NONE — this service does NOT consume Kafka.
+  It only queries Elasticsearch.
+
+================================================================
+ HOW TO QUERY THE AUDIT TRAIL
+================================================================
+  Standard queries (all require: audit-write-native has written data):
+
+  1. All events for a user:
+     GET /api/v1/audit/events?userId={userId}
+
+  2. Events by type:
+     GET /api/v1/audit/events?eventType=transactions.completed
+
+  3. Events in a date range:
+     GET /api/v1/audit/events?from=2026-06-01T00:00:00Z&to=2026-06-30T23:59:59Z
+
+  4. Security events only (fraud):
+     GET /api/v1/audit/events?eventType=fraud.flagged
+
+  5. Specific transaction audit trail:
+     GET /api/v1/audit/events?correlationId={transactionId}
+
+  6. Compliance report for a user:
+     GET /api/v1/audit/compliance/{userId}
+
+  Health check:
+    GET http://localhost:8097/actuator/health
+
+================================================================
+ FULL END-TO-END AUDIT TEST SEQUENCE
+================================================================
+  1. Start: elasticsearch, kafka, config, discovery
+  2. Start: audit-write-native :8096
+  3. Start: audit-query-jvm   :8097
+  4. Start: all platform services (identity, account, transaction, saga, etc.)
+  5. Register a user:
+     POST http://localhost:8083/api/v1/auth/register
+  6. Complete a transfer (full TransferSaga)
+  7. Wait 2-3 seconds for Elasticsearch indexing
+  8. Query:
+     GET http://localhost:8097/api/v1/audit/events?userId={userId}
+  9. You should see: users.registered, accounts.created, transactions.initiated,
+     fraud.result, ledger.posted, transactions.completed, saga.completed
+
+  Also query Elasticsearch directly:
+    GET http://localhost:9202/nexus-audit-2026-06/_search
+    {
+      "query": { "term": { "userId": "{userId}" } },
+      "sort": [{ "eventTimestamp": "asc" }]
+    }
+
+================================================================
+ GRAFANA DASHBOARD (optional but powerful)
+================================================================
+  Grafana at :3002 can be pointed at Elasticsearch data source.
+  Add: nexus-audit-* as an index pattern in Grafana.
+  Create dashboard: audit event count by type over time.

@@ -47,7 +47,7 @@ public class InternalTransactionController {
      */
     @GetMapping("/transactions/{transactionId}/status")
     public ResponseEntity<Map<String, Object>> getTransactionStatus(
-            @PathVariable UUID transactionId) {
+            @PathVariable("transactionId") UUID transactionId) {
         Transaction txn = transactionRepository.findById(transactionId)
                 .orElseThrow(() -> new com.nexus.transaction.domain.exception
                         .TransactionNotFoundException("Not found: " + transactionId));
@@ -68,7 +68,7 @@ public class InternalTransactionController {
      */
     @GetMapping("/accounts/{accountId}/transactions/active")
     public ResponseEntity<List<Map<String, Object>>> getActiveTransactions(
-            @PathVariable UUID accountId) {
+            @PathVariable("accountId") UUID accountId) {
         // Find transactions where source or target is this account and status is active
         var all = transactionRepository.findAll().stream()
                 .filter(t -> (accountId.equals(t.getSourceAccountId()) ||
@@ -90,7 +90,7 @@ public class InternalTransactionController {
      */
     @PostMapping("/transactions/{transactionId}/force-compensate")
     public ResponseEntity<Map<String, Object>> forceCompensate(
-            @PathVariable UUID transactionId) {
+            @PathVariable("transactionId") UUID transactionId) {
         Transaction txn = transactionRepository.findById(transactionId)
                 .orElseThrow(() -> new com.nexus.transaction.domain.exception
                         .TransactionNotFoundException("Not found: " + transactionId));

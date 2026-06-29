@@ -1,0 +1,88 @@
+================================================================
+ NEXUS — nexus-ai-assistant-service — Complete Workflow Test Order
+================================================================
+Port: 8090 | Stack: Spring Boot | DB: (stateless — no persistent DB)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  Conversational AI assistant for users. Supports:
+  - Chat completion via Ollama (local models) or OpenAI fallback
+  - Context-aware financial Q&A (knows user's balance, recent transactions)
+  - Publishes ai.query.logged to Kafka for audit trail
+
+  This service is NOT part of any saga. It is a standalone
+  on-demand service called directly by the API gateway.
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-kafka nexus-zookeeper
+
+  EXTERNAL DEPENDENCIES:
+  ├── Ollama (local LLM) — if configured:
+  │     Must be running locally or in container
+  │     Default model: llama3.2 or as configured
+  └── OPENAI_API_KEY — fallback if Ollama not available
+        Set in .env: OPENAI_API_KEY=sk-...
+
+================================================================
+ STEP 2 — PLATFORM CORE
+================================================================
+  1. nexus-config-service   :8888
+  2. nexus-discovery-service :8761
+
+================================================================
+ STEP 3 — SERVICES NEEDED FOR CONTEXT-AWARE RESPONSES
+================================================================
+  For BASIC chat (no user context):
+  -> Just run ai-assistant-service alone. It can answer general
+     financial questions without calling other services.
+
+  For CONTEXT-AWARE chat (knows the user's account data):
+  ├── nexus-identity-service    :8083  — user must be logged in (JWT required)
+  └── nexus-account-service     :8085  — assistant fetches account balance/history
+                                          to give personalized answers
+
+  DOWNSTREAM:
+  └── audit-write-native        :8096  — audits ai.query.logged events
+
+================================================================
+ KAFKA TOPICS THIS SERVICE PARTICIPATES IN
+================================================================
+PRODUCES:
+  ai.query.logged
+    └── consumed by: audit-write-native (every chat query is logged for compliance)
+
+CONSUMES: nothing from Kafka.
+
+================================================================
+ HOW TO TEST AI ASSISTANT SERVICE
+================================================================
+  Requires JWT token (user must be logged in via identity-service):
+
+  1. POST /api/v1/assistant/chat
+     Headers: Authorization: Bearer <JWT>
+     Body: {
+       "message": "¿Cuál es mi saldo actual?",
+       "sessionId": "optional-session-id-for-conversation-context"
+     }
+     -> returns AI-generated response
+     -> publishes ai.query.logged to Kafka
+
+  2. GET /api/v1/assistant/sessions/{sessionId}/history
+     -> returns conversation history for the session
+
+  TESTING WITHOUT OPENAI (if Ollama configured):
+  -> Just POST the message — uses local Ollama model
+  -> No OPENAI_API_KEY needed
+
+  TESTING WITHOUT OLLAMA (OpenAI only):
+  -> Set OPENAI_API_KEY in .env
+  -> POST the message — falls back to OpenAI API
+
+================================================================
+ OBSERVE IN KAFDROP (http://localhost:9003)
+================================================================
+  After each chat message:
+    ai.query.logged  -> appears with userId, sessionId, model, latencyMs

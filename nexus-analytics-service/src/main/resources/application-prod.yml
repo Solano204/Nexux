@@ -9,6 +9,9 @@ spring:
     bus:
       enabled: true
 
+  elasticsearch:
+    uris: ${ELASTICSEARCH_URIS:http://nexus-elasticsearch:9200}
+
   data:
     elasticsearch:
       uris: ${ELASTICSEARCH_URIS:http://nexus-elasticsearch:9200}

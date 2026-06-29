@@ -1,0 +1,161 @@
+================================================================
+ NEXUS — nexus-transaction-service — Complete Workflow Test Order
+================================================================
+Port: 8086 | Stack: Spring Boot | DB: PostgreSQL (nexus_transaction)
+                                        Elasticsearch (transactions index)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  Initiates money transfers, emits transactions.initiated, orchestrates
+  the TransferSaga by consuming saga.replies (BalanceReserved, LedgerPosted,
+  FraudRejected). Final state: COMPLETED or FAILED.
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-postgres nexus-kafka nexus-zookeeper nexus-elasticsearch
+
+  Health checks:
+    PostgreSQL  :5434
+    Elasticsearch :9202  GET http://localhost:9202/_cluster/health
+    Kafka via Kafdrop :9003
+
+================================================================
+ STEP 2 — PLATFORM CORE
+================================================================
+  1. nexus-config-service   :8888
+  2. nexus-discovery-service :8761
+
+================================================================
+ STEP 3 — SERVICES REQUIRED FOR COMPLETE TRANSFER SAGA
+================================================================
+The TransferSaga has 6 steps. Each step requires a different service:
+
+  REQUIRED — without these the saga stalls:
+  ├── nexus-saga-orchestrator   :8095
+  │     WHY: consumes transactions.initiated → starts TransferSaga
+  │          sends ReserveBalanceCommand, CheckFraudCommand,
+  │          PostLedgerCommand, FinalizeTransferCommand,
+  │          SendTransactionNotificationCommand
+  ├── nexus-account-service     :8085
+  │     WHY: handles ReserveBalanceCommand → reserves funds
+  │          handles FinalizeTransferCommand → commits debit/credit
+  │          replies: BalanceReservedReply, BalanceFinalizedReply
+  ├── nexus-fraud-service       :8087
+  │     WHY: handles CheckFraudCommand → runs AI fraud analysis
+  │          replies: FraudClearedReply or FraudRejectedReply
+  │          also produces: fraud.flagged (if rejected)
+  ├── nexus-ledger-service      :8088
+  │     WHY: handles PostLedgerCommand → writes double-entry journal
+  │          replies: LedgerPostedReply
+  └── nexus-notification-service :8089
+        WHY: handles SendTransactionNotificationCommand
+             notifies sender + receiver on completion or failure
+             replies: NotificationSentReply
+
+  OPTIONAL — downstream observers:
+  ├── nexus-analytics-service   :8092  — Kafka Streams over transactions.*
+  ├── nexus-risk-scoring-service :8094  — triggers on user.behavior.aggregated
+  ├── audit-write-native        :8096  — records all transaction events to ES
+  └── nexus-audit-query-jvm    :8097  — query the audit trail
+
+  ALSO NEEDED — to create test users and accounts first:
+  ├── nexus-identity-service    :8083  — register users, get JWT
+  └── nexus-account-service     :8085  — must have accounts before transferring
+
+================================================================
+ KAFKA TOPICS THIS SERVICE PARTICIPATES IN
+================================================================
+PRODUCES:
+  transactions.initiated
+    └── consumed by: saga-orchestrator (starts TransferSaga)
+                     audit-write-native
+  transactions.completed
+    └── consumed by: notification-service, analytics-service, audit-write-native
+  transactions.failed
+    └── consumed by: notification-service, analytics-service, audit-write-native
+  saga.commands  (published by saga-orchestrator, not transaction-service directly)
+
+CONSUMES:
+  saga.replies   [group: transaction-service-saga-replies]
+    └── handles: BalanceReservedReply, BalanceReservationFailedReply,
+                 LedgerPostedReply, FraudRejectedReply
+  fraud.result   [group: transaction-service-fraud-results]
+    └── handles: fraud decision from fraud-service direct publish
+  ledger.result  [group: transaction-service-ledger-results]
+    └── handles: ledger confirmation from ledger-service direct publish
+
+================================================================
+ FULL WORKFLOW — TRANSFER SAGA
+================================================================
+PRE-REQUISITES (do these first):
+  1. Register two users via identity-service
+  2. Login to get JWT for each user
+  3. Both users must have accounts (OnboardingFlowSaga must have completed)
+  4. Source account must have sufficient balance
+
+TRANSFER FLOW:
+
+  1. POST /api/v1/transactions
+     Headers: Authorization: Bearer <JWT>
+     Body: { "targetAccountNumber", "amount", "currency", "description" }
+     -> transaction-service persists, emits transactions.initiated
+
+  2. saga-orchestrator picks up transactions.initiated
+     -> emits saga.commands: ReserveBalanceCommand (to account-service)
+
+  3. account-service reserves funds
+     -> emits saga.replies: BalanceReservedReply
+
+  4. saga-orchestrator advances
+     -> emits saga.commands: CheckFraudCommand (to fraud-service)
+
+  5. fraud-service runs AI analysis (calls OpenAI if configured)
+     -> emits saga.replies: FraudClearedReply (or FraudRejectedReply)
+
+  6. IF FRAUD CLEARED:
+     saga-orchestrator -> emits saga.commands: PostLedgerCommand (to ledger-service)
+     ledger-service writes double-entry journal
+     -> emits saga.replies: LedgerPostedReply
+
+  7. saga-orchestrator -> emits saga.commands: FinalizeTransferCommand (to account-service)
+     account-service commits balance change
+     -> emits saga.replies: BalanceFinalizedReply
+
+  8. transaction-service receives BalanceFinalizedReply
+     -> emits transactions.completed
+
+  9. notification-service picks up transactions.completed
+     -> notifies sender AND receiver
+
+  10. analytics-service picks up transactions.completed (Kafka Streams processing)
+
+================================================================
+ OBSERVE IN KAFDROP (http://localhost:9003)
+================================================================
+After POST /transactions, watch in order:
+  1. transactions.initiated
+  2. saga.commands            (ReserveBalanceCommand)
+  3. saga.replies             (BalanceReservedReply)
+  4. saga.commands            (CheckFraudCommand)
+  5. saga.replies             (FraudClearedReply)
+  6. saga.commands            (PostLedgerCommand)
+  7. saga.replies             (LedgerPostedReply)
+  8. saga.commands            (FinalizeTransferCommand)
+  9. saga.replies             (BalanceFinalizedReply)
+ 10. transactions.completed
+ 11. saga.commands            (SendTransactionNotificationCommand)
+ 12. saga.replies             (NotificationSentReply)
+
+Also check Elasticsearch:
+  GET http://localhost:9202/transactions-*/_search
+
+================================================================
+ QUICK ISOLATED TEST (transaction-service alone)
+================================================================
+Start: postgres, elasticsearch, kafka, config, discovery, transaction-service
+  POST /api/v1/transactions -> 201 (persisted)
+  -> transactions.initiated published to Kafka
+  -> saga stalls (no orchestrator listening), but the write works
+  GET  /api/v1/transactions/{id} -> 200 with INITIATED status

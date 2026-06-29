@@ -39,7 +39,7 @@ spring:
 
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev_password@localhost:27018/nexus_kyc?authSource=admin}
+      uri: ${MONGODB_URI:mongodb://localhost:27018/nexus_kyc}
       auto-index-creation: true
 
   kafka:
@@ -49,6 +49,12 @@ spring:
       enable-idempotence: true
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      group-id: nexus-ai-kyc-service
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
 
   ai:
     openai:
@@ -78,6 +84,14 @@ eureka:
     lease-expiration-duration-in-seconds: 90
 
 nexus:
+  identity:
+    internal-url: ${IDENTITY_SERVICE_URL:http://localhost:8010}
+  aws:
+    region: ${AWS_REGION:us-east-1}
+    endpoint-override: ${AWS_ENDPOINT:}
+    access-key-id: ${AWS_ACCESS_KEY_ID:}
+    secret-access-key: ${AWS_SECRET_ACCESS_KEY:}
+
   kyc:
     s3:
       bucket: ${KYC_S3_BUCKET:nexus-kyc-documents}
@@ -126,7 +140,12 @@ management:
   zipkin:
     tracing:
       endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
-
 logging:
   level:
-    com.nexus.kyc: INFO
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
+    org.hibernate.SQL: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN

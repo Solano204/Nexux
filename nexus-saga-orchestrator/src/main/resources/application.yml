@@ -1,3 +1,6 @@
+server:
+  port: 8095
+
 spring:
   application:
     name: nexus-saga-orchestrator
@@ -24,6 +27,7 @@ spring:
     password: ${POSTGRES_PASSWORD:nexus_dev_password}
     hikari:
       maximum-pool-size: 40
+      minimum-idle: 5
       connection-timeout: 5000
       data-source-properties:
         lock_timeout: 5000
@@ -47,11 +51,10 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
     consumer:
-      enable-auto-commit: false
-      isolation-level: read_committed
+      group-id: saga-orchestrator
       auto-offset-reset: earliest
-    listener:
-      ack-mode: manual
+      enable-auto-commit: false
+    # NOTE: listener ack-mode is set in KafkaConfig.java (MANUAL)
 
   ai:
     openai:
@@ -60,9 +63,6 @@ spring:
         options:
           model: gpt-4o-mini
           temperature: 0.3
-
-server:
-  port: 8095
 
 eureka:
   client:
@@ -98,4 +98,10 @@ management:
 
 logging:
   level:
-    com.nexus.saga: INFO
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
+    org.hibernate.SQL: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN

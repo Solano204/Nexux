@@ -43,11 +43,11 @@ spring:
 
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev_password@localhost:27018/nexus_accounts?authSource=admin}
+      uri: ${MONGODB_URI:mongodb://localhost:27018/nexus_accounts}
       auto-index-creation: true
     redis:
       host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6380}
+      port: ${REDIS_PORT:6381}
       password: ${REDIS_PASSWORD:}
       timeout: 500ms
 
@@ -109,10 +109,15 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
 
 logging:
   level:
-    com.nexus.account: INFO
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
     org.hibernate.SQL: WARN
-    org.apache.kafka: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN
+

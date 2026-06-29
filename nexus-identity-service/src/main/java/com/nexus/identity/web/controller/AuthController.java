@@ -104,20 +104,27 @@ public class AuthController {
                     .body(Map.of("error", "No token provided"));
         }
 
-        // Token validation handled by gateway — here we just blacklist
-        // For logout, we trust the X-User-Id set by gateway
-        String userId = httpRequest.getHeader("X-User-Id");
-        String jti = extractJtiFromHeader(authHeader);
         String traceId = getTraceId();
 
-        if (userId != null && jti != null) {
-            commandService.logout(
-                    java.util.UUID.fromString(userId),
-                    jti,
-                    java.time.Instant.now().plusSeconds(900), // Token expires in 15min
-                    getClientIp(httpRequest),
-                    traceId
-            );
+        try {
+            com.auth0.jwt.interfaces.DecodedJWT decoded =
+                    com.auth0.jwt.JWT.decode(authHeader.substring(7));
+
+            String userId = decoded.getSubject();
+            String jti = decoded.getId();
+            java.time.Instant expiresAt = decoded.getExpiresAtAsInstant();
+
+            if (userId != null && jti != null && expiresAt != null) {
+                commandService.logout(
+                        java.util.UUID.fromString(userId),
+                        jti,
+                        expiresAt,
+                        getClientIp(httpRequest),
+                        traceId
+                );
+            }
+        } catch (Exception e) {
+            log.warn("Logout: failed to decode token: {}", e.getMessage());
         }
 
         // Clear refresh token cookie
@@ -178,14 +185,4 @@ public class AuthController {
                 : request.getRemoteAddr();
     }
 
-    private String extractJtiFromHeader(String authHeader) {
-        try {
-            String token = authHeader.substring(7);
-            com.auth0.jwt.interfaces.DecodedJWT decoded =
-                    com.auth0.jwt.JWT.decode(token);
-            return decoded.getId();
-        } catch (Exception e) {
-            return null;
-        }
-    }
 }

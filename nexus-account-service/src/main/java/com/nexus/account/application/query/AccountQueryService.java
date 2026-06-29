@@ -70,7 +70,24 @@ public class AccountQueryService {
 
     public BalanceCacheRepository.BalanceCacheEntry getBalanceCached(
             UUID accountId) {
-        return balanceCacheRepository.getBalance(accountId);
+        BalanceCacheRepository.BalanceCacheEntry cached =
+                balanceCacheRepository.getBalance(accountId);
+        if (cached != null) return cached;
+
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(
+                        "Account not found: " + accountId));
+
+        var entry = new BalanceCacheRepository.BalanceCacheEntry(
+                account.getAvailableBalance(),
+                account.getReservedAmount(),
+                account.getTotalBalance(),
+                account.getCurrency(),
+                account.getStatus().name(),
+                null
+        );
+        balanceCacheRepository.cacheBalance(accountId, entry);
+        return entry;
     }
 
     public AccountAnalyticsDocument getAnalytics(UUID accountId) {

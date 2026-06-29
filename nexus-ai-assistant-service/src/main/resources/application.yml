@@ -32,7 +32,7 @@ spring:
   data:
     redis:
       host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6380}
+      port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
       timeout: 100ms
 
@@ -50,22 +50,32 @@ spring:
         options:
           model: gpt-4o-mini
           temperature: 0.7
+      embedding:
+        options:
+          model: text-embedding-3-small # Asegúrate de que coincida con tus dimensiones 1536
+
     ollama:
       base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
       chat:
         options:
           model: mistral:7b
+      embedding:
+        enabled: false # Desactivamos para que no compita con OpenAI en los embeddings
+
     chat:
       memory:
         repository:
           jdbc:
             initialize-schema: always
+
     vectorstore:
       pgvector:
-        initialize-schema: true
+        initialize-schema: false
         index-type: HNSW
         distance-type: COSINE_DISTANCE
         dimensions: 1536
+        # FORZAMOS el uso de OpenAI para el VectorStore para evitar el conflicto
+        embedding-model-bean-name: openAiEmbeddingModel
 
 server:
   port: 8090
@@ -104,7 +114,7 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
 
 logging:
   level:

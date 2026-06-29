@@ -81,6 +81,9 @@ management:
     web:
       exposure:
         include: health,info,prometheus,metrics
+  health:
+    elasticsearch:
+      enabled: false
   metrics:
     distribution:
       percentiles-histogram:
@@ -99,5 +102,11 @@ management:
 
 logging:
   level:
-    com.nexus.analytics: INFO
-    org.apache.kafka.streams: WARN
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
+    org.hibernate.SQL: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN
+

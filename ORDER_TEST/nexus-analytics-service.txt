@@ -1,0 +1,112 @@
+================================================================
+ NEXUS — nexus-analytics-service — Complete Workflow Test Order
+================================================================
+Port: 8092 | Stack: Spring Boot + Kafka Streams | DB: Elasticsearch
+                                                       Redis (cache)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  Real-time spending analytics via Kafka Streams (topology over transactions.*).
+  Detects spending anomalies (unusual categories, large amounts).
+  Generates AI insights (GPT-4o-mini) on user financial behavior.
+  Publishes analytics.anomalies.detected when anomalies are found.
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-elasticsearch nexus-redis nexus-kafka nexus-zookeeper
+
+  Health checks:
+    Elasticsearch :9202   — analytics index, Kibana-readable
+    Redis         :6381   — insight cache
+    Kafka         :9003   — Kafdrop (also view Kafka Streams internals)
+
+  OPENAI_API_KEY must be set for AI insight generation (optional for streams).
+
+  Kafka Streams needs a local state-dir for RocksDB:
+    Dev:  /tmp/kafka-streams-dev    (auto-created)
+    Prod: /var/kafka-streams        (must exist in container)
+
+================================================================
+ STEP 2 — PLATFORM CORE
+================================================================
+  1. nexus-config-service   :8888
+  2. nexus-discovery-service :8761
+
+================================================================
+ STEP 3 — SERVICES NEEDED TO FEED THE ANALYTICS PIPELINE
+================================================================
+  Analytics is a DOWNSTREAM observer — it doesn't participate in sagas.
+  It consumes completed events from other services.
+
+  REQUIRED — to generate meaningful analytics data:
+  ├── nexus-identity-service    :8083  — need users with history
+  ├── nexus-account-service     :8085  — need accounts
+  ├── nexus-transaction-service :8086  — produces transactions.completed
+  ├── nexus-saga-orchestrator   :8095  — must complete TransferSaga to get .completed
+  ├── nexus-fraud-service       :8087  — must clear fraud for saga to proceed
+  └── nexus-ledger-service      :8088  — must post ledger for saga to proceed
+
+  DOWNSTREAM — analytics feeds into:
+  └── audit-write-native        :8096
+        WHY: consumes analytics.anomalies.detected for compliance records
+
+  NOTE: risk-scoring-service feeds FROM analytics indirectly via
+  user.behavior.aggregated events (Kafka Streams output).
+
+================================================================
+ KAFKA TOPICS THIS SERVICE PARTICIPATES IN
+================================================================
+CONSUMES (Kafka Streams topology):
+  transactions.completed     — real-time spending aggregations per user/category
+  transactions.failed        — failure rate analytics
+  transactions.initiated     — velocity and throughput metrics
+
+PRODUCES:
+  analytics.anomalies.detected
+    └── consumed by: audit-write-native, notification-service (anomaly alerts)
+  user.behavior.aggregated   (Kafka Streams output topic)
+    └── consumed by: risk-scoring-service (triggers risk profile recomputation)
+
+================================================================
+ FULL WORKFLOW — HOW ANALYTICS SEES A TRANSACTION
+================================================================
+  1. TransferSaga completes -> transaction-service emits transactions.completed
+  2. analytics-service Kafka Streams consumes it
+     -> aggregates by (userId, category, time-window)
+     -> detects if current spending deviates from historical baseline
+  3. IF anomaly detected:
+     -> produces analytics.anomalies.detected (consumed by audit, notification)
+  4. Periodically (or on significant events):
+     -> produces user.behavior.aggregated
+     -> risk-scoring-service recomputes risk profile
+
+  Kafka Streams state (RocksDB) accumulates spending windows.
+  After running for a while with multiple transactions, anomaly detection
+  becomes more accurate.
+
+================================================================
+ HOW TO TEST ANALYTICS SERVICE
+================================================================
+  REST endpoints (no saga required — can query what's already computed):
+    GET /api/v1/analytics/spending-summary?userId={id}&period=30d
+    GET /api/v1/analytics/insights?userId={id}
+    GET /api/v1/analytics/anomalies?userId={id}
+    POST /api/v1/analytics/generate-insight   (calls OpenAI directly)
+
+  To generate data for analytics:
+    1. Complete at least 5-10 transactions via the TransferSaga
+    2. Wait for Kafka Streams to process (nearly real-time)
+    3. Query the spending-summary endpoint
+    4. Check Elasticsearch: GET http://localhost:9202/analytics-*/_search
+
+================================================================
+ OBSERVE IN KAFDROP (http://localhost:9003)
+================================================================
+  After multiple transactions complete:
+    analytics.anomalies.detected  -> appears when spending is unusual
+    user.behavior.aggregated      -> appears after window closes
+
+  Also: Kafka Streams internal topics appear in Kafdrop:
+    nexus-analytics-streams-*     -> RocksDB changelog topics

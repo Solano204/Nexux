@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Component;
 
 @Slf4j
@@ -45,6 +46,10 @@ public class IdentityEventConsumer {
             } else {
                 onboardingProcessor.handleKycRejected(event);
             }
+            ack.acknowledge();
+        } catch (ObjectOptimisticLockingFailureException e) {
+            // SagaReplyConsumer already processed this event concurrently — safe to ack.
+            log.debug("KYC result already processed by concurrent consumer, acknowledging: {}", e.getMessage());
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Failed to process KYC result: {}", e.getMessage(), e);

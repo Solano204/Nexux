@@ -20,7 +20,7 @@ spring:
 
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev_password@localhost:27018/nexus_notification?authSource=admin}
+      uri: ${MONGODB_URI:mongodb://localhost:27018/nexus_notification}
       auto-index-creation: true
     redis:
       host: ${REDIS_HOST:localhost}
@@ -30,14 +30,15 @@ spring:
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
+    producer:
+      acks: all
+      enable-idempotence: true
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
     consumer:
+      group-id: saga-orchestrator
       auto-offset-reset: earliest
       enable-auto-commit: false
-      isolation-level: read_committed
-      max-poll-records: 100
-    listener:
-      ack-mode: manual
-
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:}
@@ -88,7 +89,9 @@ management:
   zipkin:
     tracing:
       endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
-
 logging:
   level:
-    com.nexus.notification: INFO
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    # Muestra solo el lifecycle de los listeners, no el ruido de Kafka client
+    org.springframework.kafka.listener: INFO

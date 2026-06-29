@@ -18,6 +18,17 @@ spring:
     virtual:
       enabled: true
 
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
+    consumer:
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      enable-auto-commit: false
+    listener:
+      ack-mode: manual
+      missing-topics-fatal: false
+
   datasource:
     url: ${DATASOURCE_URL:jdbc:postgresql://localhost:5433/nexus_audit}
     username: ${POSTGRES_USER:nexus}
@@ -29,9 +40,10 @@ spring:
     hibernate:
       ddl-auto: validate
 
+  elasticsearch:
+    uris: ${ELASTICSEARCH_URIS:http://localhost:9201}
+
   data:
-    elasticsearch:
-      uris: ${ELASTICSEARCH_URIS:http://localhost:9201}
     mongodb:
       uri: ${MONGODB_URI:mongodb://nexus:nexus_dev_password@localhost:27018/nexus_audit?authSource=admin}
 
@@ -44,7 +56,7 @@ spring:
           temperature: 0.1
 
   ai.vectorstore.pgvector:
-    initialize-schema: true
+    initialize-schema: false
     index-type: HNSW
     distance-type: COSINE_DISTANCE
     dimensions: 1536
@@ -78,4 +90,10 @@ management:
 
 logging:
   level:
-    com.nexus.audit: INFO
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
+    org.hibernate.SQL: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN

@@ -136,7 +136,7 @@ public class TransferSagaProcessor {
                     .compensationAttempts(0)
                     .build();
 
-            sagaRepository.save(state);
+            state = sagaRepository.save(state);
             sagaStartedCounter.increment();
 
             // Transition and publish ReserveBalanceCommand
@@ -169,11 +169,14 @@ public class TransferSagaProcessor {
 
         cancelTimeout(sagaId, "BALANCE_RESERVATION");
 
-        state.setReservationId(UUID.fromString(
-                reply.path("reservationId").asText()));
-        state.setNewAvailableBalance(
-                new BigDecimal(reply.path("newAvailableBalance")
-                        .asText("0")));
+        String reservationIdStr = reply.path("reservationId").asText("");
+        if (!reservationIdStr.isEmpty()) {
+            state.setReservationId(UUID.fromString(reservationIdStr));
+        }
+        JsonNode payload = reply.path("payload");
+        String balanceStr = payload.path("newAvailableBalance").asText(
+                reply.path("newAvailableBalance").asText("0"));
+        state.setNewAvailableBalance(new BigDecimal(balanceStr));
         state.setFundsReserved(true);
 
         transitionAndPublish(state,
@@ -199,7 +202,8 @@ public class TransferSagaProcessor {
 
         cancelTimeout(sagaId, "BALANCE_RESERVATION");
 
-        String reason = reply.path("reason").asText("UNKNOWN");
+        String reason = reply.path("payload").path("reason").asText(
+                reply.path("reason").asText("UNKNOWN"));
 
         SagaFailureContext ctx = SagaFailureContext.builder()
                 .failureType(SagaFailureContext.FailureType.INSUFFICIENT_FUNDS)
@@ -229,7 +233,7 @@ public class TransferSagaProcessor {
                 reply.path("sagaId").asText());
 
         TransferSagaState state = loadAndValidate(
-                sagaId, TransferStep.FRAUD_CHECKING);
+                sagaId, TransferStep.FRAUD_CHECKING, TransferStep.BALANCE_RESERVED);
 
         cancelTimeout(sagaId, "FRAUD_CHECK");
 
@@ -256,7 +260,7 @@ public class TransferSagaProcessor {
                 reply.path("sagaId").asText());
 
         TransferSagaState state = loadAndValidate(
-                sagaId, TransferStep.FRAUD_CHECKING);
+                sagaId, TransferStep.FRAUD_CHECKING, TransferStep.BALANCE_RESERVED);
 
         cancelTimeout(sagaId, "FRAUD_CHECK");
 
@@ -292,8 +296,10 @@ public class TransferSagaProcessor {
 
         cancelTimeout(sagaId, "FRAUD_CHECK");
 
-        state.setReviewId(UUID.fromString(
-                reply.path("reviewId").asText()));
+        String reviewIdStr = reply.path("reviewId").asText("");
+        if (!reviewIdStr.isEmpty()) {
+            state.setReviewId(UUID.fromString(reviewIdStr));
+        }
         state.setReviewPriority(
                 reply.path("reviewPriority").asText("MEDIUM"));
 
@@ -571,16 +577,21 @@ public class TransferSagaProcessor {
     // ══════════════════════════════════════════════════════════
 
     private TransferSagaState loadAndValidate(UUID sagaId,
-                                              TransferStep expected) {
+                                              TransferStep... expected) {
         TransferSagaState state = sagaRepository
                 .findById(sagaId)
                 .orElseThrow(() ->
                         new SagaNotFoundException(sagaId.toString()));
 
-        if (state.getCurrentStep() != expected) {
+        boolean matches = false;
+        for (TransferStep e : expected) {
+            if (state.getCurrentStep() == e) { matches = true; break; }
+        }
+        if (!matches) {
             log.warn("Unexpected saga state: sagaId={} " +
                             "expected={} actual={}",
-                    sagaId, expected, state.getCurrentStep());
+                    sagaId, java.util.Arrays.toString(expected),
+                    state.getCurrentStep());
 
             if (state.isTerminal()) {
                 throw new InvalidSagaStateException(
@@ -636,13 +647,13 @@ public class TransferSagaProcessor {
     }
 
     private void cancelTimeout(UUID sagaId, String timeoutType) {
-        timeoutRepository
+        List<SagaTimeout> pending = timeoutRepository
                 .findBySagaIdAndTimeoutTypeAndIsCancelledFalse(
-                        sagaId, timeoutType)
-                .ifPresent(t -> {
-                    t.setCancelled(true);
-                    timeoutRepository.save(t);
-                });
+                        sagaId, timeoutType);
+        if (!pending.isEmpty()) {
+            pending.forEach(t -> t.setCancelled(true));
+            timeoutRepository.saveAll(pending);
+        }
     }
 
     private String getTraceId() {
@@ -711,7 +722,8 @@ public class TransferSagaProcessor {
                         "targetAccountId", state.getTargetAccountId().toString(),
                         "amount", state.getAmount().toPlainString(),
                         "currency", state.getCurrency(),
-                        "reservationId", state.getReservationId().toString()));
+                        "reservationId", state.getReservationId() != null
+                                ? state.getReservationId().toString() : ""));
     }
 
     private Map<String, Object> buildReleaseBalanceCommand(
@@ -732,17 +744,19 @@ public class TransferSagaProcessor {
 
     private Map<String, Object> buildSendNotificationCommand(
             TransferSagaState state) {
+        Map<String, Object> payload = new java.util.HashMap<>();
+        payload.put("transactionId", state.getTransactionId().toString());
+        payload.put("sourceUserId", state.getSourceUserId().toString());
+        payload.put("amount", state.getAmount().toPlainString());
+        payload.put("currency", state.getCurrency());
+        if (state.getTargetUserId() != null) {
+            payload.put("targetUserId", state.getTargetUserId().toString());
+        }
         return Map.of(
                 "commandType", "SendTransactionNotificationCommand",
                 "targetService", "nexus-notification-service",
                 "sagaId", state.getSagaId().toString(),
-                "payload", Map.of(
-                        "transactionId", state.getTransactionId().toString(),
-                        "sourceUserId", state.getSourceUserId().toString(),
-                        "targetUserId", state.getTargetUserId() != null
-                                ? state.getTargetUserId().toString() : "",
-                        "amount", state.getAmount().toPlainString(),
-                        "currency", state.getCurrency()));
+                "payload", payload);
     }
 
     private Map<String, Object> buildFailureNotificationCommand(
