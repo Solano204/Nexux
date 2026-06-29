@@ -2,6 +2,13 @@
 target/
 *.jar
 
+# Secrets — NEVER commit these
+.env
+secrets/
+*.jks
+*.p12
+*.pem
+
 
 # Terraform state — never commit this
 *.tfstate

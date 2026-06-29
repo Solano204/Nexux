@@ -1,0 +1,19 @@
+# ── Dev overrides ─────────────────────────────────────────────────────────────
+# Apply with: terraform apply -var-file="terraform.tfvars.dev"
+# ─────────────────────────────────────────────────────────────────────────────
+
+environment = "dev"
+
+# LocalStack uses static account ID 000000000000
+# When developing locally you don't run `terraform apply` against AWS at all —
+# you use LocalStack. These values just document what LocalStack creates
+# via its auto-provisioning or init scripts.
+kyc_bucket_name = "nexus-kyc-documents"
+kyc_queue_name  = "nexus-kyc-documents-pending"
+kyc_dlq_name    = "nexus-kyc-documents-pending-dlq"
+
+# Allow localhost origins for presigned URLs in dev
+cors_allowed_origins = [
+  "http://localhost:3000",
+  "http://localhost:5173"
+]

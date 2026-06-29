@@ -1,26 +1,59 @@
 # ================================================================
 # NEXUS PLATFORM - GLOBAL PRODUCTION DOCKER COMPOSE
 # ================================================================
-# All 16 services + all infrastructure in a single compose file.
-# Network: nexus-network (all containers communicate by service name)
+# All 16 services + all infrastructure.
+# Network: nexus-network (containers communicate by service name).
 #
-# HOST PORT MAPPING (PORT+2 to avoid conflicts with local dev):
-#   PostgreSQL:      5434:5432
-#   MongoDB:         27019:27017
-#   Redis:           6381:6379
-#   Elasticsearch:   9202:9200
-#   Kafka (ext):     19093:9092
-#   Zipkin:          9413:9411
-#   Prometheus:      9093:9090
-#   Grafana:         3002:3000
-#   Kafdrop:         9003:9000
+# HOST PORT MAPPING (PORT+1 from local dev to avoid conflicts):
+#   PostgreSQL:      5435:5432   (local dev uses 5434)
+#   MongoDB:         27020:27017  (local dev uses 27019)
+#   Redis:           6382:6379    (local dev uses 6381)
+#   Elasticsearch:   9203:9200    (local dev uses 9202)
+#   Kafka (ext):     19094:9092   (local dev uses 19093)
+#   Zipkin:          9414:9411    (local dev uses 9413)
+#   Prometheus:      9094:9090    (local dev uses 9093)
+#   Grafana:         3003:3000    (local dev uses 3002)
+#   Kafdrop:         9004:9000    (local dev uses 9003)
+#   Kafka Connect:   18083:8083   (avoids conflict with identity :8083)
 #   Config Service:  8888:8888
 #   Discovery:       8761:8761
 #   API Gateway:     8080:8080
 #
-# Usage:
-#   docker compose -f docker-compose-prod.yml up -d
-#   docker compose -f docker-compose-prod.yml down -v
+# STARTUP PROFILES (start in groups to manage memory):
+#
+#   Step 1 — Infrastructure (no profile needed):
+#     docker compose -f docker-compose-prod.yml up -d
+#
+#   Step 2 — Core platform (config + discovery):
+#     docker compose -f docker-compose-prod.yml --profile core up -d
+#
+#   Step 3 — Auth service:
+#     docker compose -f docker-compose-prod.yml --profile auth up -d
+#
+#   Step 4 — Transaction cluster (account, txn, fraud, ledger, saga):
+#     docker compose -f docker-compose-prod.yml --profile txn up -d
+#
+#   Step 5 — AI cluster (assistant, kyc, analytics):
+#     docker compose -f docker-compose-prod.yml --profile ai up -d
+#
+#   Step 6 — Support cluster (notification, risk, audit):
+#     docker compose -f docker-compose-prod.yml --profile support up -d
+#
+#   Step 7 — API Gateway:
+#     docker compose -f docker-compose-prod.yml --profile gateway up -d
+#
+#   Or start everything at once (if memory allows):
+#     docker compose -f docker-compose-prod.yml \
+#       --profile core --profile auth --profile txn \
+#       --profile ai --profile support --profile gateway up -d
+#
+# REQUIRED .env VARIABLES:
+#   POSTGRES_PASSWORD, MONGO_PASSWORD, REDIS_PASSWORD
+#   GRAFANA_PASSWORD, CONFIG_SERVER_PASSWORD
+#   JWT_KEYSTORE_PASSWORD, GIT_TOKEN, OPENAI_API_KEY
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+#   KYC_S3_BUCKET, KYC_SQS_QUEUE_URL
+#   SNS_FRAUD_ALERTS_TOPIC_ARN, SNS_NOTIFICATION_DISPATCH_TOPIC_ARN
 # ================================================================
 
 networks:
@@ -42,14 +75,23 @@ volumes:
   ollama-data:
 
 # ================================================================
-# INFRASTRUCTURE SERVICES
+# INFRASTRUCTURE SERVICES (no profiles — always start first)
+# docker compose -f docker-compose-prod.yml up -d
 # ================================================================
 services:
 
   # ── PostgreSQL ────────────────────────────────────────────────
   nexus-postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16-bookworm
     container_name: nexus-postgres
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "max_wal_senders=10"
     environment:
       POSTGRES_USER: nexus
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
@@ -58,7 +100,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./scripts/create-multiple-dbs.sh:/docker-entrypoint-initdb.d/create-multiple-dbs.sh:ro
     ports:
-      - "5434:5432"
+      - "5435:5432"
     networks:
       - nexus-network
     healthcheck:
@@ -66,6 +108,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 90s
     restart: unless-stopped
 
   # ── MongoDB ───────────────────────────────────────────────────
@@ -78,7 +121,7 @@ services:
     volumes:
       - mongodb-data:/data/db
     ports:
-      - "27019:27017"
+      - "27020:27017"
     networks:
       - nexus-network
     healthcheck:
@@ -86,6 +129,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 90s
     restart: unless-stopped
 
   # ── Redis ─────────────────────────────────────────────────────
@@ -93,17 +137,21 @@ services:
     image: redis:7.2-alpine
     container_name: nexus-redis
     command: redis-server --requirepass ${REDIS_PASSWORD:?required} --maxmemory 512mb --maxmemory-policy allkeys-lru
+    environment:
+      # Needed so the healthcheck shell can read $$REDIS_PASSWORD
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
     volumes:
       - redis-data:/data
     ports:
-      - "6381:6379"
+      - "6382:6379"
     networks:
       - nexus-network
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   # ── Zookeeper ─────────────────────────────────────────────────
@@ -114,15 +162,16 @@ services:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
       ZOOKEEPER_SYNC_LIMIT: 2
+      ZOOKEEPER_4LW_COMMANDS_WHITELIST: "ruok,srvr,stat"
     volumes:
       - zookeeper-data:/var/lib/zookeeper
     networks:
       - nexus-network
     healthcheck:
-      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      test: ["CMD-SHELL", "echo srvr | nc localhost 2181 | grep -q 'Zookeeper version'"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
     restart: unless-stopped
 
   # ── Kafka ─────────────────────────────────────────────────────
@@ -136,7 +185,9 @@ services:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: nexus-zookeeper:2181
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://nexus-kafka:9092,EXTERNAL://localhost:19093
+      # INTERNAL: used by all Docker services (nexus-kafka:9092)
+      # EXTERNAL: used by host machine tools on localhost:19094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://nexus-kafka:9092,EXTERNAL://localhost:19094
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -147,7 +198,7 @@ services:
     volumes:
       - kafka-data:/var/lib/kafka/data
     ports:
-      - "19093:9092"
+      - "19094:9092"
     networks:
       - nexus-network
     healthcheck:
@@ -155,6 +206,7 @@ services:
       interval: 15s
       timeout: 10s
       retries: 5
+      start_period: 90s
     restart: unless-stopped
 
   # ── Elasticsearch ─────────────────────────────────────────────
@@ -164,23 +216,20 @@ services:
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-      - bootstrap.memory_lock=true
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
+      - "ES_JAVA_OPTS=-Xms256m -Xmx256m"
+      - bootstrap.memory_lock=false
     volumes:
       - elasticsearch-data:/usr/share/elasticsearch/data
     ports:
-      - "9202:9200"
+      - "9203:9200"
     networks:
       - nexus-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      test: ["CMD-SHELL", "curl -s -f http://localhost:9200/_cluster/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
+      start_period: 90s
     restart: unless-stopped
 
   # ── Zipkin ────────────────────────────────────────────────────
@@ -188,14 +237,15 @@ services:
     image: openzipkin/zipkin:3.3
     container_name: nexus-zipkin
     ports:
-      - "9413:9411"
+      - "9414:9411"
     networks:
       - nexus-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9411/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:9411/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   # ── Prometheus ────────────────────────────────────────────────
@@ -212,9 +262,15 @@ services:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     ports:
-      - "9093:9090"
+      - "9094:9090"
     networks:
       - nexus-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:9090/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   # ── Grafana ───────────────────────────────────────────────────
@@ -222,18 +278,25 @@ services:
     image: grafana/grafana:10.4.0
     container_name: nexus-grafana
     environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:nexus-admin}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-nexus-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?required}
       GF_AUTH_ANONYMOUS_ENABLED: "false"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
-      - "3002:3000"
+      - "3003:3000"
     networks:
       - nexus-network
     depends_on:
-      - nexus-prometheus
+      nexus-prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   # ── Kafdrop (Kafka UI) ────────────────────────────────────────
@@ -244,7 +307,7 @@ services:
       KAFKA_BROKERCONNECT: nexus-kafka:9092
       JVM_OPTS: "-Xms64M -Xmx128M"
     ports:
-      - "9003:9000"
+      - "9004:9000"
     networks:
       - nexus-network
     depends_on:
@@ -252,33 +315,88 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── Ollama (local LLM) ────────────────────────────────────────
-  nexus-ollama:
-    image: ollama/ollama:latest
-    container_name: nexus-ollama
-    volumes:
-      - ollama-data:/root/.ollama
+  # ── Kafka Connect (Debezium) ──────────────────────────────────
+  # NOTE: Host port is 18083 (NOT 8083) to avoid conflict with
+  #       nexus-identity-service which also uses host port 8083.
+  nexus-kafka-connect:
+    image: debezium/connect:2.6
+    container_name: nexus-kafka-connect
+    depends_on:
+      nexus-kafka:
+        condition: service_healthy
+      nexus-postgres:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVERS: nexus-kafka:9092
+      GROUP_ID: nexus-debezium-connect
+      CONFIG_STORAGE_TOPIC: nexus.connect.configs
+      OFFSET_STORAGE_TOPIC: nexus.connect.offsets
+      STATUS_STORAGE_TOPIC: nexus.connect.status
+      KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+    ports:
+      - "18083:8083"
     networks:
       - nexus-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
     restart: unless-stopped
 
+  # ── Debezium Init (registers connectors once on first run) ────
+  nexus-debezium-init:
+    image: curlimages/curl:8.6.0
+    container_name: nexus-debezium-init
+    depends_on:
+      nexus-kafka-connect:
+        condition: service_healthy
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - ./debezium:/scripts:ro
+    entrypoint: ["/bin/sh", "/scripts/register.sh"]
+    restart: "no"
+    networks:
+      - nexus-network
+
+  # ── Ollama (local LLM fallback) — disabled by default ─────────
+  # Uncomment to enable Ollama as fallback for ai-assistant-service.
+  # Warning: pulls ~3.2GB on first start.
+  # nexus-ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: nexus-ollama
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+  #   networks:
+  #     - nexus-network
+  #   restart: unless-stopped
+
   # ================================================================
-  # PLATFORM SERVICES — Startup order: config → discovery → core
+  # PLATFORM SERVICES
+  # ================================================================
+  # Start groups in order:
+  #   core → auth → txn → ai → support → gateway
+  # Each step waits for depends_on health checks automatically.
+  # On failure: restart: on-failure retries with Docker's backoff.
   # ================================================================
 
-  # ── Config Service ────────────────────────────────────────────
+  # ── Config Service ─────────────────────── profile: core ──────
   nexus-config-service:
     build:
       context: ./nexus-config-service
       dockerfile: Dockerfile
     container_name: nexus-config-service
     image: nexus/config-service:latest
+    profiles: [core]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       GIT_TOKEN: ${GIT_TOKEN:?required}
-      GIT_USERNAME: ${GIT_USERNAME:Solano204}
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      GIT_USERNAME: ${GIT_USERNAME:-Solano204}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
@@ -289,24 +407,28 @@ services:
     depends_on:
       nexus-kafka:
         condition: service_healthy
+      nexus-zipkin:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8888/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8888/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
-      retries: 5
-    restart: unless-stopped
+      retries: 8
+      start_period: 60s
+    restart: on-failure
 
-  # ── Discovery Service ─────────────────────────────────────────
+  # ── Discovery Service ──────────────────── profile: core ──────
   nexus-discovery-service:
     build:
-      context: ./nexus-discovery-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: nexus-discovery-service/Dockerfile
     container_name: nexus-discovery-service
     image: nexus/discovery-service:latest
+    profiles: [core]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
     ports:
       - "8761:8761"
@@ -316,23 +438,25 @@ services:
       nexus-config-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8761/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8761/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
 
-  # ── Identity Service ──────────────────────────────────────────
+  # ── Identity Service ───────────────────── profile: auth ──────
   nexus-identity-service:
     build:
       context: ./nexus-identity-service
       dockerfile: Dockerfile
     container_name: nexus-identity-service
     image: nexus/identity-service:latest
+    profiles: [auth]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_identity
       POSTGRES_USER: nexus
@@ -345,9 +469,13 @@ services:
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
       JWT_KEYSTORE_PATH: /secrets/nexus-identity.jks
       JWT_KEYSTORE_PASSWORD: ${JWT_KEYSTORE_PASSWORD:?required}
-      AWS_REGION: ${AWS_REGION:us-east-1}
-      KYC_S3_BUCKET: ${KYC_S3_BUCKET:nexus-kyc-documents}
-      KYC_SQS_QUEUE_URL: ${KYC_SQS_QUEUE_URL:}
+      # AWS — real S3 bucket for KYC documents + real SQS queue
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?required}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?required}
+      KYC_S3_BUCKET: ${KYC_S3_BUCKET:-nexus-kyc-documents}
+      KYC_SQS_QUEUE_URL: ${KYC_SQS_QUEUE_URL:?required}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
     volumes:
       - ./secrets:/secrets:ro
     ports:
@@ -366,27 +494,32 @@ services:
       nexus-discovery-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8083/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8083/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
 
-  # ── Account Service ───────────────────────────────────────────
+  # ── Account Service ────────────────────── profile: txn ───────
   nexus-account-service:
     build:
       context: ./nexus-account-service
       dockerfile: Dockerfile
     container_name: nexus-account-service
     image: nexus/account-service:latest
+    profiles: [txn]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_accounts
       POSTGRES_USER: nexus
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      MONGO_USER: nexus
+      MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
+      MONGO_HOST: nexus-mongodb
       MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_accounts?authSource=admin
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
@@ -394,6 +527,7 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
     ports:
       - "8085:8085"
     networks:
@@ -412,27 +546,30 @@ services:
       nexus-discovery-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8085/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8085/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
 
-  # ── Transaction Service ───────────────────────────────────────
+  # ── Transaction Service ────────────────── profile: txn ───────
   nexus-transaction-service:
     build:
       context: ./nexus-transaction-service
       dockerfile: Dockerfile
     container_name: nexus-transaction-service
     image: nexus/transaction-service:latest
+    profiles: [txn]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_transactions
       POSTGRES_USER: nexus
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      # application-prod.yml reads: spring.elasticsearch.uris: ${ELASTICSEARCH_URI}
       ELASTICSEARCH_URI: http://nexus-elasticsearch:9200
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
@@ -453,23 +590,25 @@ services:
       nexus-discovery-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8086/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8086/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
 
-  # ── Fraud Service ─────────────────────────────────────────────
+  # ── Fraud Service ──────────────────────── profile: txn ───────
   nexus-fraud-service:
     build:
       context: ./nexus-fraud-service
       dockerfile: Dockerfile
     container_name: nexus-fraud-service
     image: nexus/fraud-service:latest
+    profiles: [txn]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_fraud
       POSTGRES_USER: nexus
@@ -478,11 +617,17 @@ services:
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      # application-prod.yml reads: spring.elasticsearch.uris: ${ELASTICSEARCH_URI}
       ELASTICSEARCH_URI: http://nexus-elasticsearch:9200
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
+      # AWS — real SNS topic for high-severity fraud alerts → fraud-alert-lambda
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?required}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?required}
+      SNS_FRAUD_ALERTS_TOPIC_ARN: ${SNS_FRAUD_ALERTS_TOPIC_ARN:-}
     ports:
       - "8087:8087"
     networks:
@@ -503,27 +648,32 @@ services:
       nexus-discovery-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8087/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8087/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
 
-  # ── Ledger Service ────────────────────────────────────────────
+  # ── Ledger Service ─────────────────────── profile: txn ───────
   nexus-ledger-service:
     build:
       context: ./nexus-ledger-service
       dockerfile: Dockerfile
     container_name: nexus-ledger-service
     image: nexus/ledger-service:latest
+    profiles: [txn]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_ledger
       POSTGRES_USER: nexus
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      MONGO_USER: nexus
+      MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
+      MONGO_HOST: nexus-mongodb
       MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_ledger?authSource=admin
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
@@ -545,40 +695,39 @@ services:
       nexus-discovery-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8088/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8088/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
 
-  # ── Notification Service ──────────────────────────────────────
-  nexus-notification-service:
+  # ── Saga Orchestrator ──────────────────── profile: txn ───────
+  nexus-saga-orchestrator:
     build:
-      context: ./nexus-notification-service
+      context: ./nexus-saga-orchestrator
       dockerfile: Dockerfile
-    container_name: nexus-notification-service
-    image: nexus/notification-service:latest
+    container_name: nexus-saga-orchestrator
+    image: nexus/saga-orchestrator:latest
+    profiles: [txn]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
-      MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_notification?authSource=admin
-      REDIS_HOST: nexus-redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_saga
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
     ports:
-      - "8089:8089"
+      - "8095:8095"
     networks:
       - nexus-network
     depends_on:
-      nexus-mongodb:
-        condition: service_healthy
-      nexus-redis:
+      nexus-postgres:
         condition: service_healthy
       nexus-kafka:
         condition: service_healthy
@@ -587,23 +736,25 @@ services:
       nexus-discovery-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8089/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8095/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
 
-  # ── AI Assistant Service ──────────────────────────────────────
+  # ── AI Assistant Service ───────────────── profile: ai ────────
   nexus-ai-assistant-service:
     build:
       context: ./nexus-ai-assistant-service
       dockerfile: Dockerfile
     container_name: nexus-ai-assistant-service
     image: nexus/ai-assistant-service:latest
+    profiles: [ai]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_ai_assistant
       POSTGRES_USER: nexus
@@ -613,9 +764,11 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      # Ollama fallback — only works if nexus-ollama container is enabled above
       OLLAMA_BASE_URL: http://nexus-ollama:11434
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
+      # Service-to-service calls use Docker service names
       ACCOUNT_SERVICE_URL: http://nexus-account-service:8085
       TRANSACTION_SERVICE_URL: http://nexus-transaction-service:8086
       FRAUD_SERVICE_URL: http://nexus-fraud-service:8087
@@ -635,33 +788,42 @@ services:
       nexus-discovery-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8090/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8090/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
 
-  # ── AI KYC Service ────────────────────────────────────────────
+  # ── AI KYC Service ─────────────────────── profile: ai ────────
   nexus-ai-kyc-service:
     build:
       context: ./nexus-ai-kyc-service
       dockerfile: Dockerfile
     container_name: nexus-ai-kyc-service
     image: nexus/ai-kyc-service:latest
+    profiles: [ai]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_kyc
       POSTGRES_USER: nexus
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      MONGO_USER: nexus
+      MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
+      MONGO_HOST: nexus-mongodb
       MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_kyc?authSource=admin
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
       KYC_ENCRYPTION_ENABLED: "true"
-      KYC_S3_BUCKET: ${KYC_S3_BUCKET:nexus-kyc-documents}
-      AWS_REGION: ${AWS_REGION:us-east-1}
+      # AWS — real S3 for KYC docs + Rekognition results SQS queue
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?required}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?required}
+      KYC_S3_BUCKET: ${KYC_S3_BUCKET:-nexus-kyc-documents}
+      KYC_REKOGNITION_RESULTS_QUEUE_URL: ${KYC_REKOGNITION_RESULTS_QUEUE_URL:-}
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
     ports:
@@ -680,24 +842,27 @@ services:
       nexus-discovery-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8091/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8091/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
 
-  # ── Analytics Service ─────────────────────────────────────────
+  # ── Analytics Service ──────────────────── profile: ai ────────
   nexus-analytics-service:
     build:
       context: ./nexus-analytics-service
       dockerfile: Dockerfile
     container_name: nexus-analytics-service
     image: nexus/analytics-service:latest
+    profiles: [ai]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      # application-prod.yml reads: spring.elasticsearch.uris: ${ELASTICSEARCH_URIS}
       ELASTICSEARCH_URIS: http://nexus-elasticsearch:9200
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
@@ -722,23 +887,77 @@ services:
       nexus-discovery-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8092/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8092/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
 
-  # ── Risk Scoring Service ──────────────────────────────────────
+  # ── Notification Service ───────────────── profile: support ───
+  nexus-notification-service:
+    build:
+      context: ./nexus-notification-service
+      dockerfile: Dockerfile
+    container_name: nexus-notification-service
+    image: nexus/notification-service:latest
+    profiles: [support]
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      CONFIG_SERVER_URI: http://nexus-config-service:8888
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
+      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      MONGO_USER: nexus
+      MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
+      MONGO_HOST: nexus-mongodb
+      MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_notification?authSource=admin
+      REDIS_HOST: nexus-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
+      ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
+      # AWS — real SNS for dispatching to notification-dispatcher-lambda
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?required}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?required}
+      SNS_NOTIFICATION_DISPATCH_TOPIC_ARN: ${SNS_NOTIFICATION_DISPATCH_TOPIC_ARN:-}
+    ports:
+      - "8089:8089"
+    networks:
+      - nexus-network
+    depends_on:
+      nexus-mongodb:
+        condition: service_healthy
+      nexus-redis:
+        condition: service_healthy
+      nexus-kafka:
+        condition: service_healthy
+      nexus-config-service:
+        condition: service_healthy
+      nexus-discovery-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8089/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    restart: on-failure
+
+  # ── Risk Scoring Service ───────────────── profile: support ───
   nexus-risk-scoring-service:
     build:
       context: ./nexus-risk-scoring-service
       dockerfile: Dockerfile
     container_name: nexus-risk-scoring-service
     image: nexus/risk-scoring-service:latest
+    profiles: [support]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_risk
       POSTGRES_USER: nexus
@@ -766,67 +985,34 @@ services:
       nexus-discovery-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8094/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8094/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
 
-  # ── Saga Orchestrator ─────────────────────────────────────────
-  nexus-saga-orchestrator:
-    build:
-      context: ./nexus-saga-orchestrator
-      dockerfile: Dockerfile
-    container_name: nexus-saga-orchestrator
-    image: nexus/saga-orchestrator:latest
-    environment:
-      SPRING_PROFILES_ACTIVE: prod
-      CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
-      DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_saga
-      POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
-      KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
-      EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
-      ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
-    ports:
-      - "8095:8095"
-    networks:
-      - nexus-network
-    depends_on:
-      nexus-postgres:
-        condition: service_healthy
-      nexus-kafka:
-        condition: service_healthy
-      nexus-config-service:
-        condition: service_healthy
-      nexus-discovery-service:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8095/actuator/health || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-    restart: unless-stopped
-
-  # ── Audit Query JVM ───────────────────────────────────────────
+  # ── Audit Query JVM ────────────────────── profile: support ───
   nexus-audit-query-jvm:
     build:
       context: ./nexus-audit-query-jvm
       dockerfile: Dockerfile
     container_name: nexus-audit-query-jvm
     image: nexus/audit-query-jvm:latest
+    profiles: [support]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_audit
       POSTGRES_USER: nexus
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      # application-prod.yml reads: spring.elasticsearch.uris: ${ELASTICSEARCH_URIS}
       ELASTICSEARCH_URIS: http://nexus-elasticsearch:9200
+      MONGO_USER: nexus
+      MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
+      MONGO_HOST: nexus-mongodb
       MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_audit?authSource=admin
       OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
@@ -847,24 +1033,28 @@ services:
       nexus-discovery-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8097/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8097/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
 
-  # ── Audit Write Native (Quarkus) ──────────────────────────────
+  # ── Audit Write Native (Quarkus) ───────── profile: support ───
   nexus-audit-write-native:
     build:
       context: ./audit-write-native
-      dockerfile: src/main/docker/Dockerfile.jvm
+      dockerfile: Dockerfile.native
     container_name: nexus-audit-write-native
     image: nexus/audit-write-native:latest
+    profiles: [support]
     environment:
       QUARKUS_PROFILE: prod
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
+      # application.properties %prod.elasticsearch.hosts: ${ELASTICSEARCH_HOSTS}
       ELASTICSEARCH_HOSTS: http://nexus-elasticsearch:9200
       MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_audit?authSource=admin
+      # application.properties %prod.quarkus.redis.hosts: ${REDIS_URL}
       REDIS_URL: redis://nexus-redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
@@ -883,23 +1073,25 @@ services:
       nexus-redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8096/q/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8096/q/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
 
-  # ── API Gateway ───────────────────────────────────────────────
+  # ── API Gateway ────────────────────────── profile: gateway ───
   nexus-api-gateway:
     build:
       context: ./nexus-api-gateway
       dockerfile: Dockerfile
     container_name: nexus-api-gateway
     image: nexus/api-gateway:latest
+    profiles: [gateway]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
-      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:nexus-config}
+      CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
@@ -907,9 +1099,14 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
+      # JWKS endpoint: gateway validates JWT using identity service public key
       JWT_JWKS_URI: http://nexus-identity-service:8083/api/v1/auth/.well-known/jwks.json
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:https://app.nexusbank.com}
+      # Allow localhost for dev/testing in addition to production domain
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:4200,https://app.nexusbank.com}
       TRACING_SAMPLE_RATE: "0.05"
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5000ms
+      SPRING_DATA_REDIS_TIMEOUT: 2000ms
+      SPRING_DATA_REDIS_LETTUCE_POOL_MAX_WAIT: 2000ms
     ports:
       - "8080:8080"
     networks:
@@ -926,8 +1123,9 @@ services:
       nexus-identity-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8080/actuator/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
+      start_period: 90s
+    restart: on-failure
