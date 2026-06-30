@@ -400,6 +400,10 @@ services:
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
+      MANAGEMENT_HEALTH_CONFIG_ENABLED: "false"
     ports:
       - "8888:8888"
     networks:
