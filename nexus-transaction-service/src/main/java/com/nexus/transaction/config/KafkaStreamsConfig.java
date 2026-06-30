@@ -64,6 +64,8 @@ public class KafkaStreamsConfig {
 
     @Bean
     public JsonSerde<JsonNode> jsonNodeSerde(ObjectMapper objectMapper) {
-        return new JsonSerde<>(objectMapper);
+        JsonSerde<JsonNode> serde = new JsonSerde<>(JsonNode.class, objectMapper);
+        serde.ignoreTypeHeaders();
+        return serde;
     }
 }

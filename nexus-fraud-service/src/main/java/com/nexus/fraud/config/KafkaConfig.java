@@ -77,7 +77,7 @@ public class KafkaConfig {
         props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 1);
         props.put(ProducerConfig.RETRIES_CONFIG, Integer.MAX_VALUE);
         props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 120000);
-        props.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "snappy");
+        props.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "lz4");
         return new DefaultKafkaProducerFactory<>(props);
     }
 

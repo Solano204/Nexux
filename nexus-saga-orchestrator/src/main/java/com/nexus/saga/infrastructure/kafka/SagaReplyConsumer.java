@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Component;
 
 /**
@@ -89,6 +90,9 @@ public class SagaReplyConsumer {
 
         } catch (InvalidSagaStateException e) {
             log.warn("Skipping stale reply for terminal saga: {}", e.getMessage());
+            ack.acknowledge();
+        } catch (ObjectOptimisticLockingFailureException e) {
+            log.warn("Concurrent saga reply — already committed by another consumer, acking");
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Failed to process saga reply: {}",

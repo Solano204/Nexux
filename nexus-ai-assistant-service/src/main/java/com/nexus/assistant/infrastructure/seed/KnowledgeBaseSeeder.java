@@ -174,8 +174,8 @@ public class KnowledgeBaseSeeder implements ApplicationRunner {
 
     private Document doc(String id, String title, String content) {
         return Document.builder()
-                .id(id)
                 .text(title + "\n\n" + content)
+                .metadata("kb_id", id)
                 .metadata("title", title)
                 .metadata("language", "es")
                 .metadata("category", "product_knowledge")

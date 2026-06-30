@@ -16,6 +16,10 @@ public class TransactionEventConsumer {
     private final TransferSagaProcessor transferProcessor;
     private final ObjectMapper objectMapper;
 
+    private static final java.util.Set<String> TRANSFER_TYPES = java.util.Set.of(
+            "INTERNAL_TRANSFER", "EXTERNAL_TRANSFER", "PAYMENT",
+            "DIRECT_DEPOSIT", "CASH_IN");
+
     @KafkaListener(
             topics = "transactions.initiated",
             groupId = "saga-orchestrator-transactions",
@@ -23,8 +27,14 @@ public class TransactionEventConsumer {
     )
     public void consumeTransactionInitiated(String message, Acknowledgment ack) {
         try {
-            transferProcessor.handleTransactionInitiated(
-                    objectMapper.readTree(message));
+            com.fasterxml.jackson.databind.JsonNode event = objectMapper.readTree(message);
+            String txnType = event.path("transactionType").asText("");
+            if (!TRANSFER_TYPES.contains(txnType)) {
+                log.debug("Skipping non-transfer saga for type={}", txnType);
+                ack.acknowledge();
+                return;
+            }
+            transferProcessor.handleTransactionInitiated(event);
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Failed to start TransferSaga: {}", e.getMessage(), e);

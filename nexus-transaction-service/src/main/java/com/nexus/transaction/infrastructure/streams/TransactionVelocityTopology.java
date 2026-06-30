@@ -25,7 +25,8 @@ public class TransactionVelocityTopology {
 
     @Autowired
     public void buildVelocityTopology(StreamsBuilder builder) {
-        JsonSerde<JsonNode> jsonSerde = new JsonSerde<>(objectMapper);
+        JsonSerde<JsonNode> jsonSerde = new JsonSerde<>(JsonNode.class, objectMapper);
+        jsonSerde.ignoreTypeHeaders();
         KStream<String, JsonNode> transactionStream = builder.stream(INPUT_TOPIC, Consumed.with(Serdes.String(), jsonSerde));
         KStream<String, JsonNode> keyedByUser = transactionStream.selectKey((k, v) -> v.path("userId").asText());
 
@@ -46,7 +47,7 @@ public class TransactionVelocityTopology {
                             agg.put("computedAt", java.time.Instant.now().toString());
                             return agg;
                         },
-                        Materialized.<String, JsonNode>as(Stores.persistentWindowStore(STORE_NAME, Duration.ofMinutes(60), WINDOW_SIZE, false))
+                        Materialized.<String, JsonNode>as(Stores.inMemoryWindowStore(STORE_NAME, Duration.ofMinutes(60), WINDOW_SIZE, false))
                                 .withKeySerde(Serdes.String()).withValueSerde(jsonSerde)
                 );
 

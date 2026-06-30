@@ -4,8 +4,7 @@ RUN addgroup -S nexus && adduser -S nexus -G nexus
 USER nexus
 WORKDIR /app
 
-COPY --chown=nexus:nexus target/classes ./classes
-COPY --chown=nexus:nexus target/libs ./libs
+COPY --chown=nexus:nexus target/nexus-account-service-1.0.0.jar app.jar
 
 HEALTHCHECK \
     --interval=30s \
@@ -26,5 +25,4 @@ ENTRYPOINT ["java", \
     "-Dspring.classformat.ignore=true", \
     "-Dspring.cloud.compatibility-verifier.enabled=false", \
     "--enable-preview", \
-    "-cp", "classes:libs/*", \
-    "com.nexus.account.AccountApplication"]
+    "-jar", "app.jar"]

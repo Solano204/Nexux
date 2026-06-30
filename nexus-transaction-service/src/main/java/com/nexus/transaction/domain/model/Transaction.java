@@ -251,7 +251,9 @@ public class Transaction {
     private static boolean isValidTransition(TransactionStatus from, TransactionStatus to) {
         return switch (from) {
             // balance-first saga order: INITIATED → BALANCE_RESERVING → BALANCE_RESERVED → FRAUD_CLEARED → LEDGER_POSTING
-            case INITIATED -> to == TransactionStatus.BALANCE_RESERVING || to == TransactionStatus.CANCELLED;
+            // deposit saga order: INITIATED → LEDGER_POSTING (no reservation or fraud check)
+            case INITIATED -> to == TransactionStatus.BALANCE_RESERVING || to == TransactionStatus.CANCELLED
+                    || to == TransactionStatus.LEDGER_POSTING;
             case BALANCE_RESERVING -> to == TransactionStatus.BALANCE_RESERVED || to == TransactionStatus.RESERVE_FAILED;
             case BALANCE_RESERVED -> to == TransactionStatus.FRAUD_CLEARED || to == TransactionStatus.FRAUD_REJECTED || to == TransactionStatus.LEDGER_POSTING;
             case FRAUD_CHECKING -> to == TransactionStatus.FRAUD_CLEARED || to == TransactionStatus.FRAUD_REJECTED;

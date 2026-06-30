@@ -271,6 +271,7 @@ public class SpringAiConfig {
             org.springframework.ai.openai.OpenAiEmbeddingModel embeddingModel) {
         return PgVectorStore.builder(jdbcTemplate, embeddingModel)
                 .vectorTableName("ai_conversation_memory")
+                .initializeSchema(true)
                 .build();
     }
 
@@ -280,6 +281,7 @@ public class SpringAiConfig {
             org.springframework.ai.openai.OpenAiEmbeddingModel embeddingModel) {
         return PgVectorStore.builder(jdbcTemplate, embeddingModel)
                 .vectorTableName("financial_knowledge_base")
+                .initializeSchema(true)
                 .build();
     }
 }

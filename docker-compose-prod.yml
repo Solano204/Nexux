@@ -92,6 +92,8 @@ services:
       - "max_replication_slots=10"
       - "-c"
       - "max_wal_senders=10"
+      - "-c"
+      - "max_connections=300"
     environment:
       POSTGRES_USER: nexus
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
@@ -140,6 +142,11 @@ services:
     environment:
       # Needed so the healthcheck shell can read $$REDIS_PASSWORD
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
     volumes:
       - redis-data:/data
     ports:
@@ -362,6 +369,36 @@ services:
     networks:
       - nexus-network
 
+  # ── Kafka Topics Init ─────────────────────────────────────────
+  # Runs once after Kafka is healthy; pre-creates all platform topics
+  # so Kafka Streams consumers don't throw MissingSourceTopicException.
+  nexus-kafka-topics-init:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: nexus-kafka-topics-init
+    depends_on:
+      nexus-kafka:
+        condition: service_healthy
+    command: >
+      bash -c "
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic transactions.initiated       --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic transactions.completed       --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic transactions.failed          --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic fraud.flagged               --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic fraud.result                --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic accounts.created            --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.verified           --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.rejected           --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic users.registered            --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic saga.commands               --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic saga.replies                --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic ledger.posted               --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic analytics.anomalies.detected --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic ai.query.logged             --partitions 3 --replication-factor 1
+      "
+    networks:
+      - nexus-network
+    restart: "no"
+
   # ── Ollama (local LLM fallback) — disabled by default ─────────
   # Uncomment to enable Ollama as fallback for ai-assistant-service.
   # Warning: pulls ~3.2GB on first start.
@@ -401,6 +438,11 @@ services:
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
       MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
       MANAGEMENT_HEALTH_CONFIG_ENABLED: "false"
@@ -459,6 +501,7 @@ services:
     profiles: [auth]
     environment:
       SPRING_PROFILES_ACTIVE: prod
+      SERVER_PORT: 8083
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
       CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
@@ -468,6 +511,11 @@ services:
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
@@ -528,6 +576,11 @@ services:
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
@@ -575,6 +628,14 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
       # application-prod.yml reads: spring.elasticsearch.uris: ${ELASTICSEARCH_URI}
       ELASTICSEARCH_URI: http://nexus-elasticsearch:9200
+      REDIS_HOST: nexus-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
@@ -587,8 +648,12 @@ services:
         condition: service_healthy
       nexus-elasticsearch:
         condition: service_healthy
+      nexus-redis:
+        condition: service_healthy
       nexus-kafka:
         condition: service_healthy
+      nexus-kafka-topics-init:
+        condition: service_completed_successfully
       nexus-config-service:
         condition: service_healthy
       nexus-discovery-service:
@@ -621,6 +686,11 @@ services:
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       # application-prod.yml reads: spring.elasticsearch.uris: ${ELASTICSEARCH_URI}
       ELASTICSEARCH_URI: http://nexus-elasticsearch:9200
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
@@ -679,6 +749,14 @@ services:
       MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
       MONGO_HOST: nexus-mongodb
       MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_ledger?authSource=admin
+      REDIS_HOST: nexus-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
@@ -691,6 +769,8 @@ services:
       nexus-postgres:
         condition: service_healthy
       nexus-mongodb:
+        condition: service_healthy
+      nexus-redis:
         condition: service_healthy
       nexus-kafka:
         condition: service_healthy
@@ -722,6 +802,14 @@ services:
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_saga
       POSTGRES_USER: nexus
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      REDIS_HOST: nexus-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
@@ -732,6 +820,8 @@ services:
       - nexus-network
     depends_on:
       nexus-postgres:
+        condition: service_healthy
+      nexus-redis:
         condition: service_healthy
       nexus-kafka:
         condition: service_healthy
@@ -766,6 +856,11 @@ services:
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
       # Ollama fallback — only works if nexus-ollama container is enabled above
@@ -819,6 +914,14 @@ services:
       MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
       MONGO_HOST: nexus-mongodb
       MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_kyc?authSource=admin
+      REDIS_HOST: nexus-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
       KYC_ENCRYPTION_ENABLED: "true"
@@ -838,6 +941,8 @@ services:
       nexus-postgres:
         condition: service_healthy
       nexus-mongodb:
+        condition: service_healthy
+      nexus-redis:
         condition: service_healthy
       nexus-kafka:
         condition: service_healthy
@@ -871,6 +976,11 @@ services:
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
@@ -918,6 +1028,11 @@ services:
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
@@ -969,6 +1084,11 @@ services:
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
@@ -1061,6 +1181,11 @@ services:
       # application.properties %prod.quarkus.redis.hosts: ${REDIS_URL}
       REDIS_URL: redis://nexus-redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       OTEL_EXPORTER_OTLP_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
       TRACING_SAMPLE_RATE: "0.05"
     ports:
@@ -1100,6 +1225,12 @@ services:
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_HOST: nexus-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_TIMEOUT: 5s
+      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
+      SPRING_DATA_REDIS_LETTUCE_POOL_MAX_WAIT: 2000ms
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
@@ -1108,9 +1239,6 @@ services:
       # Allow localhost for dev/testing in addition to production domain
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:4200,https://app.nexusbank.com}
       TRACING_SAMPLE_RATE: "0.05"
-      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5000ms
-      SPRING_DATA_REDIS_TIMEOUT: 2000ms
-      SPRING_DATA_REDIS_LETTUCE_POOL_MAX_WAIT: 2000ms
     ports:
       - "8080:8080"
     networks:

@@ -166,6 +166,7 @@ public class UserCommandService {
             String passwordHash = bcryptTimer.record(() ->
                     passwordEncoder.encode(request.password()));
 
+            Instant now = Instant.now();
             User user = User.builder()
                     .userId(UUID.randomUUID())
                     .email(request.email().toLowerCase())
@@ -176,6 +177,8 @@ public class UserCommandService {
                     .country(request.country())
                     .status(UserStatus.PENDING_KYC)
                     .roles(List.of("USER"))
+                    .createdAt(now)
+                    .updatedAt(now)
                     .build();
 
             user = userRepository.save(user);

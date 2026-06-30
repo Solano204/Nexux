@@ -536,6 +536,43 @@ public class AccountCommandService {
         }
     }
 
+    @Transactional
+    public void creditAccount(UUID accountId, UUID transactionId,
+                              BigDecimal amount, String traceId) {
+
+        Observation obs = Observation.createNotStarted(
+                "account.credit-account", observationRegistry).start();
+
+        try {
+            List<Account> accounts = accountRepository
+                    .findWithLocksForTransfer(List.of(accountId));
+            if (accounts.isEmpty()) {
+                throw new IllegalStateException("Account not found: " + accountId);
+            }
+            Account account = accounts.get(0);
+
+            account.credit(amount, transactionId.toString(), "EXTERNAL_DEPOSIT");
+            accountRepository.save(account);
+
+            accountEventRepository.save(buildCreditEvent(account, transactionId, amount, traceId));
+
+            // System external account UUID is the logical debit source for deposits
+            UUID externalFunds = UUID.fromString("00000000-0000-0000-0000-000000000001");
+            outboxRepository.save(OutboxEntry.of(
+                    "account.events", accountId, "BalanceCredited",
+                    buildCreditedPayload(accountId, externalFunds,
+                            transactionId, amount, account.getAvailableBalance())));
+
+            balanceCacheRepository.invalidate(accountId);
+
+            log.info("Account credited (deposit): accountId={} transactionId={} amount={}",
+                    accountId, transactionId, amount);
+
+        } finally {
+            obs.stop();
+        }
+    }
+
     // ══════════════════════════════════════════════════════════
     // PRIVATE HELPERS
     // ══════════════════════════════════════════════════════════

@@ -59,14 +59,22 @@ spring:
           filters:
             - name: RequestRateLimiter
               args:
-                redis-rate-limiter.replenishRate: 1
-                redis-rate-limiter.burstCapacity: 10
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 50
                 redis-rate-limiter.requestedTokens: 1
                 key-resolver: "#{@ipKeyResolver}"
             - name: CircuitBreaker
               args:
                 name: identity-service
                 fallbackUri: forward:/fallback/identity
+            - name: Retry
+              args:
+                retries: 2
+                statuses: SERVICE_UNAVAILABLE,BAD_GATEWAY
+                methods: GET,POST,PUT
+                backoff:
+                  firstBackoff: 100ms
+                  maxBackoff: 500ms
             - AddRequestHeader=X-Gateway-Version, 1.0.0
             - RewritePath=/api/v1/auth/(?<segment>.*), /api/v1/auth/$\{segment}
             - name: RequestSize
@@ -77,6 +85,9 @@ spring:
           uri: lb://nexus-account-service
           predicates:
             - Path=/api/v1/accounts/**
+          metadata:
+            response-timeout: 120000
+            connect-timeout: 5000
           filters:
             - name: JwtAuthentication
             - name: RequestRateLimiter
@@ -120,10 +131,12 @@ spring:
         - id: nexus-ai-assistant-service
           uri: lb://nexus-ai-assistant-service
           predicates:
-            - Path=/ai/**
+            - Path=/api/v1/ai/**
+          metadata:
+            response-timeout: 120000
+            connect-timeout: 5000
           filters:
             - name: JwtAuthentication
-            - StripPrefix=1
             - name: RequestRateLimiter
               args:
                 redis-rate-limiter.replenishRate: 1
@@ -134,6 +147,26 @@ spring:
               args:
                 name: ai-assistant-service
                 fallbackUri: forward:/fallback/ai-assistant
+
+        - id: nexus-identity-service-users
+          uri: lb://nexus-identity-service
+          predicates:
+            - Path=/api/v1/users/**
+          filters:
+            - name: JwtAuthentication
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 40
+                redis-rate-limiter.requestedTokens: 1
+                key-resolver: "#{@userIdKeyResolver}"
+            - name: CircuitBreaker
+              args:
+                name: identity-service
+                fallbackUri: forward:/fallback/identity
+            - name: RequestSize
+              args:
+                maxSize: 10MB
 
         - id: nexus-identity-service-internal
           uri: lb://nexus-identity-service
@@ -305,7 +338,7 @@ resilience4j:
       account-service:
         base-config: default
         failure-rate-threshold: 50
-        slow-call-duration-threshold: 2000ms
+        slow-call-duration-threshold: 120000ms
       identity-service:
         base-config: default
         failure-rate-threshold: 60
@@ -354,6 +387,9 @@ resilience4j:
       transaction-service:
         timeout-duration: 10s
         cancel-running-future: true
+      account-service:
+        timeout-duration: 120s
+        cancel-running-future: false
       ai-assistant-service:
         timeout-duration: 120s
         cancel-running-future: false

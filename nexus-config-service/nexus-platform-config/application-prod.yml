@@ -13,7 +13,7 @@ spring:
       enable-idempotence: true
       retries: 2147483647
       max-in-flight-requests-per-connection: 1
-      compression-type: snappy
+      compression-type: lz4
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
     consumer:
@@ -46,6 +46,12 @@ spring:
     locations: classpath:db/migration
 
   data:
+    redis:
+      host: ${REDIS_HOST:nexus-redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+      timeout: 5s
+      connect-timeout: 5s
     mongodb:
       auto-index-creation: false
 
@@ -53,12 +59,15 @@ eureka:
   client:
     service-url:
       defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
-    registry-fetch-interval-seconds: 30
-    instance-info-replication-interval-seconds: 30
+    registry-fetch-interval-seconds: 10
+    instance-info-replication-interval-seconds: 5
+    initial-instance-info-replication-interval-seconds: 5
+    eureka-server-connect-timeout-seconds: 5
+    eureka-server-read-timeout-seconds: 5
   instance:
     prefer-ip-address: true
-    lease-renewal-interval-in-seconds: 30
-    lease-expiration-duration-in-seconds: 90
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
 
 management:
   endpoints:
@@ -68,6 +77,11 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+  health:
+    kafka:
+      enabled: false
+    elasticsearch:
+      enabled: false
   tracing:
     enabled: true
     sampling:

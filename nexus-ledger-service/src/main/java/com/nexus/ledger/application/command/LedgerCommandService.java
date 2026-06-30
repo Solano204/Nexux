@@ -533,6 +533,7 @@ public class LedgerCommandService {
             case INITIAL_BALANCE -> "INITIAL_BALANCE";
             case ADJUSTMENT -> "ADJUSTMENT";
             case REGULATORY_HOLD -> "REGULATORY_HOLD";
+            case DIRECT_DEPOSIT, CASH_IN -> "DEPOSIT";
         };
     }
 

@@ -101,6 +101,11 @@ public class SagaCommandConsumer {
                     obs.event(Observation.Event.of(
                             "saga.CreateAccounts.processed"));
                 }
+                case "CreditAccountCommand" -> {
+                    handleCreditAccount(command, sagaId, traceId);
+                    obs.event(Observation.Event.of(
+                            "saga.CreditAccount.processed"));
+                }
                 default -> log.warn(
                         "Unknown command type for account service: {}",
                         commandType);
@@ -251,6 +256,39 @@ public class SagaCommandConsumer {
 
         kafkaTemplate.send(REPLIES_TOPIC, sagaId,
                 objectMapper.writeValueAsString(reply));
+    }
+
+    private void handleCreditAccount(JsonNode command, String sagaId,
+                                     String traceId) throws Exception {
+        JsonNode payload = command.path("payload");
+        UUID accountId = UUID.fromString(payload.path("accountId").asText());
+        UUID transactionId = UUID.fromString(payload.path("transactionId").asText());
+        BigDecimal amount = new BigDecimal(payload.path("amount").asText());
+        String commandId = command.path("commandId").asText();
+
+        commandService.creditAccount(accountId, transactionId, amount, traceId);
+
+        Instant now = Instant.now();
+        Thread.startVirtualThread(() ->
+            transactionIndexingService.indexCredit(
+                accountId, transactionId, amount, null,
+                "Direct deposit received", now));
+
+        Map<String, Object> reply = Map.of(
+                "replyType", "BalanceFinalizedReply",
+                "sagaId", sagaId,
+                "commandId", commandId,
+                "transactionId", transactionId.toString(),
+                "sourceService", TARGET_SERVICE,
+                "success", true,
+                "repliedAt", java.time.Instant.now().toString()
+        );
+
+        kafkaTemplate.send(REPLIES_TOPIC, sagaId,
+                objectMapper.writeValueAsString(reply));
+
+        log.info("CreditAccount reply sent: sagaId={} accountId={} amount={}",
+                sagaId, accountId, amount);
     }
 
     private void handleCreateAccounts(JsonNode command, String sagaId,

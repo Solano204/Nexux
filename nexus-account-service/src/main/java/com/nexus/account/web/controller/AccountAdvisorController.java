@@ -4,25 +4,15 @@ import com.nexus.account.domain.exception.UnauthorizedException;
 import com.nexus.account.infrastructure.ai.AccountAdvisorService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
-import reactor.core.publisher.Flux;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
 import java.util.UUID;
 
-/**
- * Account Advisor Controller — AI-powered financial advice.
- *
- * POST /api/v1/accounts/{id}/advisor/chat
- *   Returns: Server-Sent Events (SSE) streaming response
- *
- * GET /api/v1/accounts/{id}/advisor/insights
- *   Returns: Proactive weekly financial insight (structured JSON)
- *
- * Section 3: Streaming SSE response
- * Section 7: Hybrid memory (in-memory window + pgvector semantic)
- * Section 10: Advanced RAG over user's transaction history
- */
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/accounts")
 @RequiredArgsConstructor
@@ -30,20 +20,11 @@ public class AccountAdvisorController {
 
     private final AccountAdvisorService advisorService;
 
-    /**
-     * Streaming AI advisor chat — SSE response.
-     *
-     * The advisor has access to:
-     * - User's actual transaction history (pgvector RAG)
-     * - Previous advice sessions (semantic memory)
-     * - Current account analytics (MongoDB)
-     * - Conversation context (in-memory window memory)
-     */
     @PostMapping(
             value = "/{accountId}/advisor/chat",
             produces = MediaType.TEXT_EVENT_STREAM_VALUE
     )
-    public Flux<String> chat(
+    public SseEmitter chat(
             @PathVariable UUID accountId,
             @RequestBody AdvisorChatRequest request,
             HttpServletRequest httpRequest) {
@@ -54,14 +35,31 @@ public class AccountAdvisorController {
                 ? request.sessionId()
                 : "advisor-" + accountId + "-" + userId;
 
-        return advisorService.getAdvisorResponseStream(
-                accountId, userId, request.message(), sessionId);
+        SseEmitter emitter = new SseEmitter(120_000L);
+
+        try {
+            emitter.send(SseEmitter.event().comment("connected"));
+        } catch (IOException e) {
+            emitter.completeWithError(e);
+            return emitter;
+        }
+
+        advisorService.getAdvisorResponseStream(accountId, userId, request.message(), sessionId)
+                .subscribe(
+                        chunk -> {
+                            try {
+                                emitter.send(SseEmitter.event().data(chunk));
+                            } catch (IOException e) {
+                                emitter.completeWithError(e);
+                            }
+                        },
+                        emitter::completeWithError,
+                        emitter::complete
+                );
+
+        return emitter;
     }
 
-    /**
-     * Proactive financial insights — non-streaming structured response.
-     * Returns AI-generated savings opportunities and action items.
-     */
     @GetMapping("/{accountId}/advisor/insights")
     public AccountAdvisorService.FinancialAdviceResponse getInsights(
             @PathVariable UUID accountId) {

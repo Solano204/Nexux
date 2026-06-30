@@ -6,3 +6,10 @@ spring:
   data:
     mongodb:
       uri: mongodb://${MONGO_USER:nexus}:${MONGO_PASSWORD}@${MONGO_HOST:nexus-mongodb}:27017/nexus_kyc?authSource=admin
+  kafka:
+    producer:
+      compression-type: lz4
+
+nexus:
+  identity:
+    internal-url: http://nexus-identity-service:8083
