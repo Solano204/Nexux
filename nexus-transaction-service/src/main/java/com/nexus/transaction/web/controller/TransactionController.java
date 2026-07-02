@@ -43,12 +43,12 @@ public class TransactionController {
     }
 
     @GetMapping("/{transactionId}")
-    public ResponseEntity<TransactionResponse> getTransaction(@PathVariable UUID transactionId, HttpServletRequest request) {
+    public ResponseEntity<TransactionResponse> getTransaction(@PathVariable("transactionId") UUID transactionId, HttpServletRequest request) {
         return ResponseEntity.ok(queryService.getTransactionDetail(transactionId, extractUserId(request)));
     }
 
     @GetMapping("/search")
-    public ResponseEntity<List<TransactionResponse>> searchTransactions(@RequestParam String query, HttpServletRequest request) {
+    public ResponseEntity<List<TransactionResponse>> searchTransactions(@RequestParam("query") String query, HttpServletRequest request) {
         return ResponseEntity.ok(queryService.searchTransactions(extractUserId(request), query));
     }
 

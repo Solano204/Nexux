@@ -1,0 +1,88 @@
+================================================================
+ NEXUS — nexus-config-service — Complete Workflow Test Order
+================================================================
+Port: 8888 | Stack: Spring Boot Cloud Config Server
+================================================================
+
+WHAT THIS SERVICE DOES:
+  Centralized configuration server. All other Spring Boot services
+  pull their configuration from here at startup (and on refresh).
+  Config files live in: nexus-config-service/nexus-platform-config/
+  Serves per-service, per-profile YAML files over HTTP.
+
+  THIS IS THE FIRST SERVICE YOU MUST ALWAYS START.
+  Nothing else will start properly without it.
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  No external dependencies needed to start config-service itself.
+  It reads config from local filesystem (Git-backed local repo).
+
+  Optional: if CONFIG_GIT_URI points to a remote Git repo,
+  you need GIT_TOKEN in .env.
+
+================================================================
+ STEP 2 — START ORDER
+================================================================
+  config-service has NO dependencies.
+  START IT FIRST, before any other service.
+
+  java -jar nexus-config-service/target/nexus-config-service.jar
+  OR
+  docker compose -f docker-compose-prod.yml up -d nexus-config-service
+
+  Wait for it to be UP:
+    GET http://localhost:8888/actuator/health -> {"status":"UP"}
+
+================================================================
+ WHAT EACH SERVICE FETCHES FROM CONFIG SERVER
+================================================================
+  Each service calls:
+    GET http://localhost:8888/{service-name}/{profile}
+
+  Example: nexus-identity-service with profile=dev fetches:
+    GET http://localhost:8888/nexus-identity-service/dev
+    -> merges: application-dev.yml + nexus-identity-service-dev.yml
+
+  Config files served (in nexus-platform-config/):
+    application-dev.yml                  <- shared for all services in dev
+    nexus-identity-service-dev.yml       <- identity specific
+    nexus-ai-kyc-service-dev.yml         <- kyc specific
+    nexus-analytics-service-dev.yml      <- analytics specific
+    nexus-api-gateway-dev.yml            <- gateway routes
+    nexus-audit-query-jvm-dev.yml        <- audit query specific
+    nexus-audit-service-dev.yml          <- audit write specific
+    ...
+
+================================================================
+ HOW TO VERIFY CONFIG-SERVICE IS WORKING
+================================================================
+  GET http://localhost:8888/nexus-identity-service/dev
+  -> should return merged config JSON for identity service in dev mode
+
+  GET http://localhost:8888/nexus-transaction-service/prod
+  -> should return prod config for transaction service
+
+  GET http://localhost:8888/actuator/health
+  -> {"status":"UP","components":{"configServer":...}}
+
+================================================================
+ CONFIG REFRESH (Spring Cloud Bus)
+================================================================
+  In prod, all services subscribe to Kafka spring-cloud-bus topic.
+  When you change a config file and push:
+    POST http://localhost:8888/actuator/busrefresh
+  -> all services reload config without restart.
+
+  You'll see in logs:
+    "Found no committed offset for partition springCloudBus-0"
+  This is NORMAL on first startup (no prior offset for this topic).
+
+================================================================
+ NO WORKFLOW DEPENDENCIES
+================================================================
+  config-service does not participate in any business workflow.
+  It has no Kafka consumers or producers.
+  It does not interact with any saga.
+  It is pure infrastructure — start it once and forget it.

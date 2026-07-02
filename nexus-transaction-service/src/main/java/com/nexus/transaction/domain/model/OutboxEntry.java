@@ -1,7 +1,9 @@
 package com.nexus.transaction.domain.model;
 
+import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.Type;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -29,8 +31,8 @@ public class OutboxEntry {
     @Column(name = "event_type", nullable = false, length = 100)
     private String eventType;
 
+    @Type(JsonBinaryType.class)
     @Column(name = "payload", columnDefinition = "jsonb", nullable = false)
-    @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
     private Object payload;
 
     @Column(name = "created_at", nullable = false, updatable = false)

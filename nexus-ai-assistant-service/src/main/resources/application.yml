@@ -7,20 +7,21 @@ spring:
 
   cloud:
     config:
-      uri: http://nexus-config-service:8888
-      fail-fast: true
+      uri: ${CONFIG_SERVER_URI:http://localhost:8888}
+      fail-fast: false
+      retry:
+        max-attempts: 3
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
 
   threads:
     virtual:
       enabled: true
 
-  # ════════════════════════════════════════════════════════
-  # POSTGRESQL — JDBC chat memory + pgvector stores
-  # ════════════════════════════════════════════════════════
   datasource:
-    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5432/nexus_ai_assistant}
+    url: ${DATASOURCE_URL:jdbc:postgresql://localhost:5433/nexus_ai_assistant}
     username: ${POSTGRES_USER:nexus}
-    password: ${POSTGRES_PASSWORD:}
+    password: ${POSTGRES_PASSWORD:nexus_dev_password}
     hikari:
       maximum-pool-size: 20
 
@@ -30,21 +31,18 @@ spring:
 
   data:
     redis:
-      host: ${REDIS_HOST:nexus-redis}
+      host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
       timeout: 100ms
 
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
     producer:
       acks: "1"
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
-  # ════════════════════════════════════════════════════════
-  # SPRING AI — Complete configuration
-  # ════════════════════════════════════════════════════════
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:}
@@ -52,28 +50,32 @@ spring:
         options:
           model: gpt-4o-mini
           temperature: 0.7
+      embedding:
+        options:
+          model: text-embedding-3-small # Asegúrate de que coincida con tus dimensiones 1536
 
-    # Ollama fallback (local Docker container)
     ollama:
-      base-url: ${OLLAMA_BASE_URL:http://nexus-ollama:11434}
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
       chat:
         options:
           model: mistral:7b
+      embedding:
+        enabled: false # Desactivamos para que no compita con OpenAI en los embeddings
 
-    # JDBC chat memory (Section 7)
     chat:
       memory:
         repository:
           jdbc:
             initialize-schema: always
 
-    # pgvector stores
     vectorstore:
       pgvector:
-        initialize-schema: true
+        initialize-schema: false
         index-type: HNSW
         distance-type: COSINE_DISTANCE
         dimensions: 1536
+        # FORZAMOS el uso de OpenAI para el VectorStore para evitar el conflicto
+        embedding-model-bean-name: openAiEmbeddingModel
 
 server:
   port: 8090
@@ -81,9 +83,22 @@ server:
 eureka:
   client:
     service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
+    register-with-eureka: true
+    fetch-registry: true
   instance:
     prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 30
+    lease-expiration-duration-in-seconds: 90
+
+nexus:
+  services:
+    account:
+      url: ${ACCOUNT_SERVICE_URL:http://localhost:8085}
+    transaction:
+      url: ${TRANSACTION_SERVICE_URL:http://localhost:8086}
+    fraud:
+      url: ${FRAUD_SERVICE_URL:http://localhost:8087}
 
 management:
   endpoints:
@@ -91,12 +106,6 @@ management:
       exposure:
         include: health,info,prometheus,metrics
   metrics:
-    distribution:
-      percentiles-histogram:
-        ai.chat.response.duration: true
-        ai.tool.call.total: true
-      percentiles:
-        ai.chat.response.duration: 0.5, 0.9, 0.95, 0.99
     tags:
       application: ${spring.application.name}
   tracing:
@@ -105,14 +114,9 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
 
 logging:
   level:
     com.nexus.assistant: INFO
     org.springframework.ai: INFO
-  pattern:
-    console: >
-      %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
-      traceId=%X{traceId} spanId=%X{spanId}
-      service=nexus-ai-assistant-service %logger{36} - %msg%n

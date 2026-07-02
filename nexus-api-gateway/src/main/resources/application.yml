@@ -2,38 +2,25 @@ spring:
   application:
     name: nexus-api-gateway
 
-  # ══════════════════════════════════════════════════════════════
-  # SPRING CLOUD CONFIG — Load all config from Config Service
-  # fail-fast: true — gateway refuses to start without config
-  # FIX: Removed duplicate `spring.config.import` key. The correct
-  #      pattern for Spring Cloud Config is spring.cloud.config.uri
-  #      together with the configserver bootstrap. Using both
-  #      spring.config.import AND spring.cloud.config.uri in the
-  #      same file causes a duplicate-binding conflict at startup.
-  # ══════════════════════════════════════════════════════════════
+  config:
+    import: "optional:configserver:"
+
   cloud:
     config:
-      uri: http://nexus-config-service:8888
-      fail-fast: true
+      uri: ${CONFIG_SERVER_URI:http://localhost:8888}
+      fail-fast: false
       retry:
         max-attempts: 10
         initial-interval: 1000
         max-interval: 5000
         multiplier: 1.5
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
 
-    # ════════════════════════════════════════════════════════════
-    # SPRING CLOUD BUS — Config refresh broadcast via Kafka
-    # POST /actuator/busrefresh broadcasts to ALL instances
-    # ════════════════════════════════════════════════════════════
     bus:
       enabled: true
 
-    # ════════════════════════════════════════════════════════════
-    # GATEWAY ROUTES — Complete routing table
-    # All 10 routes from the architecture documentation
-    # ════════════════════════════════════════════════════════════
     gateway:
-      # Global CORS configuration
       globalcors:
         cors-configurations:
           '[/**]':
@@ -54,25 +41,17 @@ spring:
             allow-credentials: true
             max-age: 3600
 
-      # Default filters applied to ALL routes
       default-filters:
         - AddResponseHeader=X-Gateway-Version, 1.0.0
         - AddResponseHeader=X-Content-Type-Options, nosniff
         - AddResponseHeader=X-Frame-Options, DENY
         - AddResponseHeader=X-XSS-Protection, 1; mode=block
         - AddResponseHeader=Referrer-Policy, no-referrer
-        - RemoveRequestHeader=X-User-Id
-        - RemoveRequestHeader=X-User-Roles
-        - RemoveRequestHeader=X-Gateway-Internal
         - DedupeResponseHeader=Access-Control-Allow-Credentials, RETAIN_UNIQUE
         - DedupeResponseHeader=Access-Control-Allow-Origin, RETAIN_UNIQUE
 
       routes:
 
-        # ──────────────────────────────────────────────────────
-        # ROUTE 1: Identity Service — Public (no JWT required)
-        # Login, register, token refresh endpoints
-        # ──────────────────────────────────────────────────────
         - id: nexus-identity-service-public
           uri: lb://nexus-identity-service
           predicates:
@@ -80,27 +59,35 @@ spring:
           filters:
             - name: RequestRateLimiter
               args:
-                redis-rate-limiter.replenishRate: 1
-                redis-rate-limiter.burstCapacity: 10
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 50
                 redis-rate-limiter.requestedTokens: 1
                 key-resolver: "#{@ipKeyResolver}"
             - name: CircuitBreaker
               args:
                 name: identity-service
                 fallbackUri: forward:/fallback/identity
+            - name: Retry
+              args:
+                retries: 2
+                statuses: SERVICE_UNAVAILABLE,BAD_GATEWAY
+                methods: GET,POST,PUT
+                backoff:
+                  firstBackoff: 100ms
+                  maxBackoff: 500ms
             - AddRequestHeader=X-Gateway-Version, 1.0.0
             - RewritePath=/api/v1/auth/(?<segment>.*), /api/v1/auth/$\{segment}
             - name: RequestSize
               args:
                 maxSize: 512KB
 
-        # ──────────────────────────────────────────────────────
-        # ROUTE 2: Account Service — Authenticated
-        # ──────────────────────────────────────────────────────
         - id: nexus-account-service
           uri: lb://nexus-account-service
           predicates:
             - Path=/api/v1/accounts/**
+          metadata:
+            response-timeout: 120000
+            connect-timeout: 5000
           filters:
             - name: JwtAuthentication
             - name: RequestRateLimiter
@@ -121,10 +108,6 @@ spring:
                   firstBackoff: 100ms
                   maxBackoff: 500ms
 
-        # ──────────────────────────────────────────────────────
-        # ROUTE 3: Transaction Service — Authenticated, strictest limits
-        # Financial operations — most conservative config
-        # ──────────────────────────────────────────────────────
         - id: nexus-transaction-service
           uri: lb://nexus-transaction-service
           predicates:
@@ -144,31 +127,18 @@ spring:
             - name: RequestSize
               args:
                 maxSize: 10KB
-            # FIX: Removed `AddRequestHeader=X-Forwarded-For, ${request.remoteAddr}`
-            #      SpEL expressions like ${request.remoteAddr} are NOT evaluated in
-            #      YAML filter shortcut args — they are treated as literal strings.
-            #      The gateway populates X-Forwarded-For automatically via the
-            #      XForwardedHeadersFilter which is enabled by default; no manual
-            #      header needed here.
 
-        # ──────────────────────────────────────────────────────
-        # ROUTE 4: AI Assistant Service — Authenticated, streaming
-        # SSE streaming support — NO response buffering
-        # Per-hour rate limit (AI calls are expensive)
-        # ──────────────────────────────────────────────────────
         - id: nexus-ai-assistant-service
           uri: lb://nexus-ai-assistant-service
           predicates:
-            - Path=/ai/**
+            - Path=/api/v1/ai/**
+          metadata:
+            response-timeout: 120000
+            connect-timeout: 5000
           filters:
             - name: JwtAuthentication
-            - StripPrefix=1
             - name: RequestRateLimiter
               args:
-                # FIX: replenishRate: 0 is invalid — RedisRateLimiter.Config enforces
-                #      @Min(1) on replenishRate. A value of 0 throws a validation
-                #      exception at startup. Use 1 (minimum) to allow the burst of 5
-                #      while keeping sustained rate very low (1 req/s).
                 redis-rate-limiter.replenishRate: 1
                 redis-rate-limiter.burstCapacity: 5
                 redis-rate-limiter.requestedTokens: 1
@@ -178,10 +148,37 @@ spring:
                 name: ai-assistant-service
                 fallbackUri: forward:/fallback/ai-assistant
 
-        # ──────────────────────────────────────────────────────
-        # ROUTE 5: Fraud Service — Internal only (IP allowlist)
-        # Not accessible from outside Docker network
-        # ──────────────────────────────────────────────────────
+        - id: nexus-identity-service-users
+          uri: lb://nexus-identity-service
+          predicates:
+            - Path=/api/v1/users/**
+          filters:
+            - name: JwtAuthentication
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 40
+                redis-rate-limiter.requestedTokens: 1
+                key-resolver: "#{@userIdKeyResolver}"
+            - name: CircuitBreaker
+              args:
+                name: identity-service
+                fallbackUri: forward:/fallback/identity
+            - name: RequestSize
+              args:
+                maxSize: 10MB
+
+        - id: nexus-identity-service-internal
+          uri: lb://nexus-identity-service
+          predicates:
+            - Path=/internal/v1/users/**,/internal/v1/health/**
+            - RemoteAddr=172.20.0.0/16
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: identity-service
+                fallbackUri: forward:/fallback/identity
+
         - id: nexus-fraud-service-internal
           uri: lb://nexus-fraud-service
           predicates:
@@ -197,9 +194,6 @@ spring:
               args:
                 maxSize: 50KB
 
-        # ──────────────────────────────────────────────────────
-        # ROUTE 6: Notification Service — Internal only
-        # ──────────────────────────────────────────────────────
         - id: nexus-notification-service-internal
           uri: lb://nexus-notification-service
           predicates:
@@ -212,15 +206,6 @@ spring:
                 name: notification-service
                 fallbackUri: forward:/fallback/generic
 
-        # ──────────────────────────────────────────────────────
-        # ROUTE 7: Ledger Service — Authenticated, cacheable reads
-        # FIX: Removed LocalResponseCache filter — it requires the
-        #      spring-cloud-gateway-server-mvc module or an explicit
-        #      cache provider dependency, neither of which is in your
-        #      pom.xml. Using it without the dependency causes a
-        #      NoSuchFilterException at startup. Cache at the service
-        #      level via Redis instead (already available in your stack).
-        # ──────────────────────────────────────────────────────
         - id: nexus-ledger-service
           uri: lb://nexus-ledger-service
           predicates:
@@ -238,10 +223,6 @@ spring:
                 name: ledger-service
                 fallbackUri: forward:/fallback/ledger
 
-        # ──────────────────────────────────────────────────────
-        # ROUTE 8: Analytics Service — Authenticated, cacheable
-        # FIX: Same as ledger — LocalResponseCache removed.
-        # ──────────────────────────────────────────────────────
         - id: nexus-analytics-service
           uri: lb://nexus-analytics-service
           predicates:
@@ -259,10 +240,6 @@ spring:
                 name: analytics-service
                 fallbackUri: forward:/fallback/analytics
 
-        # ──────────────────────────────────────────────────────
-        # ROUTE 9: Actuator — Internal monitoring only
-        # Prometheus scrapes this. Never exposed externally.
-        # ──────────────────────────────────────────────────────
         - id: actuator-internal
           uri: http://localhost:8080
           predicates:
@@ -270,10 +247,6 @@ spring:
             - RemoteAddr=127.0.0.1,172.20.0.0/16
           filters: []
 
-        # ──────────────────────────────────────────────────────
-        # ROUTE 10: Webhook endpoints — HMAC authentication
-        # Payment network callbacks from AWS plane
-        # ──────────────────────────────────────────────────────
         - id: webhooks-payment
           uri: lb://nexus-transaction-service
           predicates:
@@ -288,13 +261,10 @@ spring:
               args:
                 maxSize: 100KB
 
-  # ════════════════════════════════════════════════════════════
-  # REDIS — Rate limiting + JWT blacklist
-  # ════════════════════════════════════════════════════════════
   data:
     redis:
-      host: ${REDIS_HOST:nexus-redis}
-      port: ${REDIS_PORT:6379}
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
       password: ${REDIS_PASSWORD:}
       timeout: 100ms
       connect-timeout: 500ms
@@ -306,18 +276,12 @@ spring:
           max-wait: 100ms
         shutdown-timeout: 200ms
 
-  # ════════════════════════════════════════════════════════════
-  # KAFKA — Spring Cloud Bus for config refresh broadcast
-  # ════════════════════════════════════════════════════════════
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
     consumer:
       group-id: nexus-api-gateway-bus
       auto-offset-reset: latest
 
-# ══════════════════════════════════════════════════════════════
-# SERVER — Netty configuration
-# ══════════════════════════════════════════════════════════════
 server:
   port: 8080
   netty:
@@ -331,13 +295,10 @@ server:
     mime-types: application/json,text/plain
     min-response-size: 1024
 
-# ══════════════════════════════════════════════════════════════
-# EUREKA — Service discovery client
-# ══════════════════════════════════════════════════════════════
 eureka:
   client:
     service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
     registry-fetch-interval-seconds: 30
     fetch-registry: true
     register-with-eureka: true
@@ -347,9 +308,6 @@ eureka:
     lease-expiration-duration-in-seconds: 90
     health-check-url-path: /actuator/health
 
-# ══════════════════════════════════════════════════════════════
-# RESILIENCE4J — Circuit Breakers per downstream service
-# ══════════════════════════════════════════════════════════════
 resilience4j:
   circuitbreaker:
     configs:
@@ -380,7 +338,7 @@ resilience4j:
       account-service:
         base-config: default
         failure-rate-threshold: 50
-        slow-call-duration-threshold: 2000ms
+        slow-call-duration-threshold: 120000ms
       identity-service:
         base-config: default
         failure-rate-threshold: 60
@@ -429,6 +387,9 @@ resilience4j:
       transaction-service:
         timeout-duration: 10s
         cancel-running-future: true
+      account-service:
+        timeout-duration: 120s
+        cancel-running-future: false
       ai-assistant-service:
         timeout-duration: 120s
         cancel-running-future: false
@@ -436,13 +397,10 @@ resilience4j:
         timeout-duration: 10s
         cancel-running-future: true
 
-# ══════════════════════════════════════════════════════════════
-# JWT CONFIGURATION
-# ══════════════════════════════════════════════════════════════
 nexus:
   gateway:
     jwt:
-      jwks-uri: ${JWT_JWKS_URI:http://nexus-identity-service:8083/api/v1/auth/.well-known/jwks.json}
+      jwks-uri: ${JWT_JWKS_URI:http://localhost:8083/api/v1/auth/.well-known/jwks.json}
       issuer: ${JWT_ISSUER:nexus-platform}
       audience: nexus-platform
       algorithms:
@@ -462,15 +420,6 @@ nexus:
         allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
     internal-network: 172.20.0.0/16
 
-# ══════════════════════════════════════════════════════════════
-# OBSERVABILITY — Prometheus + Zipkin
-# FIX: `management.metrics.export.prometheus` is the Spring Boot 2.x
-#      path. In Spring Boot 3.x the correct key is
-#      `management.prometheus.metrics.export.enabled`.
-# FIX: `management.endpoints.web.exposure.include` with a multi-line
-#      comma-separated scalar was valid but fragile — converted to a
-#      proper YAML list for clarity and parser safety.
-# ══════════════════════════════════════════════════════════════
 management:
   endpoints:
     web:
@@ -513,7 +462,7 @@ management:
       probability: ${TRACING_SAMPLE_RATE:1.0}
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
 
 logging:
   level:
@@ -521,5 +470,3 @@ logging:
     org.springframework.cloud.gateway: INFO
     org.springframework.security: WARN
     io.github.resilience4j: INFO
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level traceId=%X{traceId} spanId=%X{spanId} service=nexus-api-gateway %logger{36} - %msg%n"

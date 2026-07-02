@@ -1,0 +1,48 @@
+# samconfig.toml — missing from repo, created from scratch
+#
+# KafkaBridgeMode controls how this Lambda publishes to Plane A Kafka:
+#   HTTP  — calls nexus-api-gateway /internal/v1/bridge/publish (default)
+#            Works from any network; no VPC required.
+#   MSK   — publishes directly to Amazon MSK (requires Lambda in VPC)
+#            Lower latency; production recommendation if MSK is available.
+#
+# No SnapStart: SQS-triggered batch processing is latency-tolerant
+# (cold starts happen rarely during low-volume periods — see handler.java).
+
+version = 0.1
+
+[default.build.parameters]
+use_container = false
+
+[default.deploy.parameters]
+stack_name = "nexus-payment-processor-dev"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-dev"
+s3_prefix = "nexus-payment-processor-lambda"
+parameter_overrides = "KafkaBridgeMode=HTTP KafkaBridgeHttpUrl=http://host.docker.internal:8080 MskBootstrapServers="
+
+[staging.deploy.parameters]
+stack_name = "nexus-payment-processor-staging"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-staging"
+s3_prefix = "nexus-payment-processor-lambda"
+parameter_overrides = "KafkaBridgeMode=HTTP KafkaBridgeHttpUrl=http://nexus-api-gateway.staging.internal:8080 MskBootstrapServers="
+
+[prod.deploy.parameters]
+stack_name = "nexus-payment-processor-prod"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-prod"
+s3_prefix = "nexus-payment-processor-lambda"
+# Switch to MSK in production for lower latency:
+#   KafkaBridgeMode=MSK
+#   MskBootstrapServers=b-1.nexus.kafka.us-east-1.amazonaws.com:9092,...
+parameter_overrides = "KafkaBridgeMode=HTTP KafkaBridgeHttpUrl=http://nexus-api-gateway.prod.internal:8080 MskBootstrapServers="

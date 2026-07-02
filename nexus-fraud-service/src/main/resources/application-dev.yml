@@ -1,0 +1,56 @@
+spring:
+  cloud:
+    config:
+      enabled: false
+
+  datasource:
+    url: jdbc:postgresql://localhost:5433/nexus_fraud
+    username: nexus
+    password: nexus_dev_password
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 2
+
+  jpa:
+    show-sql: true
+    hibernate:
+      ddl-auto: validate
+
+  flyway:
+    baseline-on-migrate: true
+
+  data:
+    redis:
+      host: localhost
+      port: 6381
+      password: ""
+
+  kafka:
+    bootstrap-servers: localhost:19092
+    consumer:
+      group-id: fraud-service-saga-commands-dev
+
+  ai:
+    vectorstore:
+      pgvector:
+        initialize-schema: true
+
+  elasticsearch:
+    uris: http://localhost:9201
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9412/api/v2/spans
+
+logging:
+  level:
+    com.nexus.fraud: DEBUG
+    com.nexus.fraud.agent: DEBUG
+    org.springframework.ai: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.flywaydb: DEBUG
+    org.springframework.data.elasticsearch: DEBUG

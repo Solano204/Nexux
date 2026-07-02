@@ -1,0 +1,26 @@
+<!-- kyc-rejected.html -->
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{_layout :: layout(~{::body-content})}">
+<head><title>Verificación no aprobada</title></head>
+<body>
+<th:block th:fragment="body-content">
+    <p style="font-size:20px;font-weight:700;color:#dc2626;">
+        ⚠️ Tu verificación de identidad no fue aprobada
+    </p>
+    <p th:text="'Hola ' + ${userName ?: 'usuario'} + ', lamentamos informarte que no pudimos verificar tu identidad.'">
+        No pudimos verificar tu identidad.
+    </p>
+    <div style="background:#fef2f2;border-left:4px solid #dc2626;padding:12px 16px;margin:16px 0;">
+        <p style="margin:0;font-weight:600;">Motivo:</p>
+        <p style="margin:4px 0 0 0;"
+           th:text="${rejectionReason ?: 'El documento proporcionado no cumple con los requisitos mínimos.'}">
+            Documento no válido.
+        </p>
+    </div>
+    <p>Puedes intentar nuevamente subiendo una foto más clara de tu identificación oficial vigente (INE, pasaporte o licencia de conducir).</p>
+    <p style="color:#6b7280;font-size:13px;"
+       th:text="'Intento ' + ${attemptNumber ?: '1'} + ' de 3'">Intento 1 de 3</p>
+</th:block>
+</body>
+</html>

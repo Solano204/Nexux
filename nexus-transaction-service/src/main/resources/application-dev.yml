@@ -1,0 +1,84 @@
+spring:
+  cloud:
+    config:
+      enabled: false
+
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    url: jdbc:postgresql://localhost:5433/nexus_transactions
+    username: nexus
+    password: nexus_dev_password
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      data-source-properties:
+        lock_timeout: 30000
+        application_name: nexus-transaction-service-dev
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+  elasticsearch:
+    uris: http://localhost:9201
+    connection-timeout: 10s
+    socket-timeout: 60s
+
+  kafka:
+    bootstrap-servers: localhost:19092
+    producer:
+      acks: all
+      enable-idempotence: true
+    consumer:
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+    streams:
+      application-id: nexus-transaction-streams-dev
+      bootstrap-servers: localhost:19092
+      properties:
+        state.dir: /tmp/kafka-streams-state-dev
+        processing.guarantee: at_least_once
+        commit.interval.ms: 1000
+
+server:
+  port: 8086
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9412/api/v2/spans
+
+logging:
+  level:
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
+    org.hibernate.SQL: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN
+

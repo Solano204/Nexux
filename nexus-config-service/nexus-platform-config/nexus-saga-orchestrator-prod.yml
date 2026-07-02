@@ -1,0 +1,10 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:nexus-postgres}:5432/nexus_saga
+    username: ${POSTGRES_USER:nexus}
+    password: ${POSTGRES_PASSWORD}
+    hikari:
+      max-lifetime: 600000
+      keepalive-time: 30000
+      connection-timeout: 30000
+      idle-timeout: 300000

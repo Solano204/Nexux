@@ -1,6 +1,7 @@
 package com.nexus.analytics.streams.aggregate;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Getter;
 
@@ -113,6 +114,7 @@ public class CategorySpendingAggregate {
         );
     }
 
+    @JsonIgnore
     public List<Map.Entry<String, BigDecimal>> getTopMerchantsSorted() {
         return merchantBreakdown.entrySet().stream()
                 .sorted(Map.Entry.<String, BigDecimal>comparingByValue()

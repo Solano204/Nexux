@@ -56,7 +56,7 @@ public class AnalyticsTopology {
             "user-daily-spending-store";
 
     @Bean
-    public Topology analyticsTopology(StreamsBuilder builder) {
+    public Topology buildAnalyticsTopology(StreamsBuilder builder) {
 
         // ── Serdes ────────────────────────────────────────────
         JsonSerde<TransactionEvent> txSerde =
@@ -73,7 +73,12 @@ public class AnalyticsTopology {
         KStream<String, TransactionEvent> txStream =
                 builder.stream(
                         "transactions.completed",
-                        Consumed.with(Serdes.String(), txSerde));
+                        Consumed.with(Serdes.String(), txSerde))
+                        .peek((key, tx) -> {
+                            if (tx != null) log.info("Analytics received: txId={} userId={} amount={} type={}",
+                                    tx.transactionId(), tx.sourceUserId(), tx.amount(), tx.transactionType());
+                            else log.warn("Analytics received null TransactionEvent for key={}", key);
+                        });
 
         // ═══════════════════════════════════════════════════════
         // TOPOLOGY A — Spending by Category (Daily, User-Level)

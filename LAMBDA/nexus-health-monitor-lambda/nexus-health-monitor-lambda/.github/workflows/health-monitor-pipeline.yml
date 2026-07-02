@@ -1,0 +1,262 @@
+# .github/workflows/health-monitor-pipeline.yml
+#
+# Improved from original:
+#   - Added staging deploy before production
+#   - Uses samconfig.toml (--config-env) instead of inline parameters
+#   - Passes LocalPlaneBaseUrl via secret rather than hardcoded
+#   - Added PR trigger
+#   - Kept all existing design-invariant verify steps (they're excellent)
+
+name: Nexus Health Monitor Lambda Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'nexus-health-monitor-lambda/**'
+      - '.github/workflows/health-monitor-pipeline.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'nexus-health-monitor-lambda/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.12'
+  AWS_REGION: us-east-1
+
+jobs:
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 1: LINT + UNIT TESTS
+  # ════════════════════════════════════════════════════════════
+  test:
+    name: Lint + Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-health-monitor-lambda
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov ruff mypy
+
+      - name: Lint
+        run: ruff check src/ tests/
+
+      - name: Unit tests
+        env:
+          LOCAL_PLANE_BASE_URL: http://localhost
+          PLANE_BRIDGE_SECRET: test-secret
+          CRITICAL_ALERT_TOPIC_ARN: arn:aws:sns:us-east-1:000000:test
+          STANDARD_ALERT_TOPIC_ARN: arn:aws:sns:us-east-1:000000:test
+          CLOUDWATCH_NAMESPACE: Test/HealthMonitor
+          CONSECUTIVE_FAILURES_THRESHOLD: "2"
+          HEALTH_CHECK_TIMEOUT_SECONDS: "5"
+          PARALLEL_CHECKS: "false"
+          MAX_WORKERS: "1"
+          ENVIRONMENT: test
+          AWS_REGION_NAME: us-east-1
+        run: |
+          pytest tests/unit/ \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-fail-under=70 \
+            -v
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 2: DESIGN INVARIANT CHECKS
+  # Preserved from original — these are excellent checks
+  # ════════════════════════════════════════════════════════════
+  verify-design:
+    name: Verify Design Invariants
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-health-monitor-lambda
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify retries=False on HTTP client
+        run: |
+          grep -q "retries=False" src/checks/health_checker.py && \
+            echo "✓ retries=False confirmed (fail fast)" || \
+            (echo "✗ Health checker must use retries=False" && exit 1)
+
+      - name: Verify parallel execution uses ThreadPoolExecutor
+        run: |
+          grep -q "ThreadPoolExecutor" src/checks/health_checker.py && \
+            echo "✓ Parallel checks via ThreadPoolExecutor" || \
+            (echo "✗ Missing parallel execution" && exit 1)
+
+      - name: Verify all 15 services registered
+        run: |
+          COUNT=$(grep -c '"name":' src/registry/service_registry.py)
+          echo "Service count in registry: $COUNT"
+          [ "$COUNT" -ge 15 ] && \
+            echo "✓ All 15 services registered" || \
+            (echo "✗ Expected >= 15 services, found $COUNT" && exit 1)
+
+      - name: Verify DEGRADED detection (slow response)
+        run: |
+          grep -q "DEGRADED" src/checks/response_parser.py && \
+            grep -q "SLOW_RESPONSE" src/checks/response_parser.py && \
+            echo "✓ DEGRADED status detection present" || \
+            (echo "✗ Missing DEGRADED / SLOW_RESPONSE detection" && exit 1)
+
+      - name: Verify recovery notifications exist
+        run: |
+          grep -q "RECOVERY" src/alerting/message_builder.py && \
+            echo "✓ Recovery notifications implemented" || \
+            (echo "✗ Missing recovery notification logic" && exit 1)
+
+      - name: Verify monitor-the-monitor alarm in template
+        run: |
+          grep -q "HealthMonitorLambdaErrors" template.yaml && \
+            echo "✓ Self-watch alarm configured" || \
+            (echo "✗ Missing HealthMonitorLambdaErrors alarm" && exit 1)
+
+      - name: Check for dead duplicate modules (BUGS.md Issue 1 + 2)
+        run: |
+          if [ -d "src/response" ]; then
+            echo "⚠  src/response/ exists — dead duplicate modules (see BUGS.md)"
+          else
+            echo "✓ src/response/ removed"
+          fi
+          if [ -d "src/service" ]; then
+            echo "⚠  src/service/ exists — dead duplicate utilities (see BUGS.md)"
+          else
+            echo "✓ src/service/ removed"
+          fi
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 3: SAM VALIDATE
+  # ════════════════════════════════════════════════════════════
+  validate-sam:
+    name: Validate SAM Template
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-health-monitor-lambda
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - run: sam validate --template template.yaml --lint
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 4: SAM BUILD + ARTIFACT
+  # ════════════════════════════════════════════════════════════
+  sam-build:
+    name: SAM Build
+    needs: [verify-design, validate-sam]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-health-monitor-lambda
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - run: sam build --template template.yaml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sam-build-health-monitor-${{ github.sha }}
+          path: nexus-health-monitor-lambda/.aws-sam/
+          retention-days: 7
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 5: DEPLOY TO STAGING
+  # ════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy to Staging
+    needs: sam-build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: staging
+    defaults:
+      run:
+        working-directory: nexus-health-monitor-lambda
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: sam-build-health-monitor-${{ github.sha }}
+          path: nexus-health-monitor-lambda/.aws-sam/
+      - name: SAM Deploy to Staging
+        run: |
+          sam deploy \
+            --config-env staging \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --resolve-s3 \
+            --parameter-overrides \
+              "LocalPlaneBaseUrl=${{ secrets.LOCAL_PLANE_BASE_URL_STAGING }}"
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 6: DEPLOY TO PRODUCTION
+  # ════════════════════════════════════════════════════════════
+  deploy-prod:
+    name: Deploy to Production
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: aws-prod
+    defaults:
+      run:
+        working-directory: nexus-health-monitor-lambda
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: sam-build-health-monitor-${{ github.sha }}
+          path: nexus-health-monitor-lambda/.aws-sam/
+      - name: SAM Deploy to Production
+        run: |
+          sam deploy \
+            --config-env prod \
+            --no-fail-on-empty-changeset \
+            --resolve-s3 \
+            --parameter-overrides \
+              "LocalPlaneBaseUrl=${{ secrets.LOCAL_PLANE_BASE_URL_PROD }}"
+      - name: Verify scheduler is enabled
+        run: |
+          STATUS=$(aws events describe-rule \
+            --name "nexus-health-monitor-lambda-HealthCheckSchedule-*" \
+            --query 'State' --output text 2>/dev/null || echo "UNKNOWN")
+          echo "EventBridge rule state: $STATUS"
+          [ "$STATUS" = "ENABLED" ] && \
+            echo "✓ Health check schedule active" || \
+            echo "⚠ Schedule state: $STATUS"

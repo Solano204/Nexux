@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5433/nexus_identity
+    username: nexus
+    password: nexus_dev_password
+  data:
+    redis:
+      host: localhost
+      port: 6380
+      password: ""
+  kafka:
+    bootstrap-servers: localhost:19092

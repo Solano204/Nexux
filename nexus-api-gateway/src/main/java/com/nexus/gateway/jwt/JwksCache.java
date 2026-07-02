@@ -87,16 +87,18 @@ public class JwksCache {
      */
     public RSAPublicKey getPublicKey(String kid) {
         RSAPublicKey key = keyRing.get(kid);
-        if (key != null) {
-            return key;
+        if (key != null) return key;
+
+        log.info("Kid {} not in cache, fetching directly from JWKS", kid);
+        try {
+            Jwk jwk = jwkProvider.get(kid);
+            RSAPublicKey fetched = (RSAPublicKey) jwk.getPublicKey();
+            keyRing.put(kid, fetched);
+            return fetched;
+        } catch (Exception e) {
+            log.warn("Could not fetch key for kid {}: {}", kid, e.getMessage());
+            return null;
         }
-
-        // Kid not in cache — may be a new key after rotation
-        // Attempt immediate refresh
-        log.info("Kid {} not in cache, attempting refresh", kid);
-        refreshKeys();
-
-        return keyRing.get(kid);
     }
 
     @Scheduled(fixedDelayString = "${nexus.gateway.jwt.refresh-interval-minutes:60}",
@@ -151,14 +153,30 @@ public class JwksCache {
     }
 
     private List<String> fetchAvailableKids() {
-        // In production: parse the JWKS document directly to get all kids.
-        // For now: use a known kid from environment or fetch the live document.
         try {
-            // Trigger a fetch of the live JWKS document to get current kids.
-            // The JwkProvider internally parses the JWKS JSON.
-            return List.of();
+            java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient();
+            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
+                    .uri(URI.create(jwksUri))
+                    .timeout(java.time.Duration.ofSeconds(5))
+                    .GET()
+                    .build();
+            String body = http.send(request,
+                    java.net.http.HttpResponse.BodyHandlers.ofString()).body();
+
+            com.fasterxml.jackson.databind.ObjectMapper mapper =
+                    new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode keys =
+                    mapper.readTree(body).path("keys");
+
+            List<String> kids = new java.util.ArrayList<>();
+            for (com.fasterxml.jackson.databind.JsonNode key : keys) {
+                String kid = key.path("kid").asText(null);
+                if (kid != null) kids.add(kid);
+            }
+            log.debug("Fetched {} kids from JWKS: {}", kids.size(), kids);
+            return kids;
         } catch (Exception e) {
-            log.warn("Could not fetch kid list: {}", e.getMessage());
+            log.warn("Could not fetch kid list from {}: {}", jwksUri, e.getMessage());
             return List.of();
         }
     }

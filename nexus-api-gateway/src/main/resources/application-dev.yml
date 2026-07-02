@@ -1,36 +1,36 @@
-# ══════════════════════════════════════════════════════════════
-# nexus-api-gateway — DEV profile
-# Active when: SPRING_PROFILES_ACTIVE=dev  (local IDE/mvn run)
-# Purpose: override Docker-centric defaults for local development
-# WITHOUT Docker Compose. Services called directly on localhost.
-# ══════════════════════════════════════════════════════════════
-
 spring:
-  # Disable Cloud Config fetching in dev — use local application.yml
   cloud:
     config:
       enabled: false
       fail-fast: false
 
-    # Disable Cloud Bus (no Kafka needed in dev)
     bus:
       enabled: false
 
     gateway:
-      # Dev route overrides: point to localhost ports
-      # (same ports as Docker Compose but reachable without Docker network)
       routes:
         - id: nexus-identity-service-public
-          uri: http://localhost:8083
+          uri: http://localhost:8010
           predicates:
             - Path=/api/v1/auth/**
           filters:
             - name: RequestRateLimiter
               args:
-                redis-rate-limiter.replenishRate: 100  # Very lenient in dev
+                redis-rate-limiter.replenishRate: 100
                 redis-rate-limiter.burstCapacity: 1000
                 redis-rate-limiter.requestedTokens: 1
                 key-resolver: "#{@ipKeyResolver}"
+            - name: CircuitBreaker
+              args:
+                name: identity-service
+                fallbackUri: forward:/fallback/identity
+
+        - id: nexus-identity-service-users
+          uri: http://localhost:8010
+          predicates:
+            - Path=/api/v1/users/**
+          filters:
+            - name: JwtAuthentication
             - name: CircuitBreaker
               args:
                 name: identity-service
@@ -61,14 +61,23 @@ spring:
         - id: nexus-ai-assistant-service
           uri: http://localhost:8090
           predicates:
-            - Path=/ai/**
+            - Path=/api/v1/ai/**
           filters:
             - name: JwtAuthentication
-            - StripPrefix=1
             - name: CircuitBreaker
               args:
                 name: ai-assistant-service
                 fallbackUri: forward:/fallback/ai-assistant
+
+        - id: nexus-identity-service-internal
+          uri: http://localhost:8010
+          predicates:
+            - Path=/internal/v1/users/**,/internal/v1/health/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: identity-service
+                fallbackUri: forward:/fallback/identity
 
         - id: nexus-fraud-service-internal
           uri: http://localhost:8087
@@ -91,6 +100,17 @@ spring:
               args:
                 name: ledger-service
                 fallbackUri: forward:/fallback/ledger
+
+        - id: nexus-notification-service
+          uri: http://localhost:8089
+          predicates:
+            - Path=/api/v1/notifications/**
+          filters:
+            - name: JwtAuthentication
+            - name: CircuitBreaker
+              args:
+                name: notification-service
+                fallbackUri: forward:/fallback/generic
 
         - id: nexus-analytics-service
           uri: http://localhost:8092
@@ -131,19 +151,16 @@ spring:
             - Path=/actuator/**
           filters: []
 
-  # Redis: use local Redis (same as Docker, assume redis-cli available)
   data:
     redis:
       host: localhost
-      port: 6379
-      password: ""   # No password in dev
+      port: 6380
+      password: ""
       timeout: 500ms
 
-  # Kafka: local broker
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: localhost:19092
 
-# Eureka: use local discovery service
 eureka:
   client:
     service-url:
@@ -153,43 +170,47 @@ eureka:
   instance:
     prefer-ip-address: true
 
-# JWT: JWKS from local identity service
 nexus:
   gateway:
     jwt:
-      jwks-uri: http://localhost:8083/api/v1/auth/.well-known/jwks.json
+      jwks-uri: http://localhost:8010/api/v1/auth/.well-known/jwks.json
       issuer: nexus-platform
     global-rate-limit:
-      requests-per-second: 100000  # Effectively disabled in dev
-      enabled: false               # No global limit in dev
+      requests-per-second: 100000
+      enabled: false
     security:
       cors:
         allowed-origins: "http://localhost:3000,http://localhost:5173,http://localhost:8080"
 
-# Resilience4j: very lenient in dev (don't want CB opening during debugging)
 resilience4j:
   circuitbreaker:
     configs:
       default:
-        minimum-number-of-calls: 100         # Need 100 failures before opening
-        failure-rate-threshold: 90           # 90% failure rate to open
-        wait-duration-in-open-state: 10s     # Only wait 10s in dev
+        minimum-number-of-calls: 100
+        failure-rate-threshold: 90
+        wait-duration-in-open-state: 10s
   timelimiter:
+    configs:
+      default:
+        timeout-duration: 60s
     instances:
       default:
-        timeout-duration: 60s                # Long timeout in dev (debugging)
+        timeout-duration: 60s
+      identity-service:
+        timeout-duration: 60s
       ai-assistant-service:
-        timeout-duration: 300s               # 5 min for LLM in dev
+        timeout-duration: 300s
+      ai-kyc-service:
+        timeout-duration: 300s
 
-# Observability: full tracing in dev, Zipkin optional
 management:
   tracing:
     enabled: true
     sampling:
-      probability: 1.0  # Trace everything in dev
+      probability: 1.0
   zipkin:
     tracing:
-      endpoint: http://localhost:9411/api/v2/spans
+      endpoint: http://localhost:9412/api/v2/spans
 
 logging:
   level:

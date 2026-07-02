@@ -1,0 +1,132 @@
+================================================================
+ NEXUS — nexus-saga-orchestrator — Complete Workflow Test Order
+================================================================
+Port: 8095 | Stack: Spring Boot | DB: PostgreSQL (nexus_saga)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  Orchestrates two sagas:
+  1. OnboardingFlowSaga — triggered by users.registered
+     Steps: KYC → CreateAccounts → WelcomeNotification → COMPLETE
+  2. TransferSaga — triggered by transactions.initiated
+     Steps: ReserveBalance → CheckFraud → PostLedger →
+            FinalizeTransfer → SendNotification → COMPLETE
+
+  THIS IS THE BRAIN. It sends saga.commands to all participant services
+  and waits for saga.replies. Without it, nothing flows automatically.
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-postgres nexus-kafka nexus-zookeeper
+
+  Health check: GET http://localhost:9003 (Kafdrop — verify topics)
+
+================================================================
+ STEP 2 — PLATFORM CORE
+================================================================
+  1. nexus-config-service   :8888
+  2. nexus-discovery-service :8761
+
+================================================================
+ STEP 3 — ALL SAGA PARTICIPANT SERVICES
+================================================================
+The orchestrator is useless without its participants. To see either
+saga complete end-to-end, ALL of these must be running:
+
+  FOR OnboardingFlowSaga:
+  ├── nexus-identity-service    :8083  — produces users.registered
+  │                                      compensates via CancelUserRegistrationCommand
+  ├── nexus-account-service     :8085  — handles CreateAccountsCommand
+  ├── nexus-notification-service :8089 — handles SendWelcomeNotificationCommand
+  └── nexus-ai-kyc-service      :8091  — processes KYC, emits identity.verified/rejected
+
+  FOR TransferSaga:
+  ├── nexus-transaction-service :8086  — produces transactions.initiated
+  │                                      consumes saga.replies (balance, fraud, ledger)
+  ├── nexus-account-service     :8085  — handles ReserveBalance + FinalizeTransfer
+  ├── nexus-fraud-service       :8087  — handles CheckFraudCommand
+  ├── nexus-ledger-service      :8088  — handles PostLedgerCommand
+  └── nexus-notification-service :8089 — handles SendTransactionNotificationCommand
+
+  OPTIONAL — to see the full picture:
+  ├── audit-write-native        :8096  — records saga.completed to Elasticsearch
+  └── nexus-analytics-service   :8092  — processes downstream transaction events
+
+================================================================
+ KAFKA TOPICS THIS SERVICE PARTICIPATES IN
+================================================================
+CONSUMES:
+  users.registered       [group: saga-orchestrator-identity]
+    -> starts OnboardingFlowSaga
+  identity.verified      [group: saga-orchestrator-kyc]
+    -> advances OnboardingFlowSaga: KYC_APPROVED
+  identity.rejected      [group: saga-orchestrator-kyc]
+    -> compensates OnboardingFlowSaga: sends CancelUserRegistrationCommand
+  transactions.initiated [group: saga-orchestrator-transactions]
+    -> starts TransferSaga
+  saga.replies           [group: saga-orchestrator-replies]
+    -> routes to TransferSagaProcessor or OnboardingFlowSagaProcessor:
+       BalanceReservedReply, BalanceReservationFailedReply
+       FraudClearedReply, FraudRejectedReply, FraudReviewReply
+       LedgerPostedReply, LedgerFailedReply
+       BalanceFinalizedReply, BalanceReleasedReply
+       NotificationSentReply
+       AccountsCreatedReply, AccountCreationFailedReply
+       WelcomeNotificationSentReply
+       KycApprovedReply, KycRejectedReply
+
+PRODUCES:
+  saga.commands          -> all participant services filter by targetService
+  saga.completed         -> consumed by audit-write-native
+
+================================================================
+ ONBOARDING SAGA STATE MACHINE
+================================================================
+STARTED
+  -> KYC_INITIATED       (waiting for user to call POST /kyc/initiate)
+  -> KYC_APPROVED        (identity.verified received)
+  -> ACCOUNTS_CREATING   (CreateAccountsCommand sent)
+  -> ACCOUNTS_CREATED    (AccountsCreatedReply received)
+  -> WELCOME_NOTIFICATION_SENT (WelcomeNotificationSentReply received)
+  -> COMPLETED
+
+FAILURE PATH:
+  KYC_REJECTED
+  -> COMPENSATING_REGISTRATION (CancelUserRegistrationCommand sent)
+  -> REGISTRATION_CANCELLED
+
+================================================================
+ TRANSFER SAGA STATE MACHINE
+================================================================
+STARTED
+  -> BALANCE_RESERVED    (BalanceReservedReply received)
+  -> FRAUD_CLEARED       (FraudClearedReply received)
+  -> LEDGER_POSTED       (LedgerPostedReply received)
+  -> BALANCE_FINALIZED   (BalanceFinalizedReply received)
+  -> COMPLETED           (NotificationSentReply received)
+
+FAILURE PATHS:
+  BALANCE_RESERVATION_FAILED -> saga ends (FAILED)
+  FRAUD_REJECTED -> COMPENSATING (ReleaseBalanceCommand sent) -> FAILED
+  LEDGER_FAILED  -> COMPENSATING (ReleaseBalanceCommand sent) -> FAILED
+
+================================================================
+ HOW TO TRIGGER AND OBSERVE BOTH SAGAS
+================================================================
+  1. Start ALL participant services listed above
+  2. In Kafdrop :9003, open "Topics" — you should see all topics
+  3. Trigger OnboardingFlowSaga:
+       POST http://localhost:8083/api/v1/auth/register
+     Watch topic saga.commands → see CreateAccountsCommand
+     Watch topic saga.replies  → see AccountsCreatedReply etc.
+  4. Trigger TransferSaga:
+       POST http://localhost:8086/api/v1/transactions
+     Watch topics in order listed in nexus-transaction-service.txt
+
+  5. Query saga state directly:
+     GET http://localhost:8095/actuator/health
+     (No saga state REST API — state lives in nexus_saga PostgreSQL database)
+     Query DB: SELECT * FROM onboarding_saga_state;
+               SELECT * FROM transfer_saga_state;

@@ -3,10 +3,13 @@ package com.nexus.saga.application.transfer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.saga.application.ai.SagaFailureExplainerService;
+import com.nexus.saga.domain.exception.InvalidSagaStateException;
+import com.nexus.saga.domain.exception.SagaNotFoundException;
 import com.nexus.saga.domain.model.*;
 import com.nexus.saga.domain.model.transfer.*;
 import com.nexus.saga.infrastructure.jpa.*;
 import io.micrometer.core.instrument.*;
+import io.micrometer.core.instrument.Timer;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.tracing.Tracer;
@@ -109,8 +112,8 @@ public class TransferSagaProcessor {
                     .transactionId(transactionId)
                     .sourceAccountId(UUID.fromString(
                             event.path("sourceAccountId").asText()))
-                    .targetAccountId(UUID.fromString(
-                            event.path("targetAccountId").asText()))
+                    .targetAccountId(event.path("targetAccountId").isNull() || event.path("targetAccountId").isMissingNode()
+                            ? null : UUID.fromString(event.path("targetAccountId").asText()))
                     .sourceUserId(UUID.fromString(
                             event.path("userId").asText()))
                     .targetUserId(event.has("targetUserId")
@@ -133,17 +136,25 @@ public class TransferSagaProcessor {
                     .compensationAttempts(0)
                     .build();
 
-            sagaRepository.save(state);
+            state = sagaRepository.save(state);
             sagaStartedCounter.increment();
 
-            // Transition and publish ReserveBalanceCommand
-            transitionAndPublish(state,
-                    TransferStep.BALANCE_RESERVING,
-                    "Initiating balance reservation",
-                    buildReserveBalanceCommand(state));
-
-            scheduleTimeout(state.getSagaId(), "TRANSFER",
-                    "BALANCE_RESERVATION", Duration.ofSeconds(30));
+            if (isDepositType(state)) {
+                // Deposits skip balance reservation and fraud check
+                transitionAndPublish(state,
+                        TransferStep.LEDGER_POSTING,
+                        "Direct deposit — posting to ledger",
+                        buildDepositLedgerCommand(state));
+                scheduleTimeout(state.getSagaId(), "TRANSFER",
+                        "LEDGER_POST", Duration.ofSeconds(30));
+            } else {
+                transitionAndPublish(state,
+                        TransferStep.BALANCE_RESERVING,
+                        "Initiating balance reservation",
+                        buildReserveBalanceCommand(state));
+                scheduleTimeout(state.getSagaId(), "TRANSFER",
+                        "BALANCE_RESERVATION", Duration.ofSeconds(30));
+            }
 
         } catch (DataIntegrityViolationException e) {
             // Duplicate event — already processing this transaction
@@ -166,11 +177,14 @@ public class TransferSagaProcessor {
 
         cancelTimeout(sagaId, "BALANCE_RESERVATION");
 
-        state.setReservationId(UUID.fromString(
-                reply.path("reservationId").asText()));
-        state.setNewAvailableBalance(
-                new BigDecimal(reply.path("newAvailableBalance")
-                        .asText("0")));
+        String reservationIdStr = reply.path("reservationId").asText("");
+        if (!reservationIdStr.isEmpty()) {
+            state.setReservationId(UUID.fromString(reservationIdStr));
+        }
+        JsonNode payload = reply.path("payload");
+        String balanceStr = payload.path("newAvailableBalance").asText(
+                reply.path("newAvailableBalance").asText("0"));
+        state.setNewAvailableBalance(new BigDecimal(balanceStr));
         state.setFundsReserved(true);
 
         transitionAndPublish(state,
@@ -196,7 +210,8 @@ public class TransferSagaProcessor {
 
         cancelTimeout(sagaId, "BALANCE_RESERVATION");
 
-        String reason = reply.path("reason").asText("UNKNOWN");
+        String reason = reply.path("payload").path("reason").asText(
+                reply.path("reason").asText("UNKNOWN"));
 
         SagaFailureContext ctx = SagaFailureContext.builder()
                 .failureType(SagaFailureContext.FailureType.INSUFFICIENT_FUNDS)
@@ -226,7 +241,7 @@ public class TransferSagaProcessor {
                 reply.path("sagaId").asText());
 
         TransferSagaState state = loadAndValidate(
-                sagaId, TransferStep.FRAUD_CHECKING);
+                sagaId, TransferStep.FRAUD_CHECKING, TransferStep.BALANCE_RESERVED);
 
         cancelTimeout(sagaId, "FRAUD_CHECK");
 
@@ -253,7 +268,7 @@ public class TransferSagaProcessor {
                 reply.path("sagaId").asText());
 
         TransferSagaState state = loadAndValidate(
-                sagaId, TransferStep.FRAUD_CHECKING);
+                sagaId, TransferStep.FRAUD_CHECKING, TransferStep.BALANCE_RESERVED);
 
         cancelTimeout(sagaId, "FRAUD_CHECK");
 
@@ -289,8 +304,10 @@ public class TransferSagaProcessor {
 
         cancelTimeout(sagaId, "FRAUD_CHECK");
 
-        state.setReviewId(UUID.fromString(
-                reply.path("reviewId").asText()));
+        String reviewIdStr = reply.path("reviewId").asText("");
+        if (!reviewIdStr.isEmpty()) {
+            state.setReviewId(UUID.fromString(reviewIdStr));
+        }
         state.setReviewPriority(
                 reply.path("reviewPriority").asText("MEDIUM"));
 
@@ -333,10 +350,18 @@ public class TransferSagaProcessor {
                 TransferStep.LEDGER_POSTED, "Ledger posted");
         state.setCurrentStep(TransferStep.LEDGER_POSTED);
 
-        transitionAndPublish(state,
-                TransferStep.BALANCE_FINALIZING,
-                "Ledger posted — finalizing balances",
-                buildFinalizeTransferCommand(state));
+        if (isDepositType(state)) {
+            // Deposits have no reserved balance to finalize — just credit the account
+            transitionAndPublish(state,
+                    TransferStep.BALANCE_FINALIZING,
+                    "Deposit posted to ledger — crediting account",
+                    buildCreditAccountCommand(state));
+        } else {
+            transitionAndPublish(state,
+                    TransferStep.BALANCE_FINALIZING,
+                    "Ledger posted — finalizing balances",
+                    buildFinalizeTransferCommand(state));
+        }
 
         scheduleTimeout(state.getSagaId(), "TRANSFER",
                 "BALANCE_FINALIZE", Duration.ofSeconds(30));
@@ -568,16 +593,21 @@ public class TransferSagaProcessor {
     // ══════════════════════════════════════════════════════════
 
     private TransferSagaState loadAndValidate(UUID sagaId,
-                                              TransferStep expected) {
+                                              TransferStep... expected) {
         TransferSagaState state = sagaRepository
                 .findById(sagaId)
                 .orElseThrow(() ->
                         new SagaNotFoundException(sagaId.toString()));
 
-        if (state.getCurrentStep() != expected) {
+        boolean matches = false;
+        for (TransferStep e : expected) {
+            if (state.getCurrentStep() == e) { matches = true; break; }
+        }
+        if (!matches) {
             log.warn("Unexpected saga state: sagaId={} " +
                             "expected={} actual={}",
-                    sagaId, expected, state.getCurrentStep());
+                    sagaId, java.util.Arrays.toString(expected),
+                    state.getCurrentStep());
 
             if (state.isTerminal()) {
                 throw new InvalidSagaStateException(
@@ -633,13 +663,13 @@ public class TransferSagaProcessor {
     }
 
     private void cancelTimeout(UUID sagaId, String timeoutType) {
-        timeoutRepository
+        List<SagaTimeout> pending = timeoutRepository
                 .findBySagaIdAndTimeoutTypeAndIsCancelledFalse(
-                        sagaId, timeoutType)
-                .ifPresent(t -> {
-                    t.setCancelled(true);
-                    timeoutRepository.save(t);
-                });
+                        sagaId, timeoutType);
+        if (!pending.isEmpty()) {
+            pending.forEach(t -> t.setCancelled(true));
+            timeoutRepository.saveAll(pending);
+        }
     }
 
     private String getTraceId() {
@@ -708,7 +738,8 @@ public class TransferSagaProcessor {
                         "targetAccountId", state.getTargetAccountId().toString(),
                         "amount", state.getAmount().toPlainString(),
                         "currency", state.getCurrency(),
-                        "reservationId", state.getReservationId().toString()));
+                        "reservationId", state.getReservationId() != null
+                                ? state.getReservationId().toString() : ""));
     }
 
     private Map<String, Object> buildReleaseBalanceCommand(
@@ -729,15 +760,51 @@ public class TransferSagaProcessor {
 
     private Map<String, Object> buildSendNotificationCommand(
             TransferSagaState state) {
+        Map<String, Object> payload = new java.util.HashMap<>();
+        payload.put("transactionId", state.getTransactionId().toString());
+        payload.put("sourceUserId", state.getSourceUserId().toString());
+        payload.put("amount", state.getAmount().toPlainString());
+        payload.put("currency", state.getCurrency());
+        if (state.getTargetUserId() != null) {
+            payload.put("targetUserId", state.getTargetUserId().toString());
+        }
         return Map.of(
                 "commandType", "SendTransactionNotificationCommand",
                 "targetService", "nexus-notification-service",
                 "sagaId", state.getSagaId().toString(),
+                "payload", payload);
+    }
+
+    private boolean isDepositType(TransferSagaState state) {
+        String type = state.getTransactionType();
+        return "DIRECT_DEPOSIT".equals(type) || "CASH_IN".equals(type);
+    }
+
+    private Map<String, Object> buildDepositLedgerCommand(
+            TransferSagaState state) {
+        return Map.of(
+                "commandType", "PostLedgerCommand",
+                "targetService", "nexus-ledger-service",
+                "sagaId", state.getSagaId().toString(),
                 "payload", Map.of(
                         "transactionId", state.getTransactionId().toString(),
-                        "sourceUserId", state.getSourceUserId().toString(),
-                        "targetUserId", state.getTargetUserId() != null
-                                ? state.getTargetUserId().toString() : "",
+                        "targetAccountId", state.getSourceAccountId().toString(),
+                        "amount", state.getAmount().toPlainString(),
+                        "currency", state.getCurrency(),
+                        "postingType", state.getTransactionType(),
+                        "description", state.getDescription() != null
+                                ? state.getDescription() : "Direct Deposit"));
+    }
+
+    private Map<String, Object> buildCreditAccountCommand(
+            TransferSagaState state) {
+        return Map.of(
+                "commandType", "CreditAccountCommand",
+                "targetService", "nexus-account-service",
+                "sagaId", state.getSagaId().toString(),
+                "payload", Map.of(
+                        "transactionId", state.getTransactionId().toString(),
+                        "accountId", state.getSourceAccountId().toString(),
                         "amount", state.getAmount().toPlainString(),
                         "currency", state.getCurrency()));
     }

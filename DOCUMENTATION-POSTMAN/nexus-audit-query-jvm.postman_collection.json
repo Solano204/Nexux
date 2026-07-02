@@ -1,0 +1,189 @@
+{
+  "info": {
+    "name": "NEXUS - Audit Query Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Elasticsearch-backed audit log query service. Provides event search, transaction traces, AI-powered compliance queries (natural language), alerts, and compliance reports. Compliance endpoints require COMPLIANCE_OFFICER or ADMIN role. Port: 8097"
+  },
+  "item": [
+    {
+      "name": "Audit Events",
+      "item": [
+        {
+          "name": "Get User Events (Paginated)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/audit/users/{{userId}}/events?page=0&size=50&startDate=2026-06-01&endDate=2026-06-15",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "audit", "users", "{{userId}}", "events"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001" }
+              ],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "50" },
+                { "key": "startDate", "value": "2026-06-01", "description": "ISO date (optional)" },
+                { "key": "endDate", "value": "2026-06-15", "description": "ISO date (optional)" },
+                { "key": "severity", "value": "INFO", "description": "INFO | WARNING | CRITICAL (optional)" }
+              ]
+            },
+            "description": "Paginated list of audit events for a user from Elasticsearch.\n\nResponse 200: Paginated audit events [{ eventId, userId, eventType, sourceService, severity, timestamp, metadata, traceId }]"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Transaction Trace (Cross-Service)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/audit/transactions/{{transactionId}}/trace",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "audit", "transactions", "{{transactionId}}", "trace"],
+              "variable": [
+                { "key": "transactionId", "value": "550e8400-e29b-41d4-a716-446655440099" }
+              ]
+            },
+            "description": "Cross-service audit trace for a single transaction ID. Shows every service's audit event in chronological order.\n\nResponse 200: List of audit events across all services for the transaction"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Platform Statistics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/audit/platform/statistics",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "audit", "platform", "statistics"]
+            },
+            "description": "Platform-wide audit event statistics.\n\nResponse 200: { totalAuditEvents: long, status: 'OPERATIONAL' }"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Compliance (COMPLIANCE_OFFICER role required)",
+      "item": [
+        {
+          "name": "Natural Language Compliance Query (AI)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User-Id", "value": "{{complianceOfficerId}}", "description": "Compliance officer user ID" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "description": "JWT with COMPLIANCE_OFFICER role" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"naturalLanguageQuery\": \"Show all large transactions above $50,000 MXN in the past 30 days for this user and identify any suspicious patterns\",\n  \"targetUserId\": \"550e8400-e29b-41d4-a716-446655440001\",\n  \"startDate\": \"2026-05-15\",\n  \"endDate\": \"2026-06-15\",\n  \"queryType\": \"SUSPICIOUS_ACTIVITY\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/audit/compliance/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "audit", "compliance", "query"]
+            },
+            "description": "AI-powered compliance investigation via natural language. Searches Elasticsearch and generates cited analysis.\n\nRequires role: COMPLIANCE_OFFICER\n\nRequest: ComplianceQueryRequest {\n  naturalLanguageQuery: String (required),\n  targetUserId: String (optional),\n  startDate: LocalDate (ISO date, default: 30 days ago),\n  endDate: LocalDate (ISO date, default: today),\n  queryType: SUSPICIOUS_ACTIVITY | AML | FRAUD_INVESTIGATION | GENERAL_AUDIT\n}\n\nResponse 200: ComplianceQueryResult {\n  queryId: String,\n  summary: String (AI analysis),\n  overallRisk: String (CLEAN | LOW | MEDIUM | HIGH | CRITICAL),\n  patterns: [{ patternType, description, evidenceEventIds, riskContribution, regulatorySignificance }],\n  keyEvents: [{ eventId, eventType, timestamp, sourceService, summary, citationReason, traceId }],\n  recommendations: List<String>,\n  sarRecommended: boolean,\n  sarJustification: String,\n  edsRecommended: boolean,\n  regulatoryReferences: List<String>,\n  queriedAt: Instant,\n  queriedBy: String\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Get User Audit Timeline",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "description": "JWT with COMPLIANCE_OFFICER or ADMIN role" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/audit/users/{{userId}}/timeline?page=0&size=50&startDate=2026-06-01&endDate=2026-06-15",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "audit", "users", "{{userId}}", "timeline"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001" }
+              ],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "50" },
+                { "key": "startDate", "value": "2026-06-01", "description": "ISO date (optional)" },
+                { "key": "endDate", "value": "2026-06-15", "description": "ISO date (optional)" }
+              ]
+            },
+            "description": "Chronological audit trail for a user. Requires COMPLIANCE_OFFICER or ADMIN role.\n\nResponse 200: Paginated audit events sorted by timestamp ascending."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Transaction Trace (Compliance)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/audit/transactions/{{transactionId}}/trace",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "audit", "transactions", "{{transactionId}}", "trace"],
+              "variable": [
+                { "key": "transactionId", "value": "550e8400-e29b-41d4-a716-446655440099" }
+              ]
+            },
+            "description": "Full cross-service transaction trace. Requires COMPLIANCE_OFFICER or ADMIN role.\n\nResponse 200: Ordered list of audit events from all microservices for this transaction"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Active Compliance Alerts",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/audit/compliance/alerts?severity=WARNING,CRITICAL&page=0&size=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "audit", "compliance", "alerts"],
+              "query": [
+                { "key": "severity", "value": "WARNING,CRITICAL", "description": "Comma-separated: INFO | WARNING | CRITICAL" },
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" }
+              ]
+            },
+            "description": "Active compliance alerts pending review. Requires COMPLIANCE_OFFICER role.\n\nResponse 200: Paginated list of compliance alerts"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Compliance Reports",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/audit/compliance/reports?page=0&size=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "audit", "compliance", "reports"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" }
+              ]
+            },
+            "description": "Paginated list of compliance reports from MongoDB. Requires COMPLIANCE_OFFICER role.\n\nResponse 200: Page<ComplianceReport>"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8097", "type": "string" },
+    { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001", "type": "string" },
+    { "key": "transactionId", "value": "550e8400-e29b-41d4-a716-446655440099", "type": "string" },
+    { "key": "complianceOfficerId", "value": "550e8400-e29b-41d4-a716-446655440010", "type": "string" },
+    { "key": "accessToken", "value": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...", "type": "string" }
+  ]
+}

@@ -1,11 +1,53 @@
 # nexus-platform-config/application-dev.yml
 # Overrides application.yml for ALL services when profile=dev
+# ── LOCAL DEV OVERRIDES ───────────────────────────────────────
+# Replaces all Docker hostnames with localhost
+# Uses your actual local passwords
 
+spring:
+  # ── Kafka → localhost ─────────────────────────────────────
+  kafka:
+    bootstrap-servers: localhost:19092
+
+  # ── JPA dev settings ─────────────────────────────────────
+  jpa:
+    show-sql: false
+    hibernate:
+      ddl-auto: validate
+
+  # ── Redis → localhost ─────────────────────────────────────
+  data:
+    redis:
+      host: localhost
+      port: 6380
+      password: ""
+
+  # ── Elasticsearch → localhost ───────────────────────────
+  elasticsearch:
+    uris: http://localhost:9201
+
+
+
+# ── Eureka → localhost ───────────────────────────────────────
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+
+# ── Zipkin → localhost ───────────────────────────────────────
 management:
   tracing:
     sampling:
-      probability: 1.0              # trace everything in dev
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9412/api/v2/spans
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,refresh
 
+# ── Logging ──────────────────────────────────────────────────
 logging:
   level:
     root: INFO
@@ -13,12 +55,6 @@ logging:
     org.springframework.ai: DEBUG
     org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor: DEBUG
     org.springframework.cloud.config: DEBUG
-
-spring:
-  jpa:
-    show-sql: false                 # flip to true when debugging SQL
-    hibernate:
-      ddl-auto: update             # allow auto-update in dev (never in prod)
 
 nexus:
   features:
@@ -29,14 +65,14 @@ nexus:
 
   fraud:
     thresholds:
-      approve-below: 40             # slightly more lenient for dev testing
+      approve-below: 40
     velocity:
-      max-transactions-5min: 100    # relaxed for load testing
+      max-transactions-5min: 100
       max-amount-5min: 100000
 
   transaction:
     rate-limit:
-      max-per-user-per-minute: 200  # relaxed for dev testing
+      max-per-user-per-minute: 200
     large-transaction-threshold: 50000
 
   ai:
@@ -45,7 +81,6 @@ nexus:
         max-messages-per-day: 1000
         max-tokens-per-hour: 500000
 
-# ── Swagger UI: enabled in dev, disabled in prod ─────────────
 springdoc:
   swagger-ui:
     enabled: true

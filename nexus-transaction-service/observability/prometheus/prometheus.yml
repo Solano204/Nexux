@@ -1,0 +1,32 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: local-docker
+    platform: nexus-financial
+
+scrape_configs:
+  - job_name: nexus-transaction-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-transaction-service:8086]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: service
+        replacement: nexus-transaction-service
+
+  # Elasticsearch built-in metrics endpoint
+  - job_name: nexus-elasticsearch
+    metrics_path: /_prometheus/metrics
+    static_configs:
+      - targets: [nexus-elasticsearch:9200]
+
+  - job_name: nexus-config-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-config-service:8888]
+
+  - job_name: nexus-discovery-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-discovery-service:8761]

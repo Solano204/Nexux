@@ -1,0 +1,99 @@
+spring:
+  application:
+    name: nexus-audit-query-jvm
+
+  config:
+    import: "optional:configserver:"
+
+  cloud:
+    config:
+      uri: ${CONFIG_SERVER_URI:http://localhost:8888}
+      fail-fast: false
+      retry:
+        max-attempts: 3
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
+
+  threads:
+    virtual:
+      enabled: true
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
+    consumer:
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      enable-auto-commit: false
+    listener:
+      ack-mode: manual
+      missing-topics-fatal: false
+
+  datasource:
+    url: ${DATASOURCE_URL:jdbc:postgresql://localhost:5433/nexus_audit}
+    username: ${POSTGRES_USER:nexus}
+    password: ${POSTGRES_PASSWORD:nexus_dev_password}
+    hikari:
+      maximum-pool-size: 20
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+
+  elasticsearch:
+    uris: ${ELASTICSEARCH_URIS:http://localhost:9201}
+
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev_password@localhost:27018/nexus_audit?authSource=admin}
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.1
+
+  ai.vectorstore.pgvector:
+    initialize-schema: false
+    index-type: HNSW
+    distance-type: COSINE_DISTANCE
+    dimensions: 1536
+
+server:
+  port: 8097
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 30
+    lease-expiration-duration-in-seconds: 90
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
+
+logging:
+  level:
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
+    org.hibernate.SQL: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN

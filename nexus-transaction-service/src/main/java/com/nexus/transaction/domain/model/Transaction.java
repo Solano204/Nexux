@@ -83,14 +83,14 @@ public class Transaction {
     @Column(nullable = false)
     private TransactionStatus status;
 
-    @Column(name = "fraud_score", precision = 5, scale = 4)
+    @Column(name = "fraud_score", precision = 5, scale = 2)
     private BigDecimal fraudScore;
 
     @Column(name = "fraud_decision", length = 20)
     private String fraudDecision;
 
     @Type(ListArrayType.class)
-    @Column(name = "fraud_reasons", columnDefinition = "text[]")
+    @Column(name = "fraud_reasons", columnDefinition = "_text")  // ← _text, no text[]
     private List<String> fraudReasons;
 
     @Column(name = "fraud_checked_at")
@@ -105,7 +105,7 @@ public class Transaction {
     @Column(name = "saga_step", length = 50)
     private String sagaStep;
 
-    @Column(name = "ip_address")
+    @Column(name = "ip_address", columnDefinition = "inet")
     private String ipAddress;
 
     @Column(name = "device_fingerprint")
@@ -250,13 +250,16 @@ public class Transaction {
 
     private static boolean isValidTransition(TransactionStatus from, TransactionStatus to) {
         return switch (from) {
-            case INITIATED -> to == TransactionStatus.FRAUD_CHECKING || to == TransactionStatus.CANCELLED;
-            case FRAUD_CHECKING -> to == TransactionStatus.FRAUD_CLEARED || to == TransactionStatus.FRAUD_REJECTED;
-            case FRAUD_CLEARED -> to == TransactionStatus.BALANCE_RESERVING;
+            // balance-first saga order: INITIATED → BALANCE_RESERVING → BALANCE_RESERVED → FRAUD_CLEARED → LEDGER_POSTING
+            // deposit saga order: INITIATED → LEDGER_POSTING (no reservation or fraud check)
+            case INITIATED -> to == TransactionStatus.BALANCE_RESERVING || to == TransactionStatus.CANCELLED
+                    || to == TransactionStatus.LEDGER_POSTING;
             case BALANCE_RESERVING -> to == TransactionStatus.BALANCE_RESERVED || to == TransactionStatus.RESERVE_FAILED;
-            case BALANCE_RESERVED -> to == TransactionStatus.LEDGER_POSTING;
+            case BALANCE_RESERVED -> to == TransactionStatus.FRAUD_CLEARED || to == TransactionStatus.FRAUD_REJECTED || to == TransactionStatus.LEDGER_POSTING;
+            case FRAUD_CHECKING -> to == TransactionStatus.FRAUD_CLEARED || to == TransactionStatus.FRAUD_REJECTED;
+            case FRAUD_CLEARED -> to == TransactionStatus.LEDGER_POSTING;
             case LEDGER_POSTING -> to == TransactionStatus.LEDGER_POSTED || to == TransactionStatus.LEDGER_FAILED;
-            case LEDGER_POSTED -> to == TransactionStatus.COMPLETING;
+            case LEDGER_POSTED -> to == TransactionStatus.COMPLETING || to == TransactionStatus.COMPLETED;
             case COMPLETING -> to == TransactionStatus.COMPLETED;
             case RESERVE_FAILED -> to == TransactionStatus.FAILED;
             case LEDGER_FAILED -> to == TransactionStatus.REVERSING;

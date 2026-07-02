@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.annotation.EnableKafkaStreams;
+import org.springframework.kafka.annotation.KafkaStreamsDefaultConfiguration;
 import org.springframework.kafka.config.KafkaStreamsConfiguration;
 import org.springframework.kafka.support.serializer.JsonSerde;
 
@@ -42,8 +43,8 @@ public class KafkaStreamsConfig {
     @Value("${spring.kafka.streams.properties.state.dir:/tmp/kafka-streams-state}")
     private String stateDir;
 
-    @Bean
-    public KafkaStreamsConfiguration kStreamsConfig() {
+    @Bean(name = KafkaStreamsDefaultConfiguration.DEFAULT_STREAMS_CONFIG_BEAN_NAME)
+    public KafkaStreamsConfiguration defaultKafkaStreamsConfig() {
         Map<String, Object> props = new HashMap<>();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, applicationId);
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
@@ -63,6 +64,8 @@ public class KafkaStreamsConfig {
 
     @Bean
     public JsonSerde<JsonNode> jsonNodeSerde(ObjectMapper objectMapper) {
-        return new JsonSerde<>(objectMapper);
+        JsonSerde<JsonNode> serde = new JsonSerde<>(JsonNode.class, objectMapper);
+        serde.ignoreTypeHeaders();
+        return serde;
     }
 }

@@ -1,0 +1,312 @@
+# ══════════════════════════════════════════════════════════════
+# NEXUS PLATFORM — Complete Docker Infrastructure
+# Runs: Redis + Kafka 4.2.0 (KRaft) + Elasticsearch 8 + Kafka UI
+#       + PostgreSQL 16 (pgvector) + MongoDB 7
+#
+# Usage:
+#   Start:   docker compose up -d
+#   Stop:    docker compose down
+#   Logs:    docker compose logs -f
+#
+# Ports:
+#   Redis:         localhost:6380    (host port +1 — avoids conflict with local Redis)
+#   Kafka:         localhost:19092   (external dev access)
+#   Kafka UI:      http://localhost:8190
+#   Elasticsearch: http://localhost:9201  (host port +1)
+#   PostgreSQL:    localhost:5433    (host port +1, user: nexus / nexus_dev_password)
+#   MongoDB:       localhost:27018   (host port +1)
+#   Zipkin:        http://localhost:9412  (host port +1)
+#   Prometheus:    http://localhost:9091  (host port +1)
+#   Grafana:       http://localhost:3001  (admin / admin)
+# ══════════════════════════════════════════════════════════════
+
+volumes:
+  postgres-data:
+  mongodb-data:
+  grafana-data:
+
+services:
+
+  # ── Redis ────────────────────────────────────────────────────
+  nexus-redis:
+    image: redis:7-alpine
+    container_name: nexus-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Kafka 4.2.0 (KRaft — no Zookeeper) ──────────────────────
+  nexus-kafka:
+    image: apache/kafka:latest
+    container_name: nexus-kafka
+    restart: unless-stopped
+    ports:
+      - "19092:19092"
+      - "9092:9092"    # ← add this line
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@nexus-kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT_INTERNAL://0.0.0.0:9092,PLAINTEXT_EXTERNAL://0.0.0.0:19092,CONTROLLER://nexus-kafka:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT_INTERNAL://nexus-kafka:9092,PLAINTEXT_EXTERNAL://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT_INTERNAL:PLAINTEXT,PLAINTEXT_EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_NUM_PARTITIONS: 3
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qg"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:19092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
+  # ── Kafka Topic Creator — runs once then exits ───────────────
+  nexus-kafka-topics:
+    image: apache/kafka:latest
+    container_name: nexus-kafka-topics
+    depends_on:
+      nexus-kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo 'Creating all Nexus Kafka topics...'
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic saga.commands               --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic saga.replies                --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic saga.completed              --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic transactions.saga.completed --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic transactions.saga.failed    --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic transactions.initiated      --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic transactions.completed      --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic transactions.failed         --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic transactions.velocity       --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic transactions.merchant-stats --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic fraud.result                --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic fraud.flagged               --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic ledger.posted               --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic ledger.reversed             --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic users.registered            --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.verified           --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.rejected           --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.events             --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.kyc                --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.kyc.initiate       --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.kyc.initiations    --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.kyc.result         --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.ai.kyc.explain     --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic accounts.created            --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic account.frozen              --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic risk.profile.updated        --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic user.behavior.aggregated    --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic analytics.anomalies.detected --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic ai.query.logged             --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic tool.transfer.initiated     --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic tool.transfer.unauthorized  --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic springCloudBus             --partitions 1 --replication-factor 1
+        echo '✅ All 32 topics created!'
+
+  # ── Kafka UI ─────────────────────────────────────────────────
+  nexus-kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: nexus-kafka-ui
+    restart: unless-stopped
+    depends_on:
+      nexus-kafka:
+        condition: service_healthy
+    ports:
+      - "8190:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: nexus-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: nexus-kafka:9092
+
+  # ── Elasticsearch 8 ──────────────────────────────────────────
+  nexus-elasticsearch:
+    image: elasticsearch:8.13.0
+    container_name: nexus-elasticsearch
+    restart: unless-stopped
+    ports:
+      - "9201:9200"
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.http.ssl.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  # ── PostgreSQL 16 + pgvector ──────────────────────────────────
+  # pgvector/pgvector:pg16 image required (plain postgres:16 does NOT
+  # have the vector extension needed by account, fraud, ledger,
+  # ai-assistant, and audit-query services).
+  #
+  # Databases created by init script (kafka/init/01_create_databases.sh):
+  #   nexus_identity, nexus_accounts, nexus_transactions, nexus_fraud,
+  #   nexus_ledger, nexus_kyc, nexus_ai_assistant, nexus_risk,
+  #   nexus_saga, nexus_audit
+  #
+  # pgvector extension enabled in:
+  #   nexus_accounts, nexus_fraud, nexus_ledger, nexus_ai_assistant, nexus_audit
+  nexus-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: nexus-postgres
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "max_wal_senders=10"
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus_dev_password
+      POSTGRES_DB: nexus_platform
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init/01_create_databases.sh:/docker-entrypoint-initdb.d/01_create_databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus -d nexus_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  # ── MongoDB 7 ─────────────────────────────────────────────────
+  # No auth — dev mode.
+  # Services connect with URIs like:
+  #   mongodb://nexus-mongodb:27017/nexus_notification
+  # (Credentials embedded in service URIs are ignored when auth is off.)
+  #
+  # Collections auto-created on first write by each service.
+  nexus-mongodb:
+    image: mongo:7.0
+    container_name: nexus-mongodb
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  # ── Zipkin — Distributed Tracing ─────────────────────────────
+  # All services send spans to http://localhost:9411/api/v2/spans
+  # UI available at http://localhost:9411
+  nexus-zipkin:
+    image: openzipkin/zipkin:latest
+    container_name: nexus-zipkin
+    restart: unless-stopped
+    ports:
+      - "9412:9411"
+    environment:
+      STORAGE_TYPE: mem
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9411/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # ── Prometheus — Metrics Scraping ────────────────────────────
+  # Scrapes /actuator/prometheus from all services
+  # UI available at http://localhost:9090
+  nexus-prometheus:
+    image: prom/prometheus:latest
+    container_name: nexus-prometheus
+    restart: unless-stopped
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ── Grafana — Metrics Dashboards ─────────────────────────────
+  # Pre-configured with Prometheus datasource
+  # UI available at http://localhost:3001  (admin / admin)
+  nexus-grafana:
+    image: grafana/grafana:latest
+    container_name: nexus-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      nexus-prometheus:
+        condition: service_healthy
+
+  # ── Debezium Kafka Connect ────────────────────────────────────
+  # Reads PostgreSQL WAL and publishes outbox events to Kafka.
+  # REST API: http://localhost:8083
+  nexus-kafka-connect:
+    image: debezium/connect:2.6
+    container_name: nexus-kafka-connect
+    restart: unless-stopped
+    depends_on:
+      nexus-kafka:
+        condition: service_healthy
+      nexus-postgres:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVERS: nexus-kafka:9092
+      GROUP_ID: nexus-debezium-connect
+      CONFIG_STORAGE_TOPIC: nexus.connect.configs
+      OFFSET_STORAGE_TOPIC: nexus.connect.offsets
+      STATUS_STORAGE_TOPIC: nexus.connect.status
+      KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  # ── Debezium Connector Registration ──────────────────────────
+  # Runs once on startup, registers the 6 outbox connectors.
+  # 409 = already registered (safe, idempotent).
+  nexus-debezium-init:
+    image: curlimages/curl:8.6.0
+    container_name: nexus-debezium-init
+    depends_on:
+      nexus-kafka-connect:
+        condition: service_healthy
+    environment:
+      POSTGRES_PASSWORD: nexus_dev_password
+    volumes:
+      - ../debezium:/scripts:ro
+    entrypoint: ["/bin/sh", "/scripts/register.sh"]
+    restart: "no"

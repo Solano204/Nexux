@@ -7,20 +7,21 @@ spring:
 
   cloud:
     config:
-      uri: http://nexus-config-service:8888
-      fail-fast: true
+      uri: ${CONFIG_SERVER_URI:http://localhost:8888}
+      fail-fast: false
+      retry:
+        max-attempts: 3
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
 
   threads:
     virtual:
       enabled: true
 
-  # ════════════════════════════════════════════════════════
-  # POSTGRESQL — Immutable audit trail
-  # ════════════════════════════════════════════════════════
   datasource:
-    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5432/nexus_kyc}
+    url: ${DATASOURCE_URL:jdbc:postgresql://localhost:5433/nexus_kyc}
     username: ${POSTGRES_USER:nexus}
-    password: ${POSTGRES_PASSWORD:}
+    password: ${POSTGRES_PASSWORD:nexus_dev_password}
     hikari:
       maximum-pool-size: 20
       connection-timeout: 5000
@@ -36,37 +37,33 @@ spring:
     enabled: true
     locations: classpath:db/migration
 
-  # ════════════════════════════════════════════════════════
-  # MONGODB — KYC documents and decisions
-  # ════════════════════════════════════════════════════════
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev@nexus-mongodb:27017/nexus_kyc?authSource=admin}
+      uri: ${MONGODB_URI:mongodb://localhost:27018/nexus_kyc}
       auto-index-creation: true
 
-  # ════════════════════════════════════════════════════════
-  # KAFKA — SAGA + domain events
-  # ════════════════════════════════════════════════════════
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
     producer:
       acks: all
       enable-idempotence: true
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      group-id: nexus-ai-kyc-service
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
 
-  # ════════════════════════════════════════════════════════
-  # SPRING AI — Two-stage KYC pipeline
-  # ════════════════════════════════════════════════════════
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:}
       chat:
         options:
-          model: gpt-4o       # Stage 1 default — overridden per bean
-          temperature: 0.0    # Deterministic for document reading
+          model: gpt-4o
+          temperature: 0.0
 
-  # Multipart: allow up to 10MB document images
   servlet:
     multipart:
       max-file-size: 10MB
@@ -78,9 +75,36 @@ server:
 eureka:
   client:
     service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
+    register-with-eureka: true
+    fetch-registry: true
   instance:
     prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 30
+    lease-expiration-duration-in-seconds: 90
+
+nexus:
+  identity:
+    internal-url: ${IDENTITY_SERVICE_URL:http://localhost:8010}
+  aws:
+    region: ${AWS_REGION:us-east-1}
+    endpoint-override: ${AWS_ENDPOINT:}
+    access-key-id: ${AWS_ACCESS_KEY_ID:}
+    secret-access-key: ${AWS_SECRET_ACCESS_KEY:}
+
+  kyc:
+    s3:
+      bucket: ${KYC_S3_BUCKET:nexus-kyc-documents}
+    encryption:
+      enabled: ${KYC_ENCRYPTION_ENABLED:false}
+    retry:
+      max-attempts: 3
+      window-days: 30
+    pre-screening:
+      min-text-elements: 5
+      min-total-characters: 100
+      min-face-brightness: 50
+      min-face-sharpness: 50
 
 resilience4j:
   retry:
@@ -105,6 +129,8 @@ management:
         kyc.stage2.comparison.duration: true
       percentiles:
         kyc.pipeline.total.duration: 0.5, 0.9, 0.95, 0.99
+        kyc.stage1.extraction.duration: 0.5, 0.9, 0.95, 0.99
+        kyc.stage2.comparison.duration: 0.5, 0.9, 0.95, 0.99
     tags:
       application: ${spring.application.name}
   tracing:
@@ -113,13 +139,13 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
-
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
 logging:
   level:
-    com.nexus.kyc: INFO
-  pattern:
-    console: >
-      %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
-      traceId=%X{traceId} spanId=%X{spanId}
-      service=nexus-ai-kyc-service %logger{36} - %msg%n
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
+    org.hibernate.SQL: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN

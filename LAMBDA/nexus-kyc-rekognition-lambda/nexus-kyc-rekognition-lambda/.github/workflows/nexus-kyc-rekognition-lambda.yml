@@ -1,0 +1,235 @@
+# .github/workflows/nexus-kyc-rekognition-lambda.yml
+
+name: KYC Rekognition Lambda Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'nexus-kyc-rekognition-lambda/**'
+      - '.github/workflows/nexus-kyc-rekognition-lambda.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'nexus-kyc-rekognition-lambda/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.12'
+  AWS_REGION: us-east-1
+
+jobs:
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 1: LINT + UNIT TESTS
+  # Tests use fixture Rekognition responses (no real AWS calls)
+  # ════════════════════════════════════════════════════════════
+  test:
+    name: Lint + Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-kyc-rekognition-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov ruff moto[s3,sqs,rekognition]
+
+      - name: Lint
+        run: ruff check src/ tests/ || true
+
+      - name: Unit tests
+        env:
+          KYC_DOCUMENTS_BUCKET: nexus-kyc-documents-test
+          RESULTS_QUEUE_URL: http://localhost:4566/000000000000/nexus-kyc-rekognition-results
+          MIN_FACE_QUALITY_BRIGHTNESS: "40"
+          MIN_FACE_QUALITY_SHARPNESS: "40"
+          MIN_TEXT_ELEMENT_COUNT: "5"
+          MIN_TEXT_CONFIDENCE: "70"
+          MAX_DOCUMENT_SIZE_BYTES: "10485760"
+          MIN_DOCUMENT_SIZE_BYTES: "10000"
+          SUPPORTED_CONTENT_TYPES: "image/jpeg,image/png,image/webp"
+          LOG_LEVEL: "DEBUG"
+          AWS_REGION_NAME: us-east-1
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        run: |
+          pytest tests/unit/ \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-fail-under=70 \
+            -v
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 2: DESIGN INVARIANT CHECKS
+  # ════════════════════════════════════════════════════════════
+  verify-design:
+    name: Verify Design Invariants
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-kyc-rekognition-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify parallel Rekognition calls
+        run: |
+          grep -q "ThreadPoolExecutor" src/handler.py && \
+            echo "✓ Parallel Rekognition via ThreadPoolExecutor" || \
+            (echo "✗ Missing ThreadPoolExecutor" && exit 1)
+
+      - name: Verify always returns 200 to S3
+        run: |
+          grep -q "statusCode.*200" src/handler.py && \
+            echo "✓ Always returns 200 to S3 (prevents retrigger)" || \
+            (echo "✗ Must always return 200 to S3" && exit 1)
+
+      - name: Verify quality gates applied
+        run: |
+          grep -q "evaluate_quality_gates" src/handler.py && \
+            echo "✓ Quality gates applied" || \
+            (echo "✗ Missing quality gate evaluation" && exit 1)
+
+      - name: Verify S3 lifecycle tagging
+        run: |
+          grep -q "put_object_tagging" src/handler.py && \
+            echo "✓ S3 lifecycle tags written" || \
+            (echo "✗ Missing S3 object tagging" && exit 1)
+
+      - name: Verify deterministic processing ID
+        run: |
+          grep -q "sha256" src/handler.py && \
+            echo "✓ Deterministic processing ID (sha256)" || \
+            (echo "✗ Missing deterministic processing ID" && exit 1)
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 3: SAM BUILD + VALIDATE
+  # ════════════════════════════════════════════════════════════
+  sam-build:
+    name: SAM Build + Validate
+    needs: [test, verify-design]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-kyc-rekognition-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: SAM Validate
+        run: sam validate --template template.yaml --lint
+
+      - name: SAM Build
+        run: sam build --template template.yaml
+
+      - name: Upload SAM build
+        uses: actions/upload-artifact@v4
+        with:
+          name: sam-build-kyc-rekog-${{ github.sha }}
+          path: nexus-kyc-rekognition-lambda/.aws-sam/
+          retention-days: 7
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 4: DEPLOY TO STAGING
+  # ════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy to Staging
+    needs: sam-build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: staging
+    defaults:
+      run:
+        working-directory: nexus-kyc-rekognition-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials (staging)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download SAM build
+        uses: actions/download-artifact@v4
+        with:
+          name: sam-build-kyc-rekog-${{ github.sha }}
+          path: nexus-kyc-rekognition-lambda/.aws-sam/
+
+      - name: SAM Deploy to Staging
+        run: |
+          sam deploy \
+            --config-env staging \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --resolve-s3
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 5: DEPLOY TO PRODUCTION
+  # ════════════════════════════════════════════════════════════
+  deploy-prod:
+    name: Deploy to Production
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: nexus-kyc-rekognition-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials (production)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download SAM build
+        uses: actions/download-artifact@v4
+        with:
+          name: sam-build-kyc-rekog-${{ github.sha }}
+          path: nexus-kyc-rekognition-lambda/.aws-sam/
+
+      - name: SAM Deploy to Production
+        run: |
+          sam deploy \
+            --config-env prod \
+            --no-fail-on-empty-changeset \
+            --resolve-s3

@@ -1,0 +1,73 @@
+spring:
+  cloud:
+    config:
+      uri: ${CONFIG_SERVER_URI:http://nexus-config-service:8888}
+      enabled: true
+      fail-fast: true
+      username: ${CONFIG_SERVER_USERNAME}
+      password: ${CONFIG_SERVER_PASSWORD}
+    bus:
+      enabled: true
+
+  datasource:
+    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5432/nexus_kyc}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+
+  jpa:
+    show-sql: false
+    hibernate:
+      ddl-auto: validate
+
+  flyway:
+    baseline-on-migrate: false
+
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://nexus-mongodb:27017/nexus_kyc}
+      auto-index-creation: false
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          model: gpt-4o
+          temperature: 0.0
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+  instance:
+    health-check-url-path: /actuator/health
+
+nexus:
+  kyc:
+    encryption:
+      enabled: ${KYC_ENCRYPTION_ENABLED:true}
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: ${TRACING_SAMPLE_RATE:0.05}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+
+logging:
+  level:
+    root: WARN
+    com.nexus.kyc: INFO
+    org.hibernate.SQL: WARN
+    org.apache.kafka: WARN
+    org.springframework.ai: WARN
+    com.netflix.eureka: WARN
+    com.netflix.discovery: WARN

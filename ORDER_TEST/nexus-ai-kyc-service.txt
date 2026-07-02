@@ -1,0 +1,154 @@
+================================================================
+ NEXUS — nexus-ai-kyc-service — Complete Workflow Test Order
+================================================================
+Port: 8091 | Stack: Spring Boot | DB: PostgreSQL (nexus_kyc)
+                                       MongoDB (nexus_kyc)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  Two-stage AI KYC pipeline:
+  Stage 1 — GPT-4o-mini vision: extracts data from passport/ID image
+  Stage 2 — GPT-4o-mini comparison: extracted data vs submitted data
+
+  Receives documents from:
+  - Direct REST: POST /api/v1/kyc/process (called by identity-service)
+  - Via Kafka: (currently publishes results only)
+
+  After decision:
+  - APPROVED  -> emits identity.verified + KycApprovedReply
+  - REJECTED  -> emits identity.rejected + KycRejectedReply
+  - REVIEW    -> emits kyc.review.required
+
+  Documents are fetched from AWS S3 (real S3 required — no LocalStack in prod config).
+  Results stored in both PostgreSQL (immutable audit) and MongoDB (full document).
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-postgres nexus-mongodb nexus-kafka nexus-zookeeper
+
+  Health checks:
+    PostgreSQL :5434  — kyc_verifications audit table
+    MongoDB    :27019 — kyc_documents collection
+    Kafka      :9003  — Kafdrop
+
+  CRITICAL EXTERNAL DEPENDENCIES:
+  ├── OPENAI_API_KEY must be set in .env (GPT-4o vision for both stages)
+  └── AWS S3 (KYC_S3_BUCKET) must be configured and accessible
+      Documents are downloaded from S3 at kyc/{userId}/{verificationId}/...
+      If S3 unavailable: S3 download will fail with RuntimeException
+
+================================================================
+ STEP 2 — PLATFORM CORE
+================================================================
+  1. nexus-config-service   :8888
+  2. nexus-discovery-service :8761
+
+================================================================
+ STEP 3 — SERVICES NEEDED FOR FULL ONBOARDING KYC WORKFLOW
+================================================================
+  KYC service is triggered AFTER the user registers and uploads a document.
+  To see the complete flow:
+
+  REQUIRED:
+  ├── nexus-identity-service    :8083
+  │     WHY: user registers → POST /kyc/initiate → uploads to S3 → SQS
+  │          → (Lambda would normally call kyc-service, or identity calls directly)
+  │          Also: identity-service handles the upload and coordinates with kyc
+  └── nexus-saga-orchestrator   :8095
+        WHY: receives KycApprovedReply / KycRejectedReply
+             advances or compensates OnboardingFlowSaga
+
+  DOWNSTREAM — to see the full consequence of KYC decision:
+  ├── nexus-account-service     :8085  — CreateAccountsCommand sent after KYC approved
+  ├── nexus-notification-service :8089  — KYC_APPROVED or KYC_REJECTED notification
+  └── audit-write-native        :8096  — records identity.verified/rejected to ES
+
+  AWS SERVICES (external):
+  ├── S3    — stores the uploaded KYC document (identity-service uploads)
+  │           this service downloads from S3 to process
+  └── SQS   — identity-service publishes to SQS; normally a Lambda triggers kyc-service
+              In dev: you can call POST /api/v1/kyc/process directly
+
+================================================================
+ KAFKA TOPICS THIS SERVICE PARTICIPATES IN
+================================================================
+PRODUCES:
+  identity.verified      -> when KYC decision = APPROVED
+    └── consumed by: saga-orchestrator, notification-service, audit-write-native
+  identity.rejected      -> when KYC decision = REJECTED
+    └── consumed by: saga-orchestrator, notification-service, audit-write-native
+  kyc.review.required    -> when KYC decision = REVIEW_REQUIRED
+    └── (no downstream consumer currently — manual review queue)
+  saga.replies           -> KycApprovedReply or KycRejectedReply
+    └── consumed by: saga-orchestrator (OnboardingFlowSaga)
+
+CONSUMES: (none currently — results are pushed, not pulled)
+
+================================================================
+ FULL WORKFLOW — KYC PIPELINE
+================================================================
+  PRE-REQUISITE: Document must already be in S3 at the expected path.
+  Path format: kyc/{userId}/{verificationId}/{documentType}.jpg
+
+  1. identity-service uploads document to S3 (POST /kyc/initiate)
+     -> publishes to SQS (Lambda trigger)
+     -> In dev without Lambda: call directly:
+        POST http://localhost:8091/api/v1/kyc/process
+        Body: { "userId", "verificationId", "s3Path", "documentType",
+                "sagaId", "submittedData": {...} }
+
+  2. kyc-service.DocumentStorageService.downloadFromS3(s3Path)
+     -> fetches raw bytes from AWS S3
+     -> stores encrypted copy in MongoDB GridFS (7-year retention)
+
+  3. Stage 1 — Vision Extraction
+     -> GPT-4o-mini: "extract all text fields from this ID image"
+     -> produces KycExtractedData (name, DOB, ID number, etc.)
+
+  4. Hard rule validation (before Stage 2 — cost optimization)
+     -> min text elements, min characters, face brightness/sharpness
+     -> if fails: REJECTED immediately without calling Stage 2
+
+  5. Stage 2 — Data Comparison
+     -> GPT-4o-mini: compare extracted vs submitted data
+     -> produces KycVerificationDecision (approved/rejected + reasons)
+
+  6. Decision published:
+     -> identity.verified OR identity.rejected (Kafka)
+     -> KycApprovedReply OR KycRejectedReply (saga.replies)
+
+================================================================
+ DEV SHORTCUT — TEST KYC WITHOUT S3/LAMBDA
+================================================================
+  1. Upload a test image manually to your S3 bucket:
+     aws s3 cp test-id.jpg s3://nexus-kyc-documents/kyc/{userId}/{verID}/passport.jpg
+
+  2. Call kyc-service directly:
+     POST http://localhost:8091/api/v1/kyc/process
+     {
+       "userId": "<uuid>",
+       "verificationId": "<uuid>",
+       "s3Path": "kyc/<userId>/<verID>/passport.jpg",
+       "documentType": "PASSPORT",
+       "sagaId": "<saga-uuid>",
+       "submittedData": {
+         "fullName": "Carlos Lopez",
+         "dateOfBirth": "1990-01-15",
+         "documentNumber": "AB123456"
+       }
+     }
+
+  3. Watch Kafdrop:
+     identity.verified OR identity.rejected
+     saga.replies (KycApprovedReply)
+
+================================================================
+ OBSERVE IN KAFDROP (http://localhost:9003)
+================================================================
+  After KYC processing:
+    identity.verified    -> KYC APPROVED
+    identity.rejected    -> KYC REJECTED (check rejectionReasons field)
+    kyc.review.required  -> needs human review
+    saga.replies         -> KycApprovedReply or KycRejectedReply

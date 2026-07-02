@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.Type;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -100,8 +102,7 @@ public class FraudDecisionEntity {
     private JsonNode analysisPlan;
 
     @Column(name = "tools_called", columnDefinition = "text[]")
-    @org.hibernate.annotations.Type(
-            io.hypersistence.utils.hibernate.type.array.ListArrayType.class)
+    @JdbcTypeCode(SqlTypes.ARRAY)
     private List<String> toolsCalled;
 
     // ── Timing ────────────────────────────────────────────

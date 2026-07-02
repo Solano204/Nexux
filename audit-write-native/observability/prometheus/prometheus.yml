@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # Quarkus native exposes metrics at /q/metrics (not /actuator/prometheus)
+  - job_name: audit-write-native
+    metrics_path: /q/metrics
+    static_configs:
+      - targets: [audit-write-native:8096]
+
+  - job_name: nexus-elasticsearch
+    metrics_path: /_prometheus/metrics
+    static_configs:
+      - targets: [nexus-elasticsearch:9200]

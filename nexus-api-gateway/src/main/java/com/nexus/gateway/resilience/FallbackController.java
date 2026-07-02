@@ -4,7 +4,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -35,8 +34,7 @@ public class FallbackController {
      * Critical: explicitly state "account has not been charged"
      * Users panic if they don't know if money was taken.
      */
-    @PostMapping("/transaction")
-    @GetMapping("/transaction")
+    @RequestMapping("/transaction")
     public Mono<ResponseEntity<Map<String, Object>>> transactionFallback(
             ServerWebExchange exchange) {
 
@@ -58,8 +56,7 @@ public class FallbackController {
     /**
      * Account Service fallback.
      */
-    @GetMapping("/account")
-    @PostMapping("/account")
+    @RequestMapping("/account")
     public Mono<ResponseEntity<Map<String, Object>>> accountFallback(
             ServerWebExchange exchange) {
 
@@ -79,8 +76,7 @@ public class FallbackController {
      * AI Assistant fallback — graceful degradation.
      * AI is non-critical — users can still use standard banking.
      */
-    @GetMapping("/ai-assistant")
-    @PostMapping("/ai-assistant")
+    @RequestMapping("/ai-assistant")
     public Mono<ResponseEntity<Map<String, Object>>> aiAssistantFallback(
             ServerWebExchange exchange) {
 
@@ -104,8 +100,7 @@ public class FallbackController {
     /**
      * Identity Service fallback.
      */
-    @GetMapping("/identity")
-    @PostMapping("/identity")
+    @RequestMapping("/identity")
     public Mono<ResponseEntity<Map<String, Object>>> identityFallback(
             ServerWebExchange exchange) {
 
@@ -123,8 +118,7 @@ public class FallbackController {
     /**
      * Ledger Service fallback.
      */
-    @GetMapping("/ledger")
-    @PostMapping("/ledger")
+    @RequestMapping("/ledger")
     public Mono<ResponseEntity<Map<String, Object>>> ledgerFallback(
             ServerWebExchange exchange) {
 
@@ -142,8 +136,7 @@ public class FallbackController {
     /**
      * Analytics Service fallback.
      */
-    @GetMapping("/analytics")
-    @PostMapping("/analytics")
+    @RequestMapping("/analytics")
     public Mono<ResponseEntity<Map<String, Object>>> analyticsFallback(
             ServerWebExchange exchange) {
 
@@ -161,8 +154,7 @@ public class FallbackController {
     /**
      * Fraud Service fallback.
      */
-    @GetMapping("/fraud")
-    @PostMapping("/fraud")
+    @RequestMapping("/fraud")
     public Mono<ResponseEntity<Map<String, Object>>> fraudFallback(
             ServerWebExchange exchange) {
 
@@ -196,8 +188,7 @@ public class FallbackController {
     /**
      * Generic fallback for any unspecified service.
      */
-    @GetMapping("/generic")
-    @PostMapping("/generic")
+    @RequestMapping("/generic")
     public Mono<ResponseEntity<Map<String, Object>>> genericFallback(
             ServerWebExchange exchange) {
 

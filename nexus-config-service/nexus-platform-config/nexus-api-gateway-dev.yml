@@ -1,0 +1,11 @@
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6380
+      password: ""
+
+nexus:
+  gateway:
+    jwt:
+      public-key-url: http://localhost:8083/api/v1/auth/.well-known/jwks.json

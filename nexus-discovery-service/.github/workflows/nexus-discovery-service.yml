@@ -1,0 +1,132 @@
+# .github/workflows/nexus-discovery-service.yml
+
+name: Nexus Discovery Service Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'nexus-discovery-service/**'
+      - '.github/workflows/nexus-discovery-service.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'nexus-discovery-service/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SERVICE_NAME: nexus-discovery-service
+  JAVA_VERSION: '25'
+  DOCKER_IMAGE: nexusplatform/nexus-discovery-service
+
+jobs:
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 1: COMPILE + TEST
+  # Minimal — this is infrastructure, not business logic
+  # ════════════════════════════════════════════════════════════
+  build:
+    name: Compile + Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-discovery-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Compile
+        run: mvn compile -q --no-transfer-progress
+
+      - name: Run Tests
+        run: mvn test --no-transfer-progress
+
+      - name: Cache compiled artifacts
+        uses: actions/cache/save@v4
+        with:
+          path: nexus-discovery-service/target
+          key: compiled-discovery-${{ github.sha }}
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 2: DOCKER BUILD + PUSH
+  # ════════════════════════════════════════════════════════════
+  docker-build:
+    name: Docker Build + Push
+    needs: build
+    if: |
+      always() && !failure() && !cancelled() &&
+      (github.ref == 'refs/heads/main' ||
+       github.ref == 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-discovery-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Build JAR
+        run: mvn package -DskipTests --no-transfer-progress
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: nexus-discovery-service
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 3: DEPLOY TO STAGING
+  # Discovery deploys second — after config, before all others
+  # ════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy to Staging
+    needs: docker-build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Deploy nexus-discovery-service to staging
+        run: |
+          echo "Deploying ${{ env.SERVICE_NAME }}:${{ github.sha }} to staging"
+          echo "Deploy order: config → discovery → all other services"

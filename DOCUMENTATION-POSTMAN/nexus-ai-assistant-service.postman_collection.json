@@ -1,0 +1,96 @@
+{
+  "info": {
+    "name": "NEXUS - AI Assistant Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "General-purpose AI financial assistant. Provides streaming chat (SSE) and multimodal document analysis (bill/receipt image + question). Port: 8090"
+  },
+  "item": [
+    {
+      "name": "AI Assistant",
+      "item": [
+        {
+          "name": "Chat (SSE Streaming)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User-Id", "value": "{{userId}}", "description": "User UUID (set by API Gateway)" },
+              { "key": "Accept", "value": "text/event-stream", "description": "Required for SSE response" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"What are my top spending categories this month and how can I reduce them?\",\n  \"sessionId\": \"session-abc-123\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/chat",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "chat"]
+            },
+            "description": "Main streaming AI chat endpoint. Returns Server-Sent Events (text/event-stream) as the AI generates the response token by token.\n\nRequest body (Map<String, String>):\n- message (String, required): The user's message\n- sessionId (String, optional): Conversation session ID for context continuity; auto-generated UUID if not provided\n\nResponse: Flux<String> — SSE stream of text tokens"
+          },
+          "response": []
+        },
+        {
+          "name": "Analyze Document + Chat (Multimodal SSE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" },
+              { "key": "Accept", "value": "text/event-stream" }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": "/path/to/receipt.jpg", "description": "Image file of bill, receipt, or document (JPEG, PNG, PDF)" },
+                { "key": "message", "value": "How much did I spend on food this month? Can you break it down by category?", "type": "text", "description": "Question about the document" },
+                { "key": "sessionId", "value": "session-doc-abc-123", "type": "text", "description": "Optional session ID for conversation continuity" }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/chat/analyze-document",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "chat", "analyze-document"]
+            },
+            "description": "Multimodal document analysis: upload a financial document image and ask a question. The vision model extracts data and the primary model answers.\n\nRequest (multipart/form-data):\n- file (file, required): Image file (JPEG, PNG) of bill, receipt, bank statement, etc.\n- message (text, required): Question about the document\n- sessionId (text, optional): Conversation session ID\n\nResponse: Flux<String> — SSE stream of text tokens (text/event-stream)"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Document Analysis (Alternate Endpoint)",
+      "item": [
+        {
+          "name": "Analyze Document (Dedicated Endpoint)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" },
+              { "key": "Accept", "value": "text/event-stream" }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": "/path/to/invoice.png", "description": "Document image" },
+                { "key": "message", "value": "What is the total amount and due date on this invoice?", "type": "text" },
+                { "key": "sessionId", "value": "session-doc-456", "type": "text", "description": "Optional" }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/documents/analyze",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "documents", "analyze"]
+            },
+            "description": "Dedicated document analysis endpoint (same capability as /api/v1/ai/chat/analyze-document). Uses multipart/form-data.\n\nRequest (multipart/form-data):\n- file (file, required): Image file\n- message (text, required): Question about the document  \n- sessionId (text, optional): Session ID\n\nResponse: Flux<String> — SSE text/event-stream"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8090", "type": "string" },
+    { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001", "type": "string" }
+  ]
+}

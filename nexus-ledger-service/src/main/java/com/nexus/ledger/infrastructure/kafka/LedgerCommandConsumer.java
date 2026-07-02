@@ -72,13 +72,20 @@ public class LedgerCommandConsumer {
             log.info("PostLedgerCommand received: sagaId={} txnId={}",
                     sagaId, payload.path("transactionId").asText());
 
+            String postingTypeStr = payload.path("postingType").asText("TRANSFER");
+            boolean isDeposit = "DIRECT_DEPOSIT".equals(postingTypeStr) || "CASH_IN".equals(postingTypeStr);
+
+            // Deposits: system external account is the debit side, user's account is the credit side
+            UUID sourceAccountId = isDeposit
+                    ? UUID.fromString("00000000-0000-0000-0000-000000000001")
+                    : UUID.fromString(payload.path("sourceAccountId").asText());
+            UUID targetAccountId = UUID.fromString(payload.path("targetAccountId").asText());
+
             PostLedgerCommand postCommand = PostLedgerCommand.builder()
                     .transactionId(UUID.fromString(
                             payload.path("transactionId").asText()))
-                    .sourceAccountId(UUID.fromString(
-                            payload.path("sourceAccountId").asText()))
-                    .targetAccountId(UUID.fromString(
-                            payload.path("targetAccountId").asText()))
+                    .sourceAccountId(sourceAccountId)
+                    .targetAccountId(targetAccountId)
                     .amount(new BigDecimal(
                             payload.path("amount").asText("0")))
                     .currency(payload.path("currency").asText("MXN"))

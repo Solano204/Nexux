@@ -1,6 +1,7 @@
 package com.nexus.assistant.agent.tools;
 
 import com.nexus.assistant.infrastructure.client.FraudServiceClient;
+import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -39,22 +40,20 @@ public class FraudAlertsTool {
             int daysBack) {
 
         Observation obs = Observation.createNotStarted(
-                "ai.tool.get_fraud_alerts",
-                new ObservationRegistry.NoopObservationRegistry()).start();
+                "ai.tool.get_fraud_alerts", observationRegistry).start();
 
         try (Observation.Scope scope = obs.openScope()) {
             String userId = SecurityContextHolder.getContext()
                     .getAuthentication().getName();
 
-            // Only return user-safe summaries
             return fraudServiceClient.getRecentAlertSummaries(
                     userId, daysBack > 0 ? daysBack : 30);
 
         } catch (Exception e) {
-            return """
-                {"error": "ALERTS_UNAVAILABLE",
-                 "message": "Security alerts temporarily unavailable."}
-                """;
+            obs.error(e);
+            log.warn("Fraud alerts tool failed: {}", e.getMessage());
+            return "{\"error\": \"ALERTS_UNAVAILABLE\", " +
+                    "\"message\": \"Security alerts temporarily unavailable.\"}";
         } finally {
             obs.stop();
         }

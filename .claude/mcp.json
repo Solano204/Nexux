@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "docker": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-docker"],
+      "description": "Manage Docker containers, images, networks and volumes directly from Claude"
+    },
+    "github": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GIT_TOKEN}"
+      },
+      "description": "Manage GitHub repos, PRs, issues and releases directly from Claude"
+    },
+    "postgres": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "postgresql://nexus:${POSTGRES_PASSWORD}@localhost:5434/nexus_accounts"
+      ],
+      "description": "Query PostgreSQL databases directly — useful for debugging account/transaction data"
+    }
+  }
+}

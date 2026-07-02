@@ -1,0 +1,254 @@
+# .github/workflows/nexus-identity-service.yml
+# RENAMED from  nexus-identity-service  (no extension) — GitHub only reads .yml
+
+name: Nexus Identity Service Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'nexus-identity-service/**'
+      - '.github/workflows/nexus-identity-service.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'nexus-identity-service/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SERVICE_NAME: nexus-identity-service
+  JAVA_VERSION: '25'
+  DOCKER_IMAGE: nexusplatform/nexus-identity-service
+
+jobs:
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 1: COMPILE + UNIT TESTS
+  # No Docker, no infrastructure — pure Java compile + test
+  # ════════════════════════════════════════════════════════════
+  unit-tests:
+    name: Compile + Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-identity-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Compile
+        run: mvn compile -q --no-transfer-progress
+
+      - name: Run Unit Tests
+        run: |
+          mvn test \
+            -Dgroups="unit" \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            --no-transfer-progress
+
+      - name: Coverage Report
+        run: |
+          mvn verify \
+            -Dgroups="unit" \
+            -Pcoverage \
+            --no-transfer-progress
+
+      - name: Upload Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Unit Tests — ${{ env.SERVICE_NAME }}
+          path: nexus-identity-service/target/surefire-reports/*.xml
+          reporter: java-junit
+
+      - name: Cache compiled artifacts
+        uses: actions/cache/save@v4
+        with:
+          path: nexus-identity-service/target
+          key: compiled-identity-${{ github.sha }}
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 2: INTEGRATION TESTS
+  # PostgreSQL + Redis + Kafka + LocalStack via Testcontainers
+  # ════════════════════════════════════════════════════════════
+  integration-tests:
+    name: Integration Tests
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-identity-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Restore compiled artifacts
+        uses: actions/cache/restore@v4
+        with:
+          path: nexus-identity-service/target
+          key: compiled-identity-${{ github.sha }}
+
+      # Generate keystore for tests that need real JWT signing
+      - name: Generate test JWT keystore
+        run: |
+          mkdir -p keys
+          keytool \
+            -genkeypair \
+            -alias nexus-identity \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 1 \
+            -keystore keys/nexus-identity.jks \
+            -storepass test_keystore_password \
+            -keypass test_keystore_password \
+            -dname "CN=test,O=test" \
+            -v 2>/dev/null || true
+
+      - name: Run Integration Tests
+        run: |
+          mvn test \
+            -Dgroups="integration" \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            --no-transfer-progress
+        env:
+          TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: /var/run/docker.sock
+          TESTCONTAINERS_RYUK_DISABLED: "false"
+          # Use mock API key for tests — no real OpenAI calls
+          OPENAI_API_KEY: "test-key-mock"
+          JWT_KEYSTORE_PATH: "./keys/nexus-identity.jks"
+          JWT_KEYSTORE_PASSWORD: "test_keystore_password"
+
+      - name: Upload Integration Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Integration Tests — ${{ env.SERVICE_NAME }}
+          path: nexus-identity-service/target/surefire-reports/*.xml
+          reporter: java-junit
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 3: CONTRACT TESTS
+  # Spring Cloud Contract — Kafka event producer stubs
+  # ════════════════════════════════════════════════════════════
+  contract-tests:
+    name: Contract Tests
+    needs: integration-tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-identity-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Run Contract Tests
+        run: |
+          mvn spring-cloud-contract:generateTests \
+              spring-cloud-contract:run \
+              --no-transfer-progress
+
+      - name: Publish Stubs to Registry
+        if: github.ref == 'refs/heads/main'
+        run: |
+          mvn deploy -DskipTests -Pstubs-only \
+              --no-transfer-progress
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 4: DOCKER BUILD + PUSH
+  # ════════════════════════════════════════════════════════════
+  docker-build:
+    name: Docker Build + Push
+    needs: [unit-tests, integration-tests, contract-tests]
+    if: |
+      always() && !failure() && !cancelled() &&
+      (github.ref == 'refs/heads/main' ||
+       github.ref == 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-identity-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Build JAR
+        run: mvn package -DskipTests --no-transfer-progress
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and Push JVM Image
+        uses: docker/build-push-action@v5
+        with:
+          context: nexus-identity-service
+          file: nexus-identity-service/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 5: DEPLOY TO STAGING
+  # ════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy to Staging
+    needs: docker-build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Deploy nexus-identity-service to staging
+        run: |
+          echo "Deploying nexus-identity-service:${{ github.sha }} to staging"
+          # kubectl set image deployment/nexus-identity-service \
+          #   nexus-identity-service=${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+          # kubectl rollout status deployment/nexus-identity-service --timeout=180s

@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: nexus-ai-assistant-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-ai-assistant-service:8090]
+
+  - job_name: nexus-config-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-config-service:8888]

@@ -10,6 +10,7 @@ import com.nexus.audit.write.normalizer.AuditEventNormalizer;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.reactive.messaging.kafka.KafkaRecord;
+import io.smallrye.reactive.messaging.kafka.api.IncomingKafkaRecordMetadata;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.reactive.messaging.*;
@@ -17,19 +18,6 @@ import org.jboss.logging.Logger;
 
 import java.time.*;
 
-/**
- * Audit Event Consumer — Fan-in from ALL 23 Kafka topics.
- *
- * Each @Incoming method subscribes to one topic.
- * All methods delegate to the same writeToElasticsearch() pipeline.
- *
- * Idempotency: op_type=create — HTTP 409 if document exists.
- * The event's own UUID is the Elasticsearch document ID.
- * Same event delivered twice = same document ID = 409 = handled.
- *
- * Acknowledgment: MANUAL — offset committed only after successful
- * Elasticsearch write. On failure: no ack → Kafka redelivers.
- */
 @ApplicationScoped
 @RegisterForReflection
 public class AuditEventConsumer {
@@ -174,39 +162,55 @@ public class AuditEventConsumer {
     // CORE PROCESSING
     // ══════════════════════════════════════════════════════════
 
+    @SuppressWarnings("unchecked")
+    private long extractOffset(KafkaRecord<String, String> record) {
+        return record.getMetadata(IncomingKafkaRecordMetadata.class)
+                .map(IncomingKafkaRecordMetadata::getOffset)
+                .orElse(-1L);
+    }
+
     /**
      * Base processing: normalize + write to Elasticsearch.
      * Idempotent via op_type=create (409 = already exists = OK).
+     * ack() is called in both success and failure paths so the consumer
+     * never stalls waiting for an acknowledgement that never arrives.
      */
     private Uni<Void> processEvent(KafkaRecord<String, String> record,
                                    String topic) {
         return Uni.createFrom()
                 .item(() -> parseAndNormalize(
-                        record.getPayload(), topic, record.getOffset()))
+                        record.getPayload(), topic, extractOffset(record)))
                 .flatMap(this::writeToElasticsearch)
-                .onItem().invoke(() -> record.ack())
-                .onFailure().invoke(t ->
+                .onItemOrFailure().invoke((v, t) -> {
+                    if (t != null) {
                         log.errorf("Failed to audit event from %s: %s",
-                                topic, t.getMessage()))
+                                topic, t.getMessage());
+                    }
+                    record.ack();
+                })
                 .onFailure().recoverWithNull();
     }
 
     /**
      * Enhanced processing: normalize + write + compliance rules.
      * Used for security and fraud events.
+     * ack() is always called regardless of processing outcome.
      */
     private Uni<Void> processEventWithRules(
             KafkaRecord<String, String> record, String topic) {
         return Uni.createFrom()
                 .item(() -> parseAndNormalize(
-                        record.getPayload(), topic, record.getOffset()))
+                        record.getPayload(), topic, extractOffset(record)))
                 .flatMap(event ->
                         writeToElasticsearch(event)
                                 .flatMap(v -> ruleEvaluator.evaluate(event)))
-                .onItem().invoke(() -> record.ack())
-                .onFailure().invoke(t ->
+                .onItemOrFailure().invoke((v, t) -> {
+                    if (t != null) {
                         log.errorf("Failed to audit+evaluate from %s: %s",
-                                topic, t.getMessage()))
+                                topic, t.getMessage());
+                    }
+                    record.ack();
+                })
                 .onFailure().recoverWithNull();
     }
 
@@ -244,9 +248,7 @@ public class AuditEventConsumer {
         IndexRequest<AuditEvent> request = IndexRequest.of(idx ->
                 idx.index(indexName)
                         .id(event.eventId())
-                        .opType(OpType.Create)   // idempotent — fail on dup
-                        .routing(event.userId() != null
-                                ? event.userId() : "global")
+                        .opType(OpType.Create)
                         .document(event));
 
         return Uni.createFrom()
@@ -256,7 +258,6 @@ public class AuditEventConsumer {
                 .onFailure(co.elastic.clients.elasticsearch
                         ._types.ElasticsearchException.class)
                 .recoverWithUni(e -> {
-                    // 409 = duplicate (idempotent replay) — safe to ignore
                     if (e.getMessage().contains("409") ||
                             e.getMessage().contains("version_conflict")) {
                         log.debugf("Idempotent replay: %s", event.eventId());

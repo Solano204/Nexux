@@ -1,0 +1,316 @@
+{
+  "info": {
+    "name": "NEXUS - Identity Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Authentication, user management, KYC initiation and internal identity verification. Port: 8083"
+  },
+  "item": [
+    {
+      "name": "Auth (Public)",
+      "item": [
+        {
+          "name": "Register User",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"carlos@nexus.com\",\n  \"password\": \"SecurePass@2026!\",\n  \"fullName\": \"Carlos Lopez Solano\",\n  \"phoneNumber\": \"+525512345678\",\n  \"dateOfBirth\": \"1995-04-15\",\n  \"country\": \"MX\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "register"]
+            },
+            "description": "Create a new user account. All fields are validated.\n\nRequest: RegisterRequest {\n  email: String (@Email, required),\n  password: String (min 12, max 100 chars, required),\n  fullName: String (min 2, max 200, required),\n  phoneNumber: String (E.164 format e.g. +525512345678, required),\n  dateOfBirth: LocalDate (ISO-8601, must be in past, required),\n  country: String (2-letter ISO code, required)\n}\n\nResponse 201: RegisterResponse { userId: String (UUID), message: String }"
+          },
+          "response": []
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"carlos@nexus.com\",\n  \"password\": \"SecurePass@2026!\",\n  \"deviceFingerprint\": \"fp-abc123xyz\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "login"]
+            },
+            "description": "Authenticate user. Returns JWT access token in body. Refresh token is set as HttpOnly Secure cookie (NOT in response body — XSS protection).\n\nRequest: LoginRequest {\n  email: String (required),\n  password: String (required),\n  deviceFingerprint: String (optional)\n}\n\nResponse 200: LoginResponse {\n  accessToken: String (JWT Bearer token),\n  refreshToken: null (in body; set as HttpOnly cookie),\n  expiresIn: long (seconds),\n  tokenType: String ('Bearer'),\n  userId: String (UUID),\n  roles: List<String>\n}\nCookie: refreshToken (HttpOnly, Secure, SameSite=Strict, path=/api/v1/auth/refresh-token)"
+          },
+          "response": []
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}", "description": "JWT access token" },
+              { "key": "X-User-Id", "value": "{{userId}}", "description": "Set by API Gateway after JWT validation" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/logout",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "logout"]
+            },
+            "description": "Blacklists the current access token and clears the refresh token cookie.\n\nResponse 200: { message: 'Logged out successfully' }\nResponse 400: { error: 'No token provided' }"
+          },
+          "response": []
+        },
+        {
+          "name": "Get JWKS (Public Key)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/.well-known/jwks.json",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", ".well-known", "jwks.json"]
+            },
+            "description": "Returns the RSA public key set for JWT signature verification. Cached by API Gateway for 1 hour.\n\nResponse 200: { keys: [ { kty, n, e, kid, alg, use } ] }"
+          },
+          "response": []
+        },
+        {
+          "name": "Request Password Reset",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"carlos@nexus.com\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/password-reset/request",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "password-reset", "request"]
+            },
+            "description": "Request a password reset email. Always returns 200 to prevent user enumeration — if the email doesn't exist the response is the same.\n\nRequest: { email: String (@Email, required) }\n\nResponse 200: { message: 'If this email is registered, a password reset link has been sent.' }"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "User Profile (Authenticated)",
+      "item": [
+        {
+          "name": "Get My Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}", "description": "Set by API Gateway after JWT validation" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "me"]
+            },
+            "description": "Returns the authenticated user's profile.\n\nResponse 200: UserProfileResponse {\n  userId: String,\n  email: String,\n  phoneNumber: String,\n  fullName: String,\n  dateOfBirth: String,\n  status: String (ACTIVE | SUSPENDED | CLOSED),\n  roles: List<String>,\n  kycVerified: boolean,\n  kycVerifiedAt: String (ISO-8601 or null),\n  createdAt: String\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Get My Active Sessions",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me/sessions",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "me", "sessions"]
+            },
+            "description": "Returns all active sessions for the authenticated user.\n\nResponse 200: List<SessionSummaryResponse> [{ sessionId, ipAddress, userAgent, createdAt, lastUsedAt }]"
+          },
+          "response": []
+        },
+        {
+          "name": "Terminate Session",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me/sessions/{{sessionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "me", "sessions", "{{sessionId}}"],
+              "variable": [
+                { "key": "sessionId", "value": "550e8400-e29b-41d4-a716-446655440050", "description": "UUID of the session to terminate" }
+              ]
+            },
+            "description": "Force-terminate a specific active session.\n\nResponse 204: No Content"
+          },
+          "response": []
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"OldSecurePass@2025!\",\n  \"newPassword\": \"NewSecurePass@2026!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me/change-password",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "me", "change-password"]
+            },
+            "description": "Change the authenticated user's password.\n\nRequest: ChangePasswordRequest {\n  currentPassword: String (required),\n  newPassword: String (min 12, max 100, required)\n}\n\nResponse 200: No body"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "KYC (Identity Verification)",
+      "item": [
+        {
+          "name": "Initiate KYC (Upload Document)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "document", "type": "file", "src": "/path/to/id-document.jpg", "description": "Identity document image file" },
+                { "key": "documentType", "value": "NATIONAL_ID", "type": "text", "description": "INE | PASSPORT | DRIVER_LICENSE | NATIONAL_ID" }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me/kyc/initiate",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "me", "kyc", "initiate"]
+            },
+            "description": "Upload identity document to initiate KYC verification. Multipart form.\n\nForm parts:\n- document (file, required): Image of identity document\n- documentType (text, required): INE | PASSPORT | DRIVER_LICENSE | NATIONAL_ID\n\nResponse 202 Accepted: KycInitiationResponse { verificationId, status, message }"
+          },
+          "response": []
+        },
+        {
+          "name": "Get My KYC Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me/kyc/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "me", "kyc", "status"]
+            },
+            "description": "Check current KYC verification status.\n\nResponse 200: KycStatusResponse {\n  verificationId: String (or null),\n  status: String (PENDING | PROCESSING | APPROVED | REJECTED | REVIEW_REQUIRED),\n  decision: String (or null),\n  submittedAt: String,\n  decidedAt: String (or null)\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "[Internal] Receive KYC Result (AI KYC Callback)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Internal-Service", "value": "nexus-ai-kyc-service" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"verificationId\": \"ver-550e8400-e29b-41d4-a716\",\n  \"approved\": true,\n  \"extractedData\": { \"fullName\": \"Carlos Lopez\", \"documentNumber\": \"MX123456789\" },\n  \"verificationDecision\": { \"confidence\": 0.97, \"reason\": \"Document authentic\" },\n  \"failureReasons\": []\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/users/{{userId}}/kyc/result",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "users", "{{userId}}", "kyc", "result"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001" }
+              ]
+            },
+            "description": "Internal callback from nexus-ai-kyc-service delivering the AI verification decision. IP-restricted to Docker network.\n\nRequest: KycResultRequest {\n  verificationId: String,\n  approved: boolean,\n  extractedData: Map<String,Object>,\n  verificationDecision: Map<String,Object>,\n  failureReasons: List<String>\n}\n\nResponse 200: No body"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Internal Identity (Service-to-Service)",
+      "item": [
+        {
+          "name": "Get Identity Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Calling-Service", "value": "nexus-fraud-service" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/users/{{userId}}/identity",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "users", "{{userId}}", "identity"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001" }
+              ]
+            },
+            "description": "Returns identity summary (no PII, no password hash). Used by account-service and fraud-service.\n\nResponse 200: IdentitySummaryResponse {\n  userId, email, status, roles, kycVerified,\n  kycVerifiedAt, createdAt\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Get KYC Status (Internal)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/users/{{userId}}/kyc/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "users", "{{userId}}", "kyc", "status"],
+              "variable": [
+                { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001" }
+              ]
+            },
+            "description": "Internal KYC status for a user. Used by auth-lambda for Cognito token gating.\n\nResponse 200: {\n  userId, kycVerified: boolean, accountStatus, kycDecision, verificationId\n}"
+          },
+          "response": []
+        },
+        {
+          "name": "Internal Detailed Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/health/detailed",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "health", "detailed"]
+            },
+            "description": "Detailed health check including DB and Redis status.\n\nResponse 200: { status: 'UP', service: 'nexus-identity-service', timestamp }"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8083", "type": "string" },
+    { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001", "type": "string" },
+    { "key": "accessToken", "value": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...", "type": "string" },
+    { "key": "sessionId", "value": "550e8400-e29b-41d4-a716-446655440050", "type": "string" }
+  ]
+}

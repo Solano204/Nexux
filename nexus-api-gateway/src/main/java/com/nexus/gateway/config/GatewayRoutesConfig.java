@@ -113,6 +113,18 @@ public class GatewayRoutesConfig {
                                 .addRequestHeader("X-Gateway-Version", "1.0.0"))
                         .uri("lb://nexus-ai-kyc-service"))
 
+                // ── Kafka Bridge — Lambda HTTP mode ───────────────
+                // POST /internal/v1/bridge/publish?topic=&key=
+                // Authenticated by X-Plane-Bridge-Secret header (checked inside
+                // the transaction service). No JWT needed — Lambda has no JWT.
+                .route("nexus-transaction-bridge", r -> r
+                        .path("/internal/v1/bridge/**")
+                        .filters(f -> f
+                                .circuitBreaker(c -> c
+                                        .setName("transaction-bridge")
+                                        .setFallbackUri("forward:/fallback/generic")))
+                        .uri("lb://nexus-transaction-service"))
+
                 // ── Saga Orchestrator — Internal only ─────────────
                 // Only reachable from within Docker network
                 .route("nexus-saga-orchestrator-internal", r -> r

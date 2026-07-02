@@ -1,0 +1,122 @@
+================================================================
+ NEXUS — nexus-account-service — Complete Workflow Test Order
+================================================================
+Port: 8085 | Stack: Spring Boot | DB: PostgreSQL (nexus_account)
+                                       MongoDB (nexus_account)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  Creates and manages user accounts (checking, savings).
+  SAGA participant: handles ReserveBalance, ReleaseBalance,
+  FinalizeTransfer, CreateAccounts commands via saga.commands.
+  Replies to saga.replies so the TransferSaga and OnboardingFlowSaga
+  can advance.
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-postgres nexus-mongodb nexus-kafka nexus-zookeeper
+
+  Health checks:
+    PostgreSQL :5434   — account balance tables
+    MongoDB    :27019  — account documents / snapshots
+    Kafka      :9003   — Kafdrop
+
+================================================================
+ STEP 2 — PLATFORM CORE
+================================================================
+  1. nexus-config-service   :8888
+  2. nexus-discovery-service :8761
+
+================================================================
+ STEP 3 — SERVICES NEEDED TO SEE FULL WORKFLOW
+================================================================
+  FOR ACCOUNT CREATION (OnboardingFlowSaga context):
+  ├── nexus-identity-service    :8083  — register user first (you need a userId)
+  ├── nexus-saga-orchestrator   :8095  — sends CreateAccountsCommand
+  └── nexus-notification-service :8089 — notified on accounts.created
+
+  FOR BALANCE OPERATIONS (TransferSaga context):
+  ├── nexus-transaction-service :8086  — initiates the transfer
+  ├── nexus-saga-orchestrator   :8095  — sends ReserveBalance + FinalizeTransfer
+  ├── nexus-fraud-service       :8087  — comes after balance is reserved
+  ├── nexus-ledger-service      :8088  — comes after fraud cleared
+  └── nexus-notification-service :8089 — final step notification
+
+  OPTIONAL:
+  └── audit-write-native        :8096  — audits accounts.created and account.frozen
+
+================================================================
+ KAFKA TOPICS THIS SERVICE PARTICIPATES IN
+================================================================
+PRODUCES:
+  saga.replies           -> sent after processing each saga command
+    └── BalanceReservedReply
+        BalanceReservationFailedReply
+        BalanceReleasedReply
+        BalanceFinalizedReply
+        AccountsCreatedReply
+  accounts.created       -> emitted after CreateAccountsCommand completes
+    └── consumed by: notification-service, audit-write-native
+  account.frozen         -> emitted when account is frozen (fraud case)
+    └── consumed by: audit-write-native
+
+CONSUMES:
+  saga.commands          [group: account-service-saga-commands]
+    -> ReserveBalanceCommand   (step 1 of TransferSaga)
+    -> ReleaseBalanceCommand   (compensation if fraud rejected)
+    -> FinalizeTransferCommand (step 4 of TransferSaga)
+    -> CreateAccountsCommand   (step 2 of OnboardingFlowSaga)
+
+================================================================
+ FULL WORKFLOW — ACCOUNT SERVICE IN TRANSFER SAGA
+================================================================
+PRE-REQUISITE: user must exist + have an account with sufficient balance
+
+  1. saga-orchestrator sends saga.commands: ReserveBalanceCommand
+     -> account-service finds the account, checks balance
+     -> IF balance OK: reserves amount (holds it), replies BalanceReservedReply
+     -> IF no funds:   replies BalanceReservationFailedReply -> saga ends FAILED
+
+  2. (fraud check happens in fraud-service — not this service)
+
+  3. saga-orchestrator sends saga.commands: PostLedgerCommand -> ledger-service
+     (account-service not involved here)
+
+  4. saga-orchestrator sends saga.commands: FinalizeTransferCommand
+     -> account-service commits the debit (source) and credit (target)
+     -> replies BalanceFinalizedReply -> TransferSaga completes
+
+COMPENSATION (if fraud rejected or ledger failed):
+  5. saga-orchestrator sends saga.commands: ReleaseBalanceCommand
+     -> account-service releases the reserved hold
+     -> replies BalanceReleasedReply
+
+================================================================
+ HOW TO TEST ACCOUNT SERVICE DIRECTLY
+================================================================
+  Requires: identity-service running + valid JWT
+
+  1. GET  /api/v1/accounts              — list my accounts
+  2. GET  /api/v1/accounts/{id}/balance — check balance
+  3. GET  /api/v1/accounts/{id}/transactions — account history
+
+  Account creation happens ONLY through the saga (CreateAccountsCommand),
+  not via a direct REST endpoint. To trigger it:
+  -> Register user (identity-service)
+  -> Saga starts → sends CreateAccountsCommand
+  -> Account-service creates checking + savings accounts
+  -> Watch accounts.created topic in Kafdrop :9003
+
+================================================================
+ OBSERVE IN KAFDROP (http://localhost:9003)
+================================================================
+After RegisterUser:
+  accounts.created        -> emitted when saga step completes
+
+During TransferSaga:
+  saga.replies -> look for:
+    BalanceReservedReply         (step 1 done)
+    BalanceFinalizedReply        (step 4 done)
+    BalanceReleasedReply         (compensation done, if saga failed)

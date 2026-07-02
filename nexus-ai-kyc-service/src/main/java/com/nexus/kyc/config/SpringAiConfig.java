@@ -85,10 +85,6 @@ public class SpringAiConfig {
                         .model("gpt-4o")         // Best vision accuracy
                         .temperature(0.0)        // Deterministic extraction
                         .maxTokens(1500)
-                        .responseFormat(
-                                new org.springframework.ai.openai.api.OpenAiApi
-                                        .ChatCompletionRequest.ResponseFormat(
-                                        "json_object"))
                         .build())
                 .defaultAdvisors(new SimpleLoggerAdvisor())
                 .build();
@@ -126,13 +122,30 @@ public class SpringAiConfig {
         - "ABC123456" = "ABC 123 456" → MATCH
         - "ABC123456" vs "ABD123456" → MISMATCH
 
-        Confidence scoring:
-        - 0.95+: all critical fields match, no ambiguity → APPROVED
-        - 0.80-0.94: all fields match but some uncertainty → APPROVED
-          with note
-        - 0.60-0.79: some fields match, one minor uncertainty →
-          REVIEW_REQUIRED
-        - Below 0.60: significant mismatch or multiple issues → REJECTED
+        ══ DECISION RULES — follow exactly in this order ══
+
+        Step 1 — Check forgery:
+        - forgeryDetected=true → status MUST be REVIEW_REQUIRED,
+          requiresManualReview=true, regardless of field matches.
+        - forgeryDetected=false → no forgery concern, continue to step 2.
+
+        Step 2 — Check document expiry:
+        - documentExpired=true → status MUST be REJECTED,
+          rejectionReasons=[DOCUMENT_EXPIRED].
+
+        Step 3 — Compare fields and assign status:
+        - All critical fields match, confidence >= 0.95 → APPROVED,
+          requiresManualReview=false.
+        - All fields match, confidence 0.80–0.94 → APPROVED,
+          requiresManualReview=false.
+        - Some fields match, one minor uncertainty, confidence 0.60–0.79
+          → REVIEW_REQUIRED, requiresManualReview=true.
+        - Significant mismatch or confidence < 0.60 → REJECTED,
+          requiresManualReview=false.
+
+        IMPORTANT: if forgeryDetected=false and all fields match with
+        confidence >= 0.80, the status is APPROVED. Do NOT set
+        REVIEW_REQUIRED when there is no forgery and fields match.
 
         User-facing rejection messages:
         - Write in the language specified in the request
@@ -154,10 +167,6 @@ public class SpringAiConfig {
                         .model("gpt-4o-mini")   // Cheaper — comparison is simpler
                         .temperature(0.0)       // Deterministic decisions
                         .maxTokens(1000)
-                        .responseFormat(
-                                new org.springframework.ai.openai.api.OpenAiApi
-                                        .ChatCompletionRequest.ResponseFormat(
-                                        "json_object"))
                         .build())
                 .defaultAdvisors(new SimpleLoggerAdvisor())
                 .build();

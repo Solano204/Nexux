@@ -9,5 +9,7 @@ public enum PostingType {
     REVERSAL,
     INITIAL_BALANCE,
     ADJUSTMENT,
-    REGULATORY_HOLD
+    REGULATORY_HOLD,
+    DIRECT_DEPOSIT,
+    CASH_IN
 }

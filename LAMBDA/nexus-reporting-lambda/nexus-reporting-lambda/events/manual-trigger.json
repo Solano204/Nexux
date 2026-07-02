@@ -1,0 +1,9 @@
+{
+  "reportDate": "YESTERDAY",
+  "reportTypes": [
+    "OPERATIONS",
+    "COMPLIANCE",
+    "BUSINESS_INTELLIGENCE",
+    "USER_STATEMENTS"
+  ]
+}

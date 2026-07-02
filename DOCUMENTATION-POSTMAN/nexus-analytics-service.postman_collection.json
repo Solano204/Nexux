@@ -1,0 +1,161 @@
+{
+  "info": {
+    "name": "NEXUS - Analytics Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Real-time financial analytics powered by Kafka Streams. Provides monthly analytics, spending trends, top merchants, AI-generated insights, and platform-wide realtime metrics. Port: 8092"
+  },
+  "item": [
+    {
+      "name": "Analytics (User-Facing)",
+      "item": [
+        {
+          "name": "Get Monthly Analytics",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/analytics/accounts/{{accountId}}/monthly/{{yearMonth}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "analytics", "accounts", "{{accountId}}", "monthly", "{{yearMonth}}"],
+              "variable": [
+                { "key": "accountId", "value": "550e8400-e29b-41d4-a716-446655440000" },
+                { "key": "yearMonth", "value": "2026-06", "description": "Format: YYYY-MM" }
+              ]
+            },
+            "description": "Monthly analytics aggregation for an account.\n\nPath variable yearMonth format: YYYY-MM (e.g. 2026-06)\n\nResponse 200: Dynamic analytics object with spending categories, totals, and trends."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Spending Trends",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/analytics/accounts/{{accountId}}/trends",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "analytics", "accounts", "{{accountId}}", "trends"],
+              "variable": [
+                { "key": "accountId", "value": "550e8400-e29b-41d4-a716-446655440000" }
+              ]
+            },
+            "description": "Current-month spending trend data for an account.\n\nResponse 200: Spending trend object (week-over-week, category trends, etc.)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Top Merchants",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/analytics/accounts/{{accountId}}/merchants?limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "analytics", "accounts", "{{accountId}}", "merchants"],
+              "variable": [
+                { "key": "accountId", "value": "550e8400-e29b-41d4-a716-446655440000" }
+              ],
+              "query": [
+                { "key": "limit", "value": "10", "description": "Number of top merchants to return (default: 10)" }
+              ]
+            },
+            "description": "Top merchants by spending volume for the current month. Reads from Redis.\n\nResponse 200: List of { merchantName, totalAmount, transactionCount } sorted by amount descending."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Platform Realtime Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/analytics/platform/realtime",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "analytics", "platform", "realtime"]
+            },
+            "description": "Platform-wide real-time metrics from Redis. No auth required.\n\nResponse 200: Map<String, Object> with platform-level counters and rates."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "AI Insights",
+      "item": [
+        {
+          "name": "Get AI Financial Insights",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{userId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/analytics/accounts/{{accountId}}/insights/{{yearMonth}}?language=es",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "analytics", "accounts", "{{accountId}}", "insights", "{{yearMonth}}"],
+              "variable": [
+                { "key": "accountId", "value": "550e8400-e29b-41d4-a716-446655440000" },
+                { "key": "yearMonth", "value": "2026-06", "description": "Format: YYYY-MM" }
+              ],
+              "query": [
+                { "key": "language", "value": "es", "description": "Language code for insights (es | en, default: es)" }
+              ]
+            },
+            "description": "AI-generated financial insights for the given month. Redis cache (1 hour TTL) — regenerated on cache miss.\n\nResponse 200: List<FinancialInsight> [\n  {\n    type: String (SAVING_OPPORTUNITY | SPENDING_ALERT | TREND | RECOMMENDATION),\n    title: String,\n    description: String,\n    amount: BigDecimal (optional),\n    category: String (optional),\n    actionable: boolean,\n    generatedAt: Instant\n  }\n]"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Internal Analytics (Kafka Streams)",
+      "item": [
+        {
+          "name": "Get Category Spending from State Store",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/streams/category-spending?userId={{userId}}&category=FOOD&date=2026-06-15",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "streams", "category-spending"],
+              "query": [
+                { "key": "userId", "value": "{{userId}}", "description": "User UUID" },
+                { "key": "category", "value": "FOOD", "description": "Spending category (FOOD, TRANSPORT, ENTERTAINMENT, etc.)" },
+                { "key": "date", "value": "2026-06-15", "description": "ISO date (optional, defaults to today)" }
+              ]
+            },
+            "description": "Query Kafka Streams state store for category spending on a specific day. Returns 503 with Retry-After:15 if Kafka Streams is rebalancing.\n\nResponse 200: CategorySpendingAggregate { category, totalAmount, transactionCount, lastUpdated }\nResponse 503: { status: 'STATE_STORE_RESTORING' | 'STORE_NOT_READY', retryAfterSeconds: 15 }"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Kafka Streams Lag",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/v1/streams/health/lag",
+              "host": ["{{baseUrl}}"],
+              "path": ["internal", "v1", "streams", "health", "lag"]
+            },
+            "description": "Returns current Kafka Streams state and consumer lag metrics.\n\nResponse 200: { state: String (RUNNING|REBALANCING|ERROR), lag: Map<String, Long> }"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8092", "type": "string" },
+    { "key": "userId", "value": "550e8400-e29b-41d4-a716-446655440001", "type": "string" },
+    { "key": "accountId", "value": "550e8400-e29b-41d4-a716-446655440000", "type": "string" },
+    { "key": "yearMonth", "value": "2026-06", "type": "string" }
+  ]
+}

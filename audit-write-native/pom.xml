@@ -5,14 +5,19 @@
          https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
+    <!--
+        STANDALONE module — NO <parent> to nexus-financial-platform.
+        Build separately: cd audit-write-native && mvn package [-Pnative]
+        DO NOT add to root <modules>.
+    -->
+
     <groupId>com.nexus</groupId>
     <artifactId>nexus-audit-write-native</artifactId>
     <version>1.0.0</version>
     <name>Nexus Audit Write Path — Quarkus Native</name>
     <description>
         High-throughput audit event ingestion.
-        Quarkus GraalVM native binary:
-        start 90ms, idle 28MB RSS.
+        Quarkus GraalVM native binary: start 90ms, idle 28MB RSS.
         Subscribes to ALL 23 Kafka topics (fan-in).
         Writes to Elasticsearch with op_type=create (idempotent).
         Real-time compliance rule evaluation.
@@ -20,14 +25,31 @@
     </description>
 
     <properties>
-        <quarkus.version>3.8.0</quarkus.version>
+        <quarkus.version>3.8.6</quarkus.version>
         <compiler-plugin.version>3.13.0</compiler-plugin.version>
+        <surefire-plugin.version>3.1.2</surefire-plugin.version>
         <java.version>21</java.version>
-        <!-- Quarkus native requires Java 21 max for GraalVM CE -->
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <maven.compiler.release>21</maven.compiler.release>
+
+        <!--
+            CRITICAL: Forces javac to emit ALL error details.
+            Without this, javac silently collapses cascading errors
+            and you only see the first failure in each file.
+        -->
+        <maven.compiler.showWarnings>true</maven.compiler.showWarnings>
+        <maven.compiler.showDeprecation>true</maven.compiler.showDeprecation>
+        <maven.compiler.compilerArgs>-Xdiags:verbose</maven.compiler.compilerArgs>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <!--
+                io.quarkus.platform:quarkus-bom is the correct BOM for 3.8.x.
+                It manages ALL extension versions — do not override them manually
+                or you will get the exact type-mismatch errors you saw.
+            -->
             <dependency>
                 <groupId>io.quarkus.platform</groupId>
                 <artifactId>quarkus-bom</artifactId>
@@ -40,53 +62,83 @@
 
     <dependencies>
 
-        <!-- ══════════════════════════════════════════════════
+        <!-- ═══════════════════════════════════════════════
              QUARKUS CORE
-             ══════════════════════════════════════════════════ -->
+             ═══════════════════════════════════════════════ -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-arc</artifactId>
         </dependency>
+
+        <!--
+            RESTEasy Reactive — correct name in Quarkus 3.8.x.
+            (quarkus-rest is the 3.9+ rename — do NOT use here)
+        -->
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-rest</artifactId>
+            <artifactId>quarkus-logging-json</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             KAFKA — Reactive messaging for all 23 topics
-             ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-messaging-kafka</artifactId>
+            <artifactId>quarkus-resteasy-reactive</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-resteasy-reactive-jackson</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             ELASTICSEARCH — Write audit events
-             ══════════════════════════════════════════════════ -->
+        <!-- ═══════════════════════════════════════════════
+             KAFKA — Fan-in from all 23 topics
+             Correct name in 3.8.x (quarkus-messaging-kafka is 3.9+)
+             ═══════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-reactive-messaging-kafka</artifactId>
+        </dependency>
+
+        <!-- ═══════════════════════════════════════════════
+             ELASTICSEARCH — Idempotent audit event writes
+             ═══════════════════════════════════════════════ -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-elasticsearch-java-client</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             MONGODB — Write compliance alerts
-             ══════════════════════════════════════════════════ -->
+        <!-- ═══════════════════════════════════════════════
+             MONGODB — Compliance alert persistence
+             Using the reactive variant so InsertOneResult flows
+             through Flow.Publisher (fixes ComplianceRuleEvaluator
+             line 224 — the reactivestreams vs Flow.Publisher mismatch)
+             ═══════════════════════════════════════════════ -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-mongodb-client</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
+        <!--
+            FIX FOR ComplianceRuleEvaluator.java line 224:
+            Mutiny 2.x (bundled in Quarkus 3.8.x) requires
+            java.util.concurrent.Flow.Publisher — NOT org.reactivestreams.Publisher.
+            This bridge adapter is already on your classpath via quarkus-bom
+            but declaring it explicitly ensures it resolves.
+        -->
+        <dependency>
+            <groupId>io.smallrye.reactive</groupId>
+            <artifactId>mutiny-reactor</artifactId>
+        </dependency>
+
+        <!-- ═══════════════════════════════════════════════
              REDIS — Velocity windows for compliance rules
-             ══════════════════════════════════════════════════ -->
+             ═══════════════════════════════════════════════ -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-redis-client</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
+        <!-- ═══════════════════════════════════════════════
              OBSERVABILITY
-             ══════════════════════════════════════════════════ -->
+             ═══════════════════════════════════════════════ -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-micrometer-registry-prometheus</artifactId>
@@ -100,51 +152,131 @@
             <artifactId>quarkus-smallrye-health</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             NATIVE IMAGE SUPPORT
-             ══════════════════════════════════════════════════ -->
+        <!-- ═══════════════════════════════════════════════
+             SERIALIZATION — Jackson for AuditEvent deserialization
+             Needed so record.getPayload() (String) → AuditEvent works
+             ═══════════════════════════════════════════════ -->
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-native</artifactId>
+            <artifactId>quarkus-jackson</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
+        <!-- ═══════════════════════════════════════════════
              TESTING
-             ══════════════════════════════════════════════════ -->
+             ═══════════════════════════════════════════════ -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-junit5</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>io.rest-assured</groupId>
+            <artifactId>rest-assured</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-test-common</artifactId>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>
         <plugins>
+
+            <!-- ═══════════════════════════════════════════
+                 QUARKUS PLUGIN
+                 ═══════════════════════════════════════════ -->
             <plugin>
                 <groupId>io.quarkus.platform</groupId>
                 <artifactId>quarkus-maven-plugin</artifactId>
                 <version>${quarkus.version}</version>
+                <extensions>true</extensions>
                 <executions>
                     <execution>
                         <goals>
                             <goal>build</goal>
                             <goal>generate-code</goal>
+                            <goal>generate-code-tests</goal>
                         </goals>
                     </execution>
                 </executions>
             </plugin>
+
+            <!-- ═══════════════════════════════════════════
+                 COMPILER
+                 compilerArgs as a list — correct for plugin 3.13+
+                 Enables -Xdiags:verbose so you see full error chains,
+                 and -Xlint:deprecation for ComplianceRuleEvaluator warnings
+                 ═══════════════════════════════════════════ -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>${compiler-plugin.version}</version>
                 <configuration>
                     <release>${java.version}</release>
+                    <showWarnings>true</showWarnings>
+                    <showDeprecation>true</showDeprecation>
+                    <compilerArgs>
+                        <arg>-Xdiags:verbose</arg>
+                        <arg>-Xlint:deprecation</arg>
+                        <arg>-Xlint:unchecked</arg>
+                    </compilerArgs>
                 </configuration>
             </plugin>
+
+            <!-- ═══════════════════════════════════════════
+                 SUREFIRE — Unit tests
+                 ═══════════════════════════════════════════ -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${surefire-plugin.version}</version>
+                <configuration>
+                    <systemPropertyVariables>
+                        <java.util.logging.manager>
+                            org.jboss.logmanager.LogManager
+                        </java.util.logging.manager>
+                        <maven.home>${maven.home}</maven.home>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+
+            <!-- ═══════════════════════════════════════════
+                 FAILSAFE — Native integration tests (@NativeImageTest)
+                 Only runs under -Pnative
+                 ═══════════════════════════════════════════ -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.1.2</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                        <configuration>
+                            <systemPropertyVariables>
+                                <native.image.path>
+                                    ${project.build.directory}/${project.build.finalName}-runner
+                                </native.image.path>
+                                <java.util.logging.manager>
+                                    org.jboss.logmanager.LogManager
+                                </java.util.logging.manager>
+                                <maven.home>${maven.home}</maven.home>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
         </plugins>
     </build>
 
     <profiles>
+        <!-- Native binary compilation — requires GraalVM 21 CE -->
         <profile>
             <id>native</id>
             <activation>
@@ -158,4 +290,5 @@
             </properties>
         </profile>
     </profiles>
+
 </project>

@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Nexus Health Monitor Lambda — external cross-plane health monitoring.
+  Runs every 5 minutes via CloudWatch Events.
+  Checks all 16 local plane services via /actuator/health (Spring Boot) or /q/health (Quarkus).
+  Parallel checks via ThreadPoolExecutor (8 workers, ~8s wall time vs ~75s sequential).
+  Tiered alerting: CRITICAL (immediate page), HIGH (2 failures), STANDARD (2+ failures).
+  Recovery detection: explicit all-clear notifications when services come back.
+  Platform scenario analysis: cascade failures, infra down, all-tx-services-down.
+  CloudWatch: metrics + alarms (created programmatically) + health dashboard.
+  Separate monitoring topic watches THIS Lambda — monitor the monitor.
+
+Parameters:
+  LocalPlaneBaseUrl:
+    Type: String
+    Default: http://host.docker.internal
+    Description: >
+      Base URL for local plane health checks.
+      Format: http://host or http://ip (without port).
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  ConsecutiveFailuresThreshold:
+    Type: Number
+    Default: 2
+    Description: Failures before alerting STANDARD tier services
+  HealthCheckTimeoutSeconds:
+    Type: Number
+    Default: 5
+
+Globals:
+  Function:
+    Runtime: python3.12
+    MemorySize: 256
+    Timeout: 120
+    Tracing: Active
+    Environment:
+      Variables:
+        LOCAL_PLANE_BASE_URL: !Ref LocalPlaneBaseUrl
+        PLANE_BRIDGE_SECRET: !Sub
+          "{{resolve:secretsmanager:nexus/plane-bridge-secret:SecretString:secret}}"
+        CRITICAL_ALERT_TOPIC_ARN: !Ref HealthAlertsCriticalTopic
+        STANDARD_ALERT_TOPIC_ARN: !Ref HealthAlertsStandardTopic
+        CLOUDWATCH_NAMESPACE: Nexus/HealthMonitor
+        CONSECUTIVE_FAILURES_THRESHOLD: !Ref ConsecutiveFailuresThreshold
+        HEALTH_CHECK_TIMEOUT_SECONDS: !Ref HealthCheckTimeoutSeconds
+        PARALLEL_CHECKS: "true"
+        MAX_WORKERS: "8"
+        ENVIRONMENT: !Ref Environment
+        AWS_REGION_NAME: !Ref AWS::Region
+
+Resources:
+
+  # ── Lambda Function ───────────────────────────────────────
+  HealthMonitorLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: nexus-health-monitor-lambda
+      Handler: src/handler.check_platform_health
+      CodeUri: .
+
+      Policies:
+        # Publish health metrics
+        - CloudWatchPutMetricPolicy: {}
+        # Manage alarms + read metric history for failure counting
+        - Statement:
+            - Effect: Allow
+              Action:
+                - cloudwatch:PutMetricAlarm
+                - cloudwatch:DescribeAlarms
+                - cloudwatch:SetAlarmState
+                - cloudwatch:GetMetricStatistics
+                - cloudwatch:PutDashboard
+              Resource: "*"
+        # Send alerts and recovery notifications
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt HealthAlertsCriticalTopic.TopicName
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt HealthAlertsStandardTopic.TopicName
+        # Read bridge secret
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub >
+                arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:nexus/*
+
+      Events:
+        HealthCheckSchedule:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
+            Description: Check platform health every 5 minutes
+            Enabled: true
+
+  # ── SNS Topics ────────────────────────────────────────────
+
+  # CRITICAL tier: immediate page for API Gateway, Identity, Account, Transaction
+  HealthAlertsCriticalTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: nexus-health-alerts-critical
+      # In production: add subscriptions for PagerDuty, on-call SMS
+
+  # STANDARD tier: operations team email, Slack
+  HealthAlertsStandardTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: nexus-health-alerts-standard
+
+  # Separate topic for monitoring the monitor itself
+  HealthMonitorSelfWatchTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: nexus-health-monitor-selfwatch
+
+  # ── CloudWatch Alarms ─────────────────────────────────────
+
+  # Monitor the health monitor Lambda itself
+  # (the health monitor cannot monitor itself via health checks)
+  HealthMonitorLambdaErrors:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: nexus-health-monitor-lambda-errors
+      AlarmDescription: >
+        The health monitor Lambda itself is failing.
+        Platform health may not be monitored. Investigate immediately.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: nexus-health-monitor-lambda
+      Statistic: Sum
+      Period: 900          # 15 minutes = 3 check cycles
+      EvaluationPeriods: 1
+      Threshold: 2         # 2+ Lambda errors in 15 min → alert
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref HealthMonitorSelfWatchTopic
+
+  HealthMonitorLambdaThrottles:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: nexus-health-monitor-lambda-throttled
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: nexus-health-monitor-lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref HealthMonitorSelfWatchTopic
+
+Outputs:
+  LambdaArn:
+    Value: !GetAtt HealthMonitorLambda.Arn
+  CriticalTopicArn:
+    Value: !Ref HealthAlertsCriticalTopic
+  StandardTopicArn:
+    Value: !Ref HealthAlertsStandardTopic

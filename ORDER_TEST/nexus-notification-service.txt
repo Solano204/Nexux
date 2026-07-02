@@ -1,0 +1,135 @@
+================================================================
+ NEXUS — nexus-notification-service — Complete Workflow Test Order
+================================================================
+Port: 8089 | Stack: Spring Boot | DB: MongoDB (nexus_notification)
+                                       Redis (rate limiting / dedup)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  Central notification hub. Listens to multiple Kafka topics and delivers
+  email/SMS/push notifications. Also participates in sagas via saga.commands
+  (SendWelcomeNotificationCommand, SendTransactionNotificationCommand).
+  Uses OpenAI GPT-4o-mini to personalize message content.
+
+  Notification types triggered:
+  - WELCOME           -> on users.registered
+  - KYC_APPROVED      -> on identity.verified
+  - KYC_REJECTED      -> on identity.rejected
+  - ACCOUNT_CREATED   -> on accounts.created
+  - TRANSACTION_COMPLETED -> on transactions.completed (sender + receiver)
+  - TRANSACTION_FAILED    -> on transactions.failed
+  - FRAUD_ALERT           -> on fraud.flagged (bypasses quiet hours + rate limits)
+  - SAGA_NOTIFICATION     -> on saga.commands (orchestrated notifications)
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-mongodb nexus-redis nexus-kafka nexus-zookeeper
+
+  Health checks:
+    MongoDB :27019  — notification documents / templates
+    Redis   :6381   — deduplication + rate limiting
+    Kafka   :9003   — Kafdrop
+
+  OPENAI_API_KEY should be set for AI-personalized messages (optional for basic test).
+
+================================================================
+ STEP 2 — PLATFORM CORE
+================================================================
+  1. nexus-config-service   :8888
+  2. nexus-discovery-service :8761
+
+================================================================
+ STEP 3 — WHAT TO RUN TO SEE EACH NOTIFICATION TYPE
+================================================================
+
+  --- WELCOME + KYC + ACCOUNT CREATED (OnboardingFlowSaga) ---
+  ├── nexus-identity-service    :8083  — produces users.registered
+  ├── nexus-saga-orchestrator   :8095  — sends saga commands
+  ├── nexus-account-service     :8085  — produces accounts.created
+  └── nexus-ai-kyc-service      :8091  — produces identity.verified/rejected
+
+  --- TRANSACTION COMPLETED/FAILED notifications ---
+  ├── nexus-identity-service    :8083  — need users
+  ├── nexus-account-service     :8085  — need funded accounts
+  ├── nexus-transaction-service :8086  — produces transactions.completed/failed
+  ├── nexus-saga-orchestrator   :8095  — runs TransferSaga
+  ├── nexus-fraud-service       :8087  — must clear fraud
+  └── nexus-ledger-service      :8088  — must post ledger
+
+  --- FRAUD ALERT (highest priority) ---
+  ├── nexus-transaction-service :8086
+  ├── nexus-saga-orchestrator   :8095
+  └── nexus-fraud-service       :8087  — produces fraud.flagged when REJECTED
+
+================================================================
+ KAFKA TOPICS THIS SERVICE PARTICIPATES IN
+================================================================
+PRODUCES:
+  saga.replies           -> NotificationSentReply (after saga command processed)
+
+CONSUMES:
+  users.registered       [group: notification-service-identity]
+    -> WELCOME notification
+  identity.verified      [group: notification-service-identity]
+    -> KYC_APPROVED notification
+  identity.rejected      [group: notification-service-identity]
+    -> KYC_REJECTED notification (includes rejection reasons)
+  accounts.created       [group: notification-service-accounts]
+    -> ACCOUNT_CREATED notification
+  transactions.completed [group: notification-service-transactions]
+    -> TRANSACTION_COMPLETED for SENDER and RECEIVER
+  transactions.failed    [group: notification-service-transactions]
+    -> TRANSACTION_FAILED for sender only
+  fraud.flagged          [group: notification-service-fraud]
+    -> FRAUD_ALERT (CRITICAL — bypasses quiet hours and rate limits)
+  saga.commands          [group: notification-service-saga]
+    -> SendWelcomeNotificationCommand
+    -> SendTransactionNotificationCommand
+    -> SendFraudAlertCommand
+    (filters by targetService = nexus-notification-service)
+
+================================================================
+ FULL WORKFLOW — WHAT TRIGGERS EACH NOTIFICATION
+================================================================
+  Trigger 1: POST /auth/register
+    -> users.registered published
+    -> notification-service sends WELCOME email/SMS
+    -> saga.commands: SendWelcomeNotificationCommand also arrives
+       (saga wants coordinated confirmation → NotificationSentReply)
+
+  Trigger 2: POST /kyc/initiate + KYC approved
+    -> identity.verified published
+    -> notification-service sends KYC_APPROVED message
+
+  Trigger 3: POST /transactions (saga completes)
+    -> transactions.completed published
+    -> notification-service sends to SENDER: "Tu transferencia fue exitosa"
+    -> notification-service sends to RECEIVER: "Recibiste una transferencia"
+
+  Trigger 4: Fraud rejected
+    -> fraud.flagged published
+    -> notification-service sends FRAUD_ALERT immediately (no quiet hours)
+
+================================================================
+ RATE LIMITING + DEDUP (Redis)
+================================================================
+  Redis stores:
+  - Per-user notification rate limits (max N per hour per channel)
+  - Deduplication keys (same event → same notification blocked)
+  - Quiet hours per user preference
+
+  If Redis is DOWN: notifications still process but with WARN logs.
+  The service degrades gracefully (no Redis = no rate limiting).
+
+================================================================
+ OBSERVE IN KAFDROP (http://localhost:9003)
+================================================================
+  After any saga trigger, watch:
+  saga.commands   -> look for SendWelcomeNotificationCommand or
+                     SendTransactionNotificationCommand
+  saga.replies    -> NotificationSentReply (confirms delivery to saga)
+
+  Notification delivery itself goes to email/SMS provider (not Kafka).
+  Check MongoDB nexus_notification collection for notification records.

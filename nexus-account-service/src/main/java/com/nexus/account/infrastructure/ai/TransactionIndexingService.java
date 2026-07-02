@@ -154,10 +154,11 @@ public class TransactionIndexingService {
                     "[%s] %s of MXN %s — %s. Balance after: MXN %s",
                     formattedDate, type, amountStr, description, balanceStr);
 
-            // Deterministic document ID
-            String docId = transactionId != null
+            // Deterministic document ID — must be a valid UUID for pgvector
+            String rawKey = transactionId != null
                     ? transactionId.toString() + "-" + type
                     : accountId.toString() + "-" + type + "-" + occurredAt.toEpochMilli();
+            String docId = UUID.nameUUIDFromBytes(rawKey.getBytes()).toString();
 
             // Spring AI 1.0.0-M6: Document.builder() pattern
             Document doc = Document.builder()
@@ -228,9 +229,10 @@ public class TransactionIndexingService {
                 tx.description(),
                 tx.balanceAfter() != null ? tx.balanceAfter().toPlainString() : "unknown");
 
-        String docId = tx.transactionId() != null
+        String rawKey = tx.transactionId() != null
                 ? tx.transactionId().toString() + "-" + tx.type()
                 : tx.accountId().toString() + "-" + tx.type() + "-" + tx.occurredAt().toEpochMilli();
+        String docId = UUID.nameUUIDFromBytes(rawKey.getBytes()).toString();
 
         return Document.builder()
                 .id(docId)

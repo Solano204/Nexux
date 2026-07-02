@@ -1,30 +1,52 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
+    <springProperty name="appName"     source="spring.application.name" defaultValue="nexus-discovery-service"/>
+    <springProperty name="appVersion"  source="info.app.version"        defaultValue="1.0.0"/>
+    <springProperty name="environment" source="management.metrics.tags.environment" defaultValue="local"/>
+    <springProperty name="lokiUrl"     source="loki.url"                defaultValue="http://nexus-loki:3100/loki/api/v1/push"/>
 
-    <!-- Console appender with structured output -->
-    <appender name="CONSOLE"
-              class="ch.qos.logback.core.ConsoleAppender">
-        <encoder
-                class="net.logstash.logback.encoder.LogstashEncoder">
-            <includeMdcKeyName>traceId</includeMdcKeyName>
-            <includeMdcKeyName>spanId</includeMdcKeyName>
-            <customFields>
-                {"service":"nexus-discovery-service"}
-            </customFields>
-        </encoder>
-    </appender>
+    <springProfile name="!docker,!production">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level service=${appName} %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+        <logger name="com.netflix.eureka" level="INFO"/>
+        <logger name="com.netflix.discovery" level="INFO"/>
+        <root level="INFO"><appender-ref ref="CONSOLE"/></root>
+    </springProfile>
 
-    <!-- Silence Netflix Eureka's verbose internal logging -->
-    <logger name="com.netflix.eureka" level="WARN"/>
-    <logger name="com.netflix.discovery" level="WARN"/>
-    <logger name="com.netflix.loadbalancer" level="WARN"/>
+    <springProfile name="docker,production">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <customFields>{"service":"${appName}","version":"${appVersion}","environment":"${environment}"}</customFields>
+            </encoder>
+        </appender>
 
-    <!-- Info for our own code + Spring Cloud -->
-    <logger name="com.nexus" level="INFO"/>
-    <logger name="org.springframework.cloud.netflix.eureka"
-            level="INFO"/>
+        <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+            <http><url>${lokiUrl}</url></http>
+            <format>
+                <label>
+                    <pattern>service=${appName},environment=${environment},level=%level</pattern>
+                </label>
+                <message class="com.github.loki4j.logback.JsonLayout"/>
+            </format>
+            <neverBlock>true</neverBlock>
+        </appender>
 
-    <root level="INFO">
-        <appender-ref ref="CONSOLE"/>
-    </root>
+        <appender name="ASYNC_LOKI" class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="LOKI"/>
+            <neverBlock>true</neverBlock>
+            <queueSize>2048</queueSize>
+        </appender>
+
+        <logger name="com.netflix.eureka" level="WARN"/>
+        <logger name="com.netflix.discovery" level="WARN"/>
+        <logger name="org.springframework.cloud.netflix.eureka" level="INFO"/>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </root>
+    </springProfile>
 </configuration>

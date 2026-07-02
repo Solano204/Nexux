@@ -1,0 +1,49 @@
+{
+  "Records": [
+    {
+      "eventID": "test-event-001",
+      "eventVersion": "1.1",
+      "eventSource": "aws:dynamodb",
+      "awsRegion": "us-east-1",
+      "eventName": "MODIFY",
+      "eventSourceARN": "arn:aws:dynamodb:us-east-1:000000000000:table/nexus-transactions/stream/2024-01-01T00:00:00.000",
+      "dynamodb": {
+        "ApproximateCreationDateTime": 1704067200.0,
+        "Keys": {
+          "PK": {"S": "USER#user-123"},
+          "SK": {"S": "TXN#txn-abc-def-456"}
+        },
+        "NewImage": {
+          "PK":                    {"S": "USER#user-123"},
+          "SK":                    {"S": "TXN#txn-abc-def-456"},
+          "transactionId":         {"S": "txn-abc-def-456"},
+          "userId":                {"S": "user-123"},
+          "amount":                {"N": "2500.00"},
+          "currency":              {"S": "MXN"},
+          "status":                {"S": "COMPLETED"},
+          "transactionType":       {"S": "PAYMENT"},
+          "category":              {"S": "FOOD_AND_DINING"},
+          "merchantId":            {"S": "merchant-789"},
+          "merchantName":          {"S": "Restaurante El Buen Sabor"},
+          "merchantCategoryCode":  {"S": "5812"},
+          "paymentNetwork":        {"S": "SPEI"},
+          "completedAt":           {"S": "2024-01-01T14:30:00Z"},
+          "createdAt":             {"S": "2024-01-01T14:29:55Z"}
+        },
+        "OldImage": {
+          "PK":              {"S": "USER#user-123"},
+          "SK":              {"S": "TXN#txn-abc-def-456"},
+          "transactionId":   {"S": "txn-abc-def-456"},
+          "userId":          {"S": "user-123"},
+          "amount":          {"N": "2500.00"},
+          "currency":        {"S": "MXN"},
+          "status":          {"S": "FRAUD_CHECKING"},
+          "transactionType": {"S": "PAYMENT"}
+        },
+        "SequenceNumber": "1000000000000000000001",
+        "SizeBytes": 512,
+        "StreamViewType": "NEW_AND_OLD_IMAGES"
+      }
+    }
+  ]
+}

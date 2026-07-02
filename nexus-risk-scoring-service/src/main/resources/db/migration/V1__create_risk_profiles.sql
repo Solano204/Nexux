@@ -54,7 +54,7 @@ CREATE TABLE risk_profiles (
 -- Primary lookup: current valid profile for a user
 CREATE INDEX idx_risk_profiles_user_valid
     ON risk_profiles (user_id, valid_until DESC)
-    WHERE valid_until > NOW();
+    ;
 
 -- Monitoring: find users still needing recomputation
 CREATE INDEX idx_risk_profiles_tier

@@ -1,26 +1,33 @@
-FROM eclipse-temurin:25-jdk-alpine AS builder
-WORKDIR /build
-COPY .mvn/ .mvn/
-COPY mvnw pom.xml ./
-RUN ./mvnw dependency:go-offline -q
-COPY src ./src
-RUN ./mvnw package -DskipTests -q
+FROM eclipse-temurin:25-jre-alpine
 
-FROM eclipse-temurin:25-jre-alpine AS runtime
-RUN addgroup -S nexus && adduser -S nexus -G nexus
+RUN mkdir -p /var/kafka-streams \
+    && addgroup -S nexus \
+    && adduser -S nexus -G nexus \
+    && chown -R nexus:nexus /var/kafka-streams
+
 USER nexus
 WORKDIR /app
-COPY --from=builder --chown=nexus:nexus \
-    /build/target/nexus-analytics-service-*.jar app.jar
-RUN mkdir -p /var/kafka-streams
-HEALTHCHECK --interval=30s --timeout=10s \
-    --start-period=90s --retries=3 \
-    CMD wget -q --spider \
+
+COPY --chown=nexus:nexus target/nexus-analytics-service-1.0.0.jar app.jar
+
+HEALTHCHECK \
+    --interval=30s \
+    --timeout=10s \
+    --start-period=90s \
+    --retries=3 \
+    CMD wget --quiet --tries=1 --spider \
         http://localhost:8092/actuator/health || exit 1
+
 EXPOSE 8092
-ENTRYPOINT ["java", "-XX:+UseZGC", \
+
+ENTRYPOINT ["java", \
+    "-XX:+UseZGC", \
     "-XX:MaxGCPauseMillis=10", \
-    "-Xms1g", "-Xmx2g", \
-    "-Drockdb.block.cache.size.mb=256", \
-    "-Dspring.profiles.active=docker", \
-    "--enable-preview", "-jar", "app.jar"]
+    "-Xms1g", \
+    "-Xmx2g", \
+    "-XX:MaxMetaspaceSize=256m", \
+    "-Drocksdb.block.cache.size.mb=256", \
+    "-Djava.security.egd=file:/dev/./urandom", \
+    "-Dspring.classformat.ignore=true", \
+    "--enable-preview", \
+    "-jar", "app.jar"]

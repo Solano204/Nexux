@@ -1,0 +1,14 @@
+{
+  "Records": [
+    {
+      "EventSource": "aws:sns",
+      "Sns": {
+        "Message": "{\"notificationId\":\"notif-sms-001\",\"userId\":\"user-456\",\"channel\":\"SMS\",\"eventType\":\"FRAUD_ALERT\",\"recipientPhone\":\"+521234567890\",\"language\":\"es\",\"priority\":\"CRITICAL\",\"payload\":{\"shortMessage\":\"Detectamos actividad inusual en tu cuenta. Revisa tus transacciones recientes.\",\"fraudScore\":\"92\",\"transactionId\":\"txn-fraud-001\"}}",
+        "MessageAttributes": {
+          "channel": { "Type": "String", "Value": "SMS" },
+          "eventType": { "Type": "String", "Value": "FRAUD_ALERT" }
+        }
+      }
+    }
+  ]
+}

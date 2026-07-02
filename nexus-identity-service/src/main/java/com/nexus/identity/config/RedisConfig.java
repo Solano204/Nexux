@@ -2,17 +2,25 @@ package com.nexus.identity.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.CachingConfigurer;
 import org.springframework.cache.annotation.EnableCaching;
+import org.springframework.cache.interceptor.CacheErrorHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import io.lettuce.core.api.StatefulConnection;
+import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.connection.lettuce.LettucePoolingClientConfiguration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
@@ -45,13 +53,19 @@ import java.util.Map;
  *   It is non-blocking (Netty-based) and shares connections via
  *   connection multiplexing — better for Virtual Thread workloads.
  *
- * Timeout: 100ms connect, 100ms command.
- *   Identity service operations are latency-sensitive (auth hot path).
- *   Fast failure prevents cascading delays.
+ * Timeout: 1000ms command (was 100ms — too aggressive, was failing the
+ *   handshake itself under normal Docker networking/startup latency, not
+ *   just genuine Redis unavailability). Identity service operations are
+ *   latency-sensitive (auth hot path), so this stays well under Spring's
+ *   default 60s, just no longer trigger-happy on the handshake.
+ * Pool: 24 max-active / 12 max-idle / 4 min-idle (was unpooled — a single
+ *   shared connection was the bottleneck under concurrent load).
  */
 @Configuration
 @EnableCaching
-public class RedisConfig {
+public class RedisConfig implements CachingConfigurer {
+
+    private static final Logger log = LoggerFactory.getLogger(RedisConfig.class);
 
     @Value("${spring.data.redis.host:nexus-redis}")
     private String host;
@@ -70,9 +84,16 @@ public class RedisConfig {
             serverConfig.setPassword(password);
         }
 
+        GenericObjectPoolConfig<StatefulConnection<?, ?>> poolConfig = new GenericObjectPoolConfig<>();
+        poolConfig.setMaxTotal(24);
+        poolConfig.setMaxIdle(12);
+        poolConfig.setMinIdle(4);
+        poolConfig.setMaxWait(Duration.ofSeconds(3));
+
         LettuceClientConfiguration clientConfig =
-                LettuceClientConfiguration.builder()
-                        .commandTimeout(Duration.ofMillis(100))
+                LettucePoolingClientConfiguration.builder()
+                        .poolConfig(poolConfig)
+                        .commandTimeout(Duration.ofMillis(1000))
                         .shutdownTimeout(Duration.ofMillis(200))
                         .build();
 
@@ -120,5 +141,27 @@ public class RedisConfig {
                 .cacheDefaults(defaultConfig)
                 .withInitialCacheConfigurations(cacheConfigs)
                 .build();
+    }
+
+    @Override
+    public CacheErrorHandler errorHandler() {
+        return new CacheErrorHandler() {
+            @Override
+            public void handleCacheGetError(RuntimeException e, Cache cache, Object key) {
+                log.warn("Redis cache GET failed (cache={}, key={}), falling through to DB: {}", cache.getName(), key, e.getMessage());
+            }
+            @Override
+            public void handleCachePutError(RuntimeException e, Cache cache, Object key, Object value) {
+                log.warn("Redis cache PUT failed (cache={}, key={}): {}", cache.getName(), key, e.getMessage());
+            }
+            @Override
+            public void handleCacheEvictError(RuntimeException e, Cache cache, Object key) {
+                log.warn("Redis cache EVICT failed (cache={}, key={}): {}", cache.getName(), key, e.getMessage());
+            }
+            @Override
+            public void handleCacheClearError(RuntimeException e, Cache cache) {
+                log.warn("Redis cache CLEAR failed (cache={}): {}", cache.getName(), e.getMessage());
+            }
+        };
     }
 }

@@ -1,0 +1,110 @@
+================================================================
+ NEXUS — nexus-ledger-service — Complete Workflow Test Order
+================================================================
+Port: 8088 | Stack: Spring Boot | DB: PostgreSQL (nexus_ledger)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  SAGA participant in TransferSaga step 3: PostLedger.
+  Writes immutable double-entry journal entries (DEBIT source / CREDIT target).
+  Idempotent — safe to replay. Uses Debezium outbox to emit ledger.posted
+  to Kafka after commit. Replies LedgerPostedReply to saga-orchestrator.
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-postgres nexus-kafka nexus-zookeeper
+
+  NOTE: ledger.posted topic is produced via Debezium CDC from PostgreSQL outbox.
+  If Debezium is not running, ledger.posted won't appear in Kafka,
+  but LedgerPostedReply will still be published directly.
+
+================================================================
+ STEP 2 — PLATFORM CORE
+================================================================
+  1. nexus-config-service   :8888
+  2. nexus-discovery-service :8761
+
+================================================================
+ STEP 3 — SERVICES NEEDED TO SEE FULL WORKFLOW
+================================================================
+  Ledger is step 3 of TransferSaga. It runs AFTER fraud is cleared:
+
+  REQUIRED — to reach the ledger step:
+  ├── nexus-identity-service    :8083  — need users with JWT
+  ├── nexus-account-service     :8085  — needs funded accounts
+  ├── nexus-transaction-service :8086  — initiates the transfer
+  ├── nexus-saga-orchestrator   :8095  — sends PostLedgerCommand
+  └── nexus-fraud-service       :8087  — must clear fraud first
+
+  DOWNSTREAM — to see what happens after ledger posting:
+  ├── nexus-account-service     :8085  — FinalizeTransfer (step 4) comes after
+  ├── nexus-notification-service :8089 — final saga step
+  └── audit-write-native        :8096
+        WHY: consumes ledger.posted and ledger.reversed (Debezium CDC topics)
+
+================================================================
+ KAFKA TOPICS THIS SERVICE PARTICIPATES IN
+================================================================
+PRODUCES:
+  saga.replies           -> after successful double-entry posting
+    └── LedgerPostedReply   (includes postingId for audit trail)
+        LedgerFailedReply   (if double-entry constraint violated)
+  ledger.posted          -> via Debezium outbox pattern (CDC from PostgreSQL)
+    └── consumed by: audit-write-native
+  ledger.reversed        -> when a posting is reversed (compensation)
+    └── consumed by: audit-write-native
+
+CONSUMES:
+  saga.commands          [group: ledger-service-saga-commands]
+    -> handles: PostLedgerCommand only (filters commandType + targetService)
+
+================================================================
+ FULL WORKFLOW — LEDGER IN TRANSFER SAGA
+================================================================
+  1. saga-orchestrator sends saga.commands: PostLedgerCommand
+     Payload: { transactionId, sourceAccountId, targetAccountId,
+                amount, currency, postingType="TRANSFER",
+                description, merchantName, sagaId }
+
+  2. ledger-service.LedgerCommandConsumer receives it
+     -> calls LedgerCommandService.postDoubleEntry(command)
+     -> writes two PostgreSQL rows (atomically):
+        DEBIT:  source account debit entry
+        CREDIT: target account credit entry
+     -> Debezium reads the outbox table, publishes to ledger.posted
+     -> publishes saga.replies: LedgerPostedReply
+
+  3. saga-orchestrator receives LedgerPostedReply
+     -> advances to FinalizeTransfer (account-service)
+
+  IDEMPOTENCY: if the same commandId arrives again (Kafka redeliver),
+  LedgerCommandService checks for existing posting and returns the
+  cached result without re-writing.
+
+================================================================
+ HOW TO TEST LEDGER SERVICE
+================================================================
+  Direct REST:
+    GET  /api/v1/ledger/{accountId}/entries  — list entries for an account
+    GET  /api/v1/ledger/postings/{postingId} — get a specific posting
+
+  Via full saga:
+    1. Register two users, fund accounts
+    2. POST /api/v1/transactions to transaction-service
+    3. Watch Kafdrop: saga.commands -> PostLedgerCommand
+    4. Watch Kafdrop: saga.replies  -> LedgerPostedReply
+    5. Watch Kafdrop: ledger.posted -> CDC event (requires Debezium)
+    6. Query: GET /api/v1/ledger/{sourceAccountId}/entries
+
+  Verify double-entry integrity:
+    Every DEBIT must have a matching CREDIT with same amount.
+    Query PostgreSQL: SELECT * FROM ledger_entries WHERE transaction_id = '...';
+
+================================================================
+ OBSERVE IN KAFDROP (http://localhost:9003)
+================================================================
+  saga.commands  -> PostLedgerCommand (arrives after FraudClearedReply)
+  saga.replies   -> LedgerPostedReply (postingId included)
+  ledger.posted  -> CDC event from Debezium (only if Debezium connector running)

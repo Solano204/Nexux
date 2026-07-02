@@ -166,6 +166,7 @@ public class UserCommandService {
             String passwordHash = bcryptTimer.record(() ->
                     passwordEncoder.encode(request.password()));
 
+            Instant now = Instant.now();
             User user = User.builder()
                     .userId(UUID.randomUUID())
                     .email(request.email().toLowerCase())
@@ -176,13 +177,15 @@ public class UserCommandService {
                     .country(request.country())
                     .status(UserStatus.PENDING_KYC)
                     .roles(List.of("USER"))
+                    .createdAt(now)
+                    .updatedAt(now)
                     .build();
 
-            userRepository.save(user);
+            user = userRepository.save(user);
             savePasswordHistory(user.getUserId(), passwordHash);
 
-            writeOutboxEntry("USER", user.getUserId(),
-                    "UserRegistered", buildUserRegisteredPayload(user));
+            writeOutboxEntry("users.registered", user.getUserId(),
+                    "UserRegistered", buildUserRegisteredPayload(user, traceId));
 
             writeAuditLog(user.getUserId(), "USER_REGISTERED",
                     ipAddress, userAgent, traceId,
@@ -325,7 +328,7 @@ public class UserCommandService {
                             truncate(request.deviceFingerprint(), 20)
                     ));
 
-            writeOutboxEntry("USER", user.getUserId(), "LoginSuccessful",
+            writeOutboxEntry("identity.events", user.getUserId(), "LoginSuccessful",
                     buildLoginSuccessPayload(user, session, ipAddress));
 
             loginSuccessCounter.increment();
@@ -378,8 +381,10 @@ public class UserCommandService {
     @Transactional
     public KycInitiationResponse initiateKyc(
             UUID userId, MultipartFile document,
-            String documentType, String ipAddress,
-            String traceId) throws Exception {
+            String documentType,
+            String fullName, String dateOfBirth, String documentNumber,
+            String nationality, String language,
+            String ipAddress, String traceId) throws Exception {
 
         Observation obs = Observation.createNotStarted(
                 "identity.kyc.initiate", observationRegistry).start();
@@ -436,9 +441,12 @@ public class UserCommandService {
                         userRepository.save(u);
                     });
 
-            writeOutboxEntry("USER", userId, "KycInitiated",
+            writeOutboxEntry("identity.kyc", userId, "KycInitiated",
                     buildKycInitiatedPayload(userId, verificationId,
-                            documentType, s3Path));
+                            documentType, s3Path,
+                            fullName, dateOfBirth, documentNumber,
+                            nationality, language,
+                            document.getContentType()));
 
             sqsPublisher.publishKycDocumentForAnalysis(
                     userId, verificationId, s3Path, documentType);
@@ -500,8 +508,8 @@ public class UserCommandService {
                 verification.setFinalDecision(KycDecision.APPROVED);
                 user.approveKyc();
 
-                writeOutboxEntry("USER", userId, "IdentityVerified",
-                        buildIdentityVerifiedPayload(userId, verificationId));
+                writeOutboxEntry("identity.verified", userId, "IdentityVerified",
+                        buildIdentityVerifiedPayload(userId, verificationId, traceId));
 
                 writeAuditLog(userId, "KYC_APPROVED", null, null, traceId,
                         Map.of(
@@ -526,10 +534,10 @@ public class UserCommandService {
                 String userMessage = rejectionExplainer
                         .explain(result.failureReasons(), "es");
 
-                writeOutboxEntry("USER", userId, "IdentityRejected",
+                writeOutboxEntry("identity.rejected", userId, "IdentityRejected",
                         buildIdentityRejectedPayload(
                                 userId, verificationId, result.failureReasons(),
-                                attempts, 3 - attempts, userMessage, permanent));
+                                attempts, 3 - attempts, userMessage, permanent, traceId));
 
                 writeAuditLog(userId, "KYC_REJECTED", null, null, traceId,
                         Map.of(
@@ -612,8 +620,9 @@ public class UserCommandService {
         sessionRepository.saveAll(activeSessions);
         sessionCacheRepository.invalidate(userId);
 
-        writeOutboxEntry("USER", userId, "PasswordChanged",
+        writeOutboxEntry("identity.events", userId, "PasswordChanged",
                 objectMapper.createObjectNode()
+                        .put("eventType", "PasswordChanged")
                         .put("userId", userId.toString())
                         .put("changedAt", Instant.now().toString()));
 
@@ -677,14 +686,15 @@ public class UserCommandService {
 
             // Outbox → notification-service sends the email
             ObjectNode payload = objectMapper.createObjectNode()
-                    .put("userId",    user.getUserId().toString())
-                    .put("email",     user.getEmail())
+                    .put("eventType",  "PasswordResetRequested")
+                    .put("userId",     user.getUserId().toString())
+                    .put("email",      user.getEmail())
                     .put("resetToken", resetToken)
                     .put("expiresAt",
                             Instant.now().plus(PASSWORD_RESET_TOKEN_TTL).toString())
                     .put("requestedAt", Instant.now().toString());
 
-            writeOutboxEntry("USER", user.getUserId(),
+            writeOutboxEntry("identity.events", user.getUserId(),
                     "PasswordResetRequested", payload);
 
             writeAuditLog(user.getUserId(), "PASSWORD_RESET_REQUESTED",
@@ -775,8 +785,9 @@ public class UserCommandService {
             // Burn the token (one-time use)
             sessionCacheRepository.deletePasswordResetToken(token);
 
-            writeOutboxEntry("USER", userId, "PasswordResetCompleted",
+            writeOutboxEntry("identity.events", userId, "PasswordResetCompleted",
                     objectMapper.createObjectNode()
+                            .put("eventType", "PasswordResetCompleted")
                             .put("userId", userId.toString())
                             .put("completedAt", Instant.now().toString()));
 
@@ -861,9 +872,10 @@ public class UserCommandService {
                     sessionRepository.saveAll(sessions);
                     sessionCacheRepository.invalidate(userId);
 
-                    writeOutboxEntry("USER", userId,
+                    writeOutboxEntry("identity.events", userId,
                             "UserRegistrationCancelled",
                             objectMapper.createObjectNode()
+                                    .put("eventType", "UserRegistrationCancelled")
                                     .put("userId", userId.toString())
                                     .put("sagaId", sagaId)
                                     .put("cancelledAt", Instant.now().toString()));
@@ -912,14 +924,15 @@ public class UserCommandService {
                 .build());
     }
 
-    private ObjectNode buildUserRegisteredPayload(User user) {
+    private ObjectNode buildUserRegisteredPayload(User user, String traceId) {
         return objectMapper.createObjectNode()
                 .put("userId",      user.getUserId().toString())
                 .put("email",       user.getEmail())
                 .put("fullName",    user.getFullName())
                 .put("phoneNumber", user.getPhoneNumber())
                 .put("country",     user.getCountry())
-                .put("createdAt",   user.getCreatedAt().toString());
+                .put("createdAt",   user.getCreatedAt().toString())
+                .put("traceId",     traceId != null ? traceId : "");
     }
 
     private ObjectNode buildLoginSuccessPayload(User user,
@@ -936,36 +949,55 @@ public class UserCommandService {
     private ObjectNode buildKycInitiatedPayload(UUID userId,
                                                 UUID verificationId,
                                                 String documentType,
-                                                String s3Path) {
-        return objectMapper.createObjectNode()
+                                                String s3Path,
+                                                String fullName,
+                                                String dateOfBirth,
+                                                String documentNumber,
+                                                String nationality,
+                                                String language,
+                                                String mimeType) {
+        ObjectNode node = objectMapper.createObjectNode()
                 .put("userId",          userId.toString())
                 .put("verificationId",  verificationId.toString())
                 .put("documentType",    documentType)
                 .put("s3Path",          s3Path)
+                .put("fullName",        fullName)
+                .put("dateOfBirth",     dateOfBirth)
+                .put("documentNumber",  documentNumber)
+                .put("mimeType",        mimeType != null ? mimeType : "image/jpeg")
                 .put("initiatedAt",     Instant.now().toString());
+        if (nationality != null) node.put("nationality", nationality);
+        if (language    != null) node.put("language",    language);
+        return node;
     }
 
     private ObjectNode buildIdentityVerifiedPayload(UUID userId,
-                                                    UUID verificationId) {
+                                                    UUID verificationId,
+                                                    String traceId) {
         return objectMapper.createObjectNode()
+                .put("eventType",      "IdentityVerified")
                 .put("userId",         userId.toString())
                 .put("verificationId", verificationId.toString())
-                .put("verifiedAt",     Instant.now().toString());
+                .put("verifiedAt",     Instant.now().toString())
+                .put("traceId",        traceId != null ? traceId : "");
     }
 
     private ObjectNode buildIdentityRejectedPayload(
             UUID userId, UUID verificationId,
             List<String> reasons, int attempt, int remaining,
-            String userMessage, boolean permanent) {
+            String userMessage, boolean permanent, String traceId) {
 
         var node = objectMapper.createObjectNode()
+                .put("eventType",         "IdentityRejected")
                 .put("userId",            userId.toString())
                 .put("verificationId",    verificationId.toString())
                 .put("attempt",           attempt)
                 .put("attemptsRemaining", remaining)
                 .put("userMessage",       userMessage)
                 .put("isPermanent",       permanent)
-                .put("rejectedAt",        Instant.now().toString());
+                .put("canRetry",          remaining > 0)
+                .put("rejectedAt",        Instant.now().toString())
+                .put("traceId",           traceId != null ? traceId : "");
 
         var reasonsArray = objectMapper.createArrayNode();
         reasons.forEach(reasonsArray::add);

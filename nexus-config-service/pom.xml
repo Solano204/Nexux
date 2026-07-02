@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
-         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
@@ -17,19 +16,24 @@
     <description>
         Central configuration server for all 15 Nexus services.
         Spring Cloud Config Server with Git backend.
-        Services fetch config on startup — single source of truth.
-        @RefreshScope + Spring Cloud Bus enables runtime updates
-        without restarts. Secrets injected via environment variables.
     </description>
 
     <properties>
         <java.version>25</java.version>
         <spring-boot.version>3.4.0</spring-boot.version>
         <spring-cloud.version>2024.0.0</spring-cloud.version>
+        <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>org.springframework.cloud</groupId>
                 <artifactId>spring-cloud-dependencies</artifactId>
@@ -41,60 +45,36 @@
     </dependencyManagement>
 
     <dependencies>
-
-        <!-- ══════════════════════════════════════════════════
-             SPRING CLOUD CONFIG SERVER
-             This single dependency IS the config server.
-             @EnableConfigServer activates it.
-             ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-config-server</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             SPRING CLOUD BUS (Kafka)
-             Broadcasts refresh events to all services
-             simultaneously via the existing Kafka cluster.
-             POST /actuator/busrefresh → all services refresh.
-             ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-bus-kafka</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             EUREKA CLIENT
-             Config service registers with discovery so
-             the infrastructure dashboard can see it.
-             Services use hardcoded URL (not discovery) for
-             bootstrap reliability.
-             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-config-monitor</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             ACTUATOR — health, refresh, busrefresh endpoints
-             ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             SECURITY — protect config endpoints
-             Services authenticate with basic auth.
-             ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             OBSERVABILITY
-             ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
@@ -105,9 +85,6 @@
             <version>7.4</version>
         </dependency>
 
-        <!-- ══════════════════════════════════════════════════
-             TESTING
-             ══════════════════════════════════════════════════ -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -120,12 +97,30 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>${spring-boot.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal> </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <mainClass>com.nexus.config.NexusConfigServiceApplication</mainClass> </configuration>
             </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <version>${maven-compiler-plugin.version}</version>
                 <configuration>
                     <release>25</release>
+                    <enablePreview>true</enablePreview>
+                    <fork>true</fork>
+                    <compilerArgs>
+                        <arg>--enable-preview</arg>
+                        <arg>-J--add-opens=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED</arg>
+                        <arg>-J--add-opens=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED</arg>
+                    </compilerArgs>
                 </configuration>
             </plugin>
         </plugins>

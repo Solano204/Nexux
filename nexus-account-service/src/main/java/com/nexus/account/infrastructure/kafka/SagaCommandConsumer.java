@@ -3,6 +3,7 @@ package com.nexus.account.infrastructure.kafka;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.account.application.command.AccountCommandService;
+import com.nexus.account.infrastructure.ai.TransactionIndexingService;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +14,7 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
@@ -43,6 +45,7 @@ public class SagaCommandConsumer {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
+    private final TransactionIndexingService transactionIndexingService;
 
     private static final String REPLIES_TOPIC = "saga.replies";
     private static final String TARGET_SERVICE = "nexus-account-service";
@@ -98,6 +101,11 @@ public class SagaCommandConsumer {
                     obs.event(Observation.Event.of(
                             "saga.CreateAccounts.processed"));
                 }
+                case "CreditAccountCommand" -> {
+                    handleCreditAccount(command, sagaId, traceId);
+                    obs.event(Observation.Event.of(
+                            "saga.CreditAccount.processed"));
+                }
                 default -> log.warn(
                         "Unknown command type for account service: {}",
                         commandType);
@@ -130,6 +138,15 @@ public class SagaCommandConsumer {
         AccountCommandService.BalanceOperationResult result =
                 commandService.reserveBalance(
                         accountId, transactionId, amount, traceId);
+
+        if (result.success() && !result.idempotentReplay()) {
+            Instant now = Instant.now();
+            Thread.startVirtualThread(() ->
+                transactionIndexingService.indexReservation(
+                    accountId, transactionId, amount,
+                    result.newAvailableBalance(),
+                    "Balance reserved for transfer", now));
+        }
 
         // Publish reply to saga.replies
         String replyType = result.success()
@@ -178,6 +195,14 @@ public class SagaCommandConsumer {
                 commandService.releaseBalance(
                         accountId, transactionId, amount, traceId);
 
+        if (result.success() && !result.idempotentReplay()) {
+            Instant now = Instant.now();
+            Thread.startVirtualThread(() ->
+                transactionIndexingService.indexRelease(
+                    accountId, transactionId, amount,
+                    result.newAvailableBalance(), now));
+        }
+
         Map<String, Object> reply = Map.of(
                 "replyType", "BalanceReleasedReply",
                 "sagaId", sagaId,
@@ -209,6 +234,16 @@ public class SagaCommandConsumer {
                 sourceAccountId, targetAccountId,
                 transactionId, amount, traceId);
 
+        Instant now = Instant.now();
+        Thread.startVirtualThread(() -> {
+            transactionIndexingService.indexFinalizedDebit(
+                sourceAccountId, transactionId, amount, null,
+                "Outgoing transfer completed", now);
+            transactionIndexingService.indexCredit(
+                targetAccountId, transactionId, amount, null,
+                "Incoming transfer received", now);
+        });
+
         Map<String, Object> reply = Map.of(
                 "replyType", "BalanceFinalizedReply",
                 "sagaId", sagaId,
@@ -223,6 +258,39 @@ public class SagaCommandConsumer {
                 objectMapper.writeValueAsString(reply));
     }
 
+    private void handleCreditAccount(JsonNode command, String sagaId,
+                                     String traceId) throws Exception {
+        JsonNode payload = command.path("payload");
+        UUID accountId = UUID.fromString(payload.path("accountId").asText());
+        UUID transactionId = UUID.fromString(payload.path("transactionId").asText());
+        BigDecimal amount = new BigDecimal(payload.path("amount").asText());
+        String commandId = command.path("commandId").asText();
+
+        commandService.creditAccount(accountId, transactionId, amount, traceId);
+
+        Instant now = Instant.now();
+        Thread.startVirtualThread(() ->
+            transactionIndexingService.indexCredit(
+                accountId, transactionId, amount, null,
+                "Direct deposit received", now));
+
+        Map<String, Object> reply = Map.of(
+                "replyType", "BalanceFinalizedReply",
+                "sagaId", sagaId,
+                "commandId", commandId,
+                "transactionId", transactionId.toString(),
+                "sourceService", TARGET_SERVICE,
+                "success", true,
+                "repliedAt", java.time.Instant.now().toString()
+        );
+
+        kafkaTemplate.send(REPLIES_TOPIC, sagaId,
+                objectMapper.writeValueAsString(reply));
+
+        log.info("CreditAccount reply sent: sagaId={} accountId={} amount={}",
+                sagaId, accountId, amount);
+    }
+
     private void handleCreateAccounts(JsonNode command, String sagaId,
                                       String traceId) throws Exception {
         JsonNode payload = command.path("payload");
@@ -233,15 +301,19 @@ public class SagaCommandConsumer {
         var accounts = commandService.createDefaultAccounts(
                 userId, currency, traceId);
 
+        Map<String, Object> accountPayload = new java.util.HashMap<>();
+        accountPayload.put("userId", userId.toString());
+        accountPayload.put("accountsCreated", accounts.size());
+        accounts.forEach(a -> accountPayload.put(
+                a.accountType().toLowerCase() + "AccountId", a.accountId()));
+
         Map<String, Object> reply = Map.of(
                 "replyType", "AccountsCreatedReply",
                 "sagaId", sagaId,
                 "commandId", commandId,
                 "sourceService", TARGET_SERVICE,
                 "success", true,
-                "payload", Map.of(
-                        "userId", userId.toString(),
-                        "accountsCreated", accounts.size()),
+                "payload", accountPayload,
                 "repliedAt", java.time.Instant.now().toString()
         );
 

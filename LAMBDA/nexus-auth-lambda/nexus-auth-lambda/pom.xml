@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.nexus.aws</groupId>
+    <artifactId>nexus-auth-lambda</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>Nexus Auth Lambda</name>
+    <description>
+        AWS Lambda: Cognito JWT validation + token refresh + session management.
+        SnapStart: snapshot after JVM init, ~200ms cold start.
+        DynamoDB: session store + JWT revocation list.
+        Bridges to local Plane A identity service for KYC status.
+    </description>
+
+    <properties>
+        <java.version>21</java.version>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <aws.lambda.version>1.2.3</aws.lambda.version>
+        <aws.sdk.version>2.25.0</aws.sdk.version>
+        <jackson.version>2.17.0</jackson.version>
+    </properties>
+
+    <dependencies>
+
+        <!-- ══════════════════════════════════════════════════
+             AWS LAMBDA CORE
+             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-lambda-java-core</artifactId>
+            <version>${aws.lambda.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-lambda-java-events</artifactId>
+            <version>3.11.4</version>
+        </dependency>
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-lambda-java-log4j2</artifactId>
+            <version>1.6.0</version>
+        </dependency>
+
+        <!-- ══════════════════════════════════════════════════
+             AWS SDK v2
+             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>dynamodb</artifactId>
+            <version>${aws.sdk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>cognitoidentityprovider</artifactId>
+            <version>${aws.sdk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>secretsmanager</artifactId>
+            <version>${aws.sdk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>url-connection-client</artifactId>
+            <version>${aws.sdk.version}</version>
+        </dependency>
+
+        <!-- ══════════════════════════════════════════════════
+             X-RAY TRACING
+             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-xray-recorder-sdk-core</artifactId>
+            <version>2.14.0</version>
+        </dependency>
+        <!-- aws-xray-recorder-sdk-aws-sdk-v2-instrumentor intentionally omitted:
+             its TracingInterceptor (auto-registered via AWS SDK v2's classpath
+             SPI scan, not called directly by app code) references
+             PropertyNamingStrategy.CAMEL_CASE_TO_LOWER_CASE_WITH_UNDERSCORES,
+             a field jackson-databind no longer has — crashes the Lambda at
+             cold-start init (NoSuchFieldError) if present. AWSXRay (used
+             directly by this code) lives in -core, unaffected by removing
+             this. Lambda's platform-level Tracing=Active still traces the
+             invocation itself; this only drops automatic per-AWS-SDK-call
+             subsegments. -->
+
+        <!-- ══════════════════════════════════════════════════
+             JWT VALIDATION
+             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>com.auth0</groupId>
+            <artifactId>java-jwt</artifactId>
+            <version>4.4.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.auth0</groupId>
+            <artifactId>jwks-rsa</artifactId>
+            <version>0.22.1</version>
+        </dependency>
+
+        <!-- ══════════════════════════════════════════════════
+             JSON
+             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+
+        <!-- ══════════════════════════════════════════════════
+             CRAC — SnapStart checkpoint/restore lifecycle
+             Required for org.crac.Core and org.crac.Resource
+             ══════════════════════════════════════════════════ -->
+        <dependency>
+            <groupId>io.github.crac</groupId>
+            <artifactId>org-crac</artifactId>
+            <version>0.1.3</version>
+        </dependency>
+
+        <!-- TESTING -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>5.11.0</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>21</release>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.2</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -149,7 +149,7 @@ public class Stage2DataComparison {
 
             ═══ QUALITY FLAGS ═══
             Document Expired:  %s
-            Forgery Indicator: %s
+            Forgery Detected:  %s  ← true=forgery found, false=no forgery (clean document)
             Forgery Detail:    %s
             Image Issues:      %s
 
@@ -157,11 +157,8 @@ public class Stage2DataComparison {
             1. Compare each submitted field against extracted field
             2. Apply name normalization rules for Latin American names
             3. Apply date normalization (different formats may be same date)
-            4. Consider quality flags in your decision
+            4. Apply the decision rules from the system prompt in order
             5. Produce KycVerificationDecision JSON
-
-            If forgery indicator is present: status must be
-            REVIEW_REQUIRED (not APPROVED), regardless of data match.
 
             Be specific in fieldMatches about WHY each field matches
             or does not match.

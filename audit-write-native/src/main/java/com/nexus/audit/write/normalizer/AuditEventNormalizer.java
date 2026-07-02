@@ -10,6 +10,7 @@ import org.jboss.logging.Logger;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 /**
@@ -64,8 +65,8 @@ public class AuditEventNormalizer {
                     rawEvent.path("spanId").asText(null),
                     topic,
                     kafkaOffset,
-                    extractTimestamp(rawEvent),
-                    Instant.now(),
+                    extractTimestamp(rawEvent).truncatedTo(ChronoUnit.MILLIS),
+                    Instant.now().truncatedTo(ChronoUnit.MILLIS),
                     isFinancialEvent(eventType),
                     isSensitiveData(eventType),
                     requiresSarReview(eventType, rawEvent),

@@ -1,0 +1,21 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:nexus-postgres}:5432/nexus_accounts
+    username: ${POSTGRES_USER:nexus}
+    password: ${POSTGRES_PASSWORD}
+  data:
+    mongodb:
+      uri: mongodb://${MONGO_USER:nexus}:${MONGO_PASSWORD}@${MONGO_HOST:nexus-mongodb}:27017/nexus_accounts?authSource=admin
+    redis:
+      host: ${REDIS_HOST:nexus-redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+      timeout: 5s
+      connect-timeout: 5s
+      lettuce:
+        pool:
+          enabled: true
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+          max-wait: 3s

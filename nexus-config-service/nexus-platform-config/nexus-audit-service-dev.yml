@@ -1,0 +1,8 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5433/nexus_audit
+    username: nexus
+    password: nexus_dev_password
+  elasticsearch:
+    uris: http://localhost:9201
+

@@ -1,6 +1,7 @@
 package com.nexus.gateway.ratelimit;
 
 import org.springframework.cloud.gateway.filter.ratelimit.KeyResolver;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
@@ -14,6 +15,8 @@ import reactor.core.publisher.Mono;
  *
  * Limit: 10 requests per minute per IP (1 token per 6 seconds)
  */
+@Primary
+
 @Component("ipKeyResolver")
 public class IpKeyResolver implements KeyResolver {
 

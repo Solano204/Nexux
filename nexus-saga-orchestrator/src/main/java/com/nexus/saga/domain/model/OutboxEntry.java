@@ -1,8 +1,10 @@
 package com.nexus.saga.domain.model;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.hypersistence.utils.hibernate.type.json.JsonType;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.Type;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -19,23 +21,23 @@ public class OutboxEntry {
     @Column(name = "outbox_id")
     private UUID outboxId;
 
-    @Column(name = "aggregate_type")
+    @Column(name = "aggregate_type", nullable = false)
     private String aggregateType;
 
-    @Column(name = "aggregate_id")
+    @Column(name = "aggregate_id", nullable = false)
     private UUID aggregateId;
 
-    @Column(name = "event_type")
+    @Column(name = "event_type", nullable = false)
     private String eventType;
 
-    @Column(name = "topic")
+    @Column(name = "topic", nullable = false)
     private String topic;
 
-    @io.hypersistence.utils.hibernate.type.json.JsonType
-    @Column(columnDefinition = "jsonb")
+    @Type(JsonType.class)
+    @Column(name = "payload", columnDefinition = "jsonb", nullable = false)
     private JsonNode payload;
 
-    @Column(name = "created_at")
+    @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
     @Column(name = "processed_at")
@@ -43,15 +45,24 @@ public class OutboxEntry {
 
     @PrePersist
     void prePersist() {
-        if (outboxId == null) outboxId = UUID.randomUUID();
-        if (createdAt == null) createdAt = Instant.now();
+        if (outboxId == null)      outboxId      = UUID.randomUUID();
+        if (createdAt == null)     createdAt     = Instant.now();
         if (aggregateType == null) aggregateType = "SAGA";
     }
 
-    public static OutboxEntry forSagaCommand(String topic,
-                                             String sagaId,
-                                             Object command,
-                                             com.fasterxml.jackson.databind.ObjectMapper mapper) {
+    /**
+     * Domain method — keeps mutation explicit and avoids
+     * exposing a raw setter on an otherwise immutable entity.
+     */
+    public void markProcessed() {
+        this.processedAt = Instant.now();
+    }
+
+    public static OutboxEntry forSagaCommand(
+            String topic,
+            String sagaId,
+            Object command,
+            com.fasterxml.jackson.databind.ObjectMapper mapper) {
         try {
             return OutboxEntry.builder()
                     .topic(topic)
@@ -61,15 +72,15 @@ public class OutboxEntry {
                     .payload(mapper.valueToTree(command))
                     .build();
         } catch (Exception e) {
-            throw new RuntimeException(
-                    "Failed to build outbox entry", e);
+            throw new RuntimeException("Failed to build outbox entry for saga command", e);
         }
     }
 
-    public static OutboxEntry forDomainEvent(String topic,
-                                             String aggregateId,
-                                             Object event,
-                                             com.fasterxml.jackson.databind.ObjectMapper mapper) {
+    public static OutboxEntry forDomainEvent(
+            String topic,
+            String aggregateId,
+            Object event,
+            com.fasterxml.jackson.databind.ObjectMapper mapper) {
         try {
             return OutboxEntry.builder()
                     .topic(topic)
@@ -79,8 +90,7 @@ public class OutboxEntry {
                     .payload(mapper.valueToTree(event))
                     .build();
         } catch (Exception e) {
-            throw new RuntimeException(
-                    "Failed to build outbox entry", e);
+            throw new RuntimeException("Failed to build outbox entry for domain event", e);
         }
     }
 }

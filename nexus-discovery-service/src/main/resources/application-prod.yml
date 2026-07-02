@@ -1,0 +1,43 @@
+spring:
+  cloud:
+    config:
+      uri: ${CONFIG_SERVER_URI:http://nexus-config-service:8888}
+      enabled: true
+      fail-fast: true
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
+
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration
+      - org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration
+
+eureka:
+  instance:
+    hostname: ${HOSTNAME:nexus-discovery-service}
+    prefer-ip-address: false
+  client:
+    register-with-eureka: false
+    fetch-registry: false
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+  server:
+    enable-self-preservation: true
+    eviction-interval-timer-in-ms: 15000
+    renewal-percent-threshold: 0.85
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 0.05
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+
+logging:
+  level:
+    root: WARN
+    com.nexus: INFO
+    com.netflix.eureka: WARN
+    com.netflix.discovery: WARN

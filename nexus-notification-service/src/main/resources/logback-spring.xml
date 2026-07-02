@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <springProperty name="appName"     source="spring.application.name" defaultValue="nexus-notification-service"/>
+    <springProperty name="appVersion"  source="info.app.version"        defaultValue="1.0.0"/>
+    <springProperty name="environment" source="management.metrics.tags.environment" defaultValue="local"/>
+    <springProperty name="lokiUrl"     source="loki.url"                defaultValue="http://nexus-loki:3100/loki/api/v1/push"/>
+
+    <!-- ── DEV / LOCAL: plain readable console ───────────────────── -->
+    <springProfile name="!docker,!production">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level traceId=%X{traceId:-} spanId=%X{spanId:-} service=${appName} %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+        <logger name="com.nexus" level="DEBUG"/>
+        <logger name="org.hibernate.SQL" level="DEBUG"/>
+        <logger name="org.flywaydb" level="INFO"/>
+        <root level="INFO"><appender-ref ref="CONSOLE"/></root>
+    </springProfile>
+
+    <!-- ── DOCKER / PRODUCTION: JSON + Loki ──────────────────────── -->
+    <springProfile name="docker,production">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <customFields>{"service":"${appName}","version":"${appVersion}","environment":"${environment}"}</customFields>
+                <includeMdcKeyName>traceId</includeMdcKeyName>
+                <includeMdcKeyName>spanId</includeMdcKeyName>
+                <includeMdcKeyName>X-Request-Id</includeMdcKeyName>
+            </encoder>
+        </appender>
+
+        <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+            <http><url>${lokiUrl}</url></http>
+            <format>
+                <label>
+                    <pattern>service=${appName},environment=${environment},level=%level</pattern>
+                </label>
+                <message class="com.github.loki4j.logback.JsonLayout"/>
+            </format>
+            <neverBlock>true</neverBlock>
+        </appender>
+
+        <appender name="ASYNC_LOKI" class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="LOKI"/>
+            <neverBlock>true</neverBlock>
+            <queueSize>1024</queueSize>
+        </appender>
+
+        <logger name="com.nexus" level="INFO"/>
+        <logger name="org.hibernate.SQL" level="WARN"/>
+        <logger name="org.apache.kafka" level="WARN"/>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </root>
+    </springProfile>
+
+</configuration>

@@ -1,0 +1,42 @@
+# samconfig.toml — missing from repo, created from scratch
+#
+# This Lambda polls all 15 local plane services every 5 minutes.
+# LocalPlaneBaseUrl is the only required override.
+# In production, set it to the base URL/IP of your local plane host.
+
+version = 0.1
+
+[default.build.parameters]
+use_container = false
+
+[default.deploy.parameters]
+stack_name = "nexus-health-monitor-dev"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-dev"
+s3_prefix = "nexus-health-monitor-lambda"
+parameter_overrides = "LocalPlaneBaseUrl=http://host.docker.internal Environment=dev ConsecutiveFailuresThreshold=2 HealthCheckTimeoutSeconds=5"
+
+[staging.deploy.parameters]
+stack_name = "nexus-health-monitor-staging"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-staging"
+s3_prefix = "nexus-health-monitor-lambda"
+parameter_overrides = "LocalPlaneBaseUrl=http://nexus-local-plane.staging.internal Environment=dev ConsecutiveFailuresThreshold=2 HealthCheckTimeoutSeconds=5"
+
+[prod.deploy.parameters]
+stack_name = "nexus-health-monitor-prod"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-prod"
+s3_prefix = "nexus-health-monitor-lambda"
+# LocalPlaneBaseUrl: the IP/hostname of the server running the Docker Compose stack
+# Set via --parameter-overrides at deploy time or secrets in CI
+parameter_overrides = "LocalPlaneBaseUrl=http://nexus-local-plane.prod.internal Environment=prod ConsecutiveFailuresThreshold=2 HealthCheckTimeoutSeconds=5"

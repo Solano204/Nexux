@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: nexus-audit-query-jvm
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-audit-query-jvm:8097]
+
+  - job_name: nexus-elasticsearch
+    metrics_path: /_prometheus/metrics
+    static_configs:
+      - targets: [nexus-elasticsearch:9200]
+
+  - job_name: nexus-config-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-config-service:8888]

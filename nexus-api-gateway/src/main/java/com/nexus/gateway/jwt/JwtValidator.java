@@ -33,7 +33,7 @@ public class JwtValidator {
     private final JwksCache jwksCache;
     private final ObservationRegistry observationRegistry;
 
-    private static final String ISSUER = "nexus-platform";
+    private static final String ISSUER = "nexus-identity-service";
     private static final String AUDIENCE = "nexus-platform";
     private static final List<String> ALLOWED_ALGORITHMS = List.of("RS256");
 

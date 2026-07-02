@@ -1,0 +1,187 @@
+{
+  "TextDetections": [
+    {
+      "DetectedText": "INSTITUTO NACIONAL ELECTORAL",
+      "Type": "LINE",
+      "Id": 0,
+      "Confidence": 99.2,
+      "Geometry": {
+        "BoundingBox": {
+          "Width": 0.45,
+          "Height": 0.03,
+          "Left": 0.28,
+          "Top": 0.05
+        }
+      }
+    },
+    {
+      "DetectedText": "CREDENCIAL PARA VOTAR",
+      "Type": "LINE",
+      "Id": 1,
+      "Confidence": 98.5,
+      "Geometry": {
+        "BoundingBox": {
+          "Width": 0.35,
+          "Height": 0.025,
+          "Left": 0.33,
+          "Top": 0.09
+        }
+      }
+    },
+    {
+      "DetectedText": "NOMBRE",
+      "Type": "LINE",
+      "Id": 2,
+      "Confidence": 97.8,
+      "Geometry": {
+        "BoundingBox": {
+          "Width": 0.12,
+          "Height": 0.02,
+          "Left": 0.35,
+          "Top": 0.22
+        }
+      }
+    },
+    {
+      "DetectedText": "GARCIA LOPEZ JUAN CARLOS",
+      "Type": "LINE",
+      "Id": 3,
+      "Confidence": 96.1,
+      "Geometry": {
+        "BoundingBox": {
+          "Width": 0.4,
+          "Height": 0.025,
+          "Left": 0.35,
+          "Top": 0.25
+        }
+      }
+    },
+    {
+      "DetectedText": "DOMICILIO",
+      "Type": "LINE",
+      "Id": 4,
+      "Confidence": 95.3,
+      "Geometry": {
+        "BoundingBox": {
+          "Width": 0.15,
+          "Height": 0.02,
+          "Left": 0.35,
+          "Top": 0.32
+        }
+      }
+    },
+    {
+      "DetectedText": "CALLE REFORMA 123 COL CENTRO",
+      "Type": "LINE",
+      "Id": 5,
+      "Confidence": 93.7,
+      "Geometry": {
+        "BoundingBox": {
+          "Width": 0.42,
+          "Height": 0.025,
+          "Left": 0.35,
+          "Top": 0.35
+        }
+      }
+    },
+    {
+      "DetectedText": "CURP",
+      "Type": "LINE",
+      "Id": 6,
+      "Confidence": 98.9,
+      "Geometry": {
+        "BoundingBox": {
+          "Width": 0.06,
+          "Height": 0.02,
+          "Left": 0.35,
+          "Top": 0.45
+        }
+      }
+    },
+    {
+      "DetectedText": "GALJ900315HDFRPN01",
+      "Type": "LINE",
+      "Id": 7,
+      "Confidence": 94.2,
+      "Geometry": {
+        "BoundingBox": {
+          "Width": 0.3,
+          "Height": 0.025,
+          "Left": 0.42,
+          "Top": 0.45
+        }
+      }
+    },
+    {
+      "DetectedText": "FECHA DE NACIMIENTO 15/03/1990",
+      "Type": "LINE",
+      "Id": 8,
+      "Confidence": 92.8,
+      "Geometry": {
+        "BoundingBox": {
+          "Width": 0.38,
+          "Height": 0.025,
+          "Left": 0.35,
+          "Top": 0.52
+        }
+      }
+    },
+    {
+      "DetectedText": "SECCION 1234 VIGENCIA 2030",
+      "Type": "LINE",
+      "Id": 9,
+      "Confidence": 91.5,
+      "Geometry": {
+        "BoundingBox": {
+          "Width": 0.35,
+          "Height": 0.025,
+          "Left": 0.35,
+          "Top": 0.58
+        }
+      }
+    },
+    {
+      "DetectedText": "INSTITUTO",
+      "Type": "WORD",
+      "Id": 10,
+      "Confidence": 99.5,
+      "Geometry": {
+        "BoundingBox": {
+          "Width": 0.12,
+          "Height": 0.03,
+          "Left": 0.28,
+          "Top": 0.05
+        }
+      }
+    },
+    {
+      "DetectedText": "NACIONAL",
+      "Type": "WORD",
+      "Id": 11,
+      "Confidence": 99.3,
+      "Geometry": {
+        "BoundingBox": {
+          "Width": 0.11,
+          "Height": 0.03,
+          "Left": 0.41,
+          "Top": 0.05
+        }
+      }
+    },
+    {
+      "DetectedText": "ELECTORAL",
+      "Type": "WORD",
+      "Id": 12,
+      "Confidence": 99.1,
+      "Geometry": {
+        "BoundingBox": {
+          "Width": 0.12,
+          "Height": 0.03,
+          "Left": 0.53,
+          "Top": 0.05
+        }
+      }
+    }
+  ],
+  "TextModelVersion": "3.0"
+}

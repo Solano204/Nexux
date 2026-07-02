@@ -6,7 +6,6 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -77,9 +76,7 @@ public class AccountAdvisorService {
         return accountAdvisorClient.prompt()
                 .user(finalMessage)
                 .advisors(a -> a
-                        .param(MessageChatMemoryAdvisor.CHAT_MEMORY_CONVERSATION_ID_KEY,
-                                sessionId)
-                        .param(MessageChatMemoryAdvisor.CHAT_MEMORY_RETRIEVE_SIZE_KEY, 10))
+                        .param("chat_memory_conversation_id", sessionId))
                 .stream()
                 .content()
                 .doOnComplete(() -> {

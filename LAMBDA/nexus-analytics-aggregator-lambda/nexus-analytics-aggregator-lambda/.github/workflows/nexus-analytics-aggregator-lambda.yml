@@ -1,0 +1,191 @@
+# .github/workflows/nexus-analytics-aggregator-lambda.yml
+
+name: Analytics Aggregator Lambda Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'nexus-analytics-aggregator-lambda/**'
+      - '.github/workflows/nexus-analytics-aggregator-lambda.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'nexus-analytics-aggregator-lambda/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.12'
+  SAM_TEMPLATE: nexus-analytics-aggregator-lambda/template.yaml
+  AWS_REGION: us-east-1
+
+jobs:
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 1: LINT + UNIT TESTS
+  # ════════════════════════════════════════════════════════════
+  test:
+    name: Lint + Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-analytics-aggregator-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov ruff moto[dynamodb,sqs] freezegun
+
+      - name: Lint (ruff)
+        run: ruff check src/ tests/ || true   # non-blocking on warnings
+
+      - name: Run Unit Tests
+        run: |
+          pytest tests/unit/ -v \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-fail-under=70
+
+      - name: Run Integration Tests (moto mocks)
+        run: |
+          pytest tests/integration/ -v \
+            --cov=src \
+            --cov-append
+
+      - name: Cache test artifacts
+        uses: actions/cache/save@v4
+        with:
+          path: nexus-analytics-aggregator-lambda/.pytest_cache
+          key: pytest-${{ github.sha }}
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 2: SAM BUILD + VALIDATE
+  # ════════════════════════════════════════════════════════════
+  sam-build:
+    name: SAM Build + Validate
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-analytics-aggregator-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: SAM Validate
+        run: sam validate --template template.yaml --lint
+
+      - name: SAM Build
+        run: sam build --template template.yaml
+
+      - name: Upload SAM build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sam-build-${{ github.sha }}
+          path: nexus-analytics-aggregator-lambda/.aws-sam/
+          retention-days: 7
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 3: DEPLOY TO STAGING
+  # ════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy to Staging
+    needs: sam-build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: staging
+    defaults:
+      run:
+        working-directory: nexus-analytics-aggregator-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials (staging)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download SAM build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sam-build-${{ github.sha }}
+          path: nexus-analytics-aggregator-lambda/.aws-sam/
+
+      - name: SAM Deploy to Staging
+        run: |
+          sam deploy \
+            --config-env staging \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --resolve-s3
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 4: DEPLOY TO PRODUCTION (main branch only)
+  # ════════════════════════════════════════════════════════════
+  deploy-prod:
+    name: Deploy to Production
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: nexus-analytics-aggregator-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials (production)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download SAM build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sam-build-${{ github.sha }}
+          path: nexus-analytics-aggregator-lambda/.aws-sam/
+
+      - name: SAM Deploy to Production
+        run: |
+          sam deploy \
+            --config-env prod \
+            --no-fail-on-empty-changeset \
+            --resolve-s3

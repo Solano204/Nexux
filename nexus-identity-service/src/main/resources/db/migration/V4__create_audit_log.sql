@@ -26,12 +26,11 @@ CREATE INDEX idx_audit_user_occurred
     ON audit_log (user_id, occurred_at DESC);
 
 -- IMMUTABILITY TRIGGER — Prevents any modification to audit records
+-- IMMUTABILITY TRIGGER — Prevents any modification to audit records
 CREATE OR REPLACE FUNCTION prevent_audit_log_modification()
 RETURNS TRIGGER AS $$
 BEGIN
-    RAISE EXCEPTION
-        'audit_log entries are immutable. ' ||
-        'Attempted operation: % on record: %',
+    RAISE EXCEPTION 'audit_log entries are immutable. Attempted operation: % on record: %',
         TG_OP, OLD.audit_id;
 END;
 $$ LANGUAGE plpgsql;

@@ -1,0 +1,55 @@
+# samconfig.toml
+# SAM CLI deployment configuration for nexus-analytics-aggregator-lambda.
+# This file was missing from the repo — created from scratch.
+#
+# Usage:
+#   sam deploy                          → uses [default.deploy] section
+#   sam deploy --config-env staging     → uses [staging.deploy] section
+#   sam deploy --config-env prod        → uses [prod.deploy] section
+
+version = 0.1
+
+# ════════════════════════════════════════════════════════════════
+# BUILD CONFIG
+# ════════════════════════════════════════════════════════════════
+[default.build.parameters]
+use_container = false     # Build locally (requires Python 3.12 installed)
+# use_container = true    # Uncomment to build in Lambda-like Docker container
+
+# ════════════════════════════════════════════════════════════════
+# DEFAULT (local dev / testing with LocalStack)
+# ════════════════════════════════════════════════════════════════
+[default.deploy.parameters]
+stack_name = "nexus-analytics-aggregator-dev"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-dev"
+s3_prefix = "nexus-analytics-aggregator-lambda"
+
+# ════════════════════════════════════════════════════════════════
+# STAGING
+# ════════════════════════════════════════════════════════════════
+[staging.deploy.parameters]
+stack_name = "nexus-analytics-aggregator-staging"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-staging"
+s3_prefix = "nexus-analytics-aggregator-lambda"
+parameter_overrides = "Environment=staging LogLevel=DEBUG"
+
+# ════════════════════════════════════════════════════════════════
+# PRODUCTION
+# ════════════════════════════════════════════════════════════════
+[prod.deploy.parameters]
+stack_name = "nexus-analytics-aggregator-prod"
+region = "us-east-1"
+confirm_changeset = true     # Always review in prod
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-prod"
+s3_prefix = "nexus-analytics-aggregator-lambda"
+parameter_overrides = "Environment=prod LogLevel=INFO"

@@ -1,0 +1,50 @@
+spring:
+  cloud:
+    config:
+      uri: ${CONFIG_SERVER_URI:http://nexus-config-service:8888}
+      enabled: true
+      fail-fast: true
+      username: ${CONFIG_SERVER_USERNAME}
+      password: ${CONFIG_SERVER_PASSWORD}
+    bus:
+      enabled: true
+
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://nexus-mongodb:27017/nexus_notification}
+      auto-index-creation: false
+    redis:
+      host: ${REDIS_HOST:nexus-redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+  instance:
+    health-check-url-path: /actuator/health
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: ${TRACING_SAMPLE_RATE:0.05}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+
+logging:
+  level:
+    root: WARN
+    com.nexus.notification: INFO
+    org.apache.kafka: WARN
+    com.netflix.eureka: WARN
+    com.netflix.discovery: WARN

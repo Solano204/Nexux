@@ -1,0 +1,228 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Nexus Reporting Lambda — automated daily financial report generation.
+  Schedule: 6am Mexico City (cron 0 12 * * ? * UTC).
+  Reports: Operations (PDF/JSON/CSV), Compliance (PDF/CSV, 7yr retention),
+  Business Intelligence (PDF/CSV), User Statements (JSON/CSV).
+  S3 archive with KMS encryption, lifecycle policies, versioning.
+  1024MB / 15min timeout / 2GB ephemeral for PDFBox heavy workloads.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  OpsNotificationEmail:
+    Type: String
+    Default: ops@nexusbank.com
+    Description: Email for report completion notifications
+  ReportTimezone:
+    Type: String
+    Default: America/Mexico_City
+
+Globals:
+  Function:
+    Runtime: java21
+    Tracing: Active
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+
+Resources:
+
+  # ── Lambda Function ───────────────────────────────────────
+  ReportingLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: nexus-reporting-lambda
+      Handler: com.nexus.reporting.ReportingHandler::handleRequest
+      CodeUri: target/nexus-reporting-lambda-1.0.0.jar
+      MemorySize: 1024
+      Timeout: 900        # 15 minutes — Lambda maximum
+      AutoPublishAlias: live
+      SnapStart:
+        ApplyOn: PublishedVersions
+      EphemeralStorage:
+        Size: 2048         # 2GB /tmp for PDFBox intermediate files
+      Environment:
+        Variables:
+          TRANSACTIONS_TABLE: nexus-transactions
+          FRAUD_ALERTS_TABLE: nexus-fraud-alerts
+          ANALYTICS_DAILY_TABLE: nexus-analytics-daily
+          ANALYTICS_CATEGORY_TABLE: nexus-analytics-category
+          ANALYTICS_HOURLY_VOLUME_TABLE: nexus-analytics-hourly-volume
+          PLATFORM_METRICS_TABLE: nexus-analytics-platform-metrics
+          REPORTS_BUCKET: !Ref ReportsBucket
+          REPORTS_KMS_KEY_ARN: !GetAtt ReportsKmsKey.Arn
+          NOTIFICATION_SNS_TOPIC_ARN: !Ref ReportCompletedTopic
+          CLOUDWATCH_NAMESPACE: Nexus/Reporting
+          PLATFORM_NAME: "Nexus Bank"
+          REPORT_CURRENCY: MXN
+          COMPLIANCE_REPORT_RETENTION_YEARS: "7"
+          TIMEZONE: !Ref ReportTimezone
+          REPORT_LANGUAGE: es
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: nexus-transactions
+        - DynamoDBReadPolicy:
+            TableName: nexus-fraud-alerts
+        - DynamoDBReadPolicy:
+            TableName: nexus-analytics-daily
+        - DynamoDBReadPolicy:
+            TableName: nexus-analytics-category
+        - DynamoDBReadPolicy:
+            TableName: nexus-analytics-hourly-volume
+        - DynamoDBReadPolicy:
+            TableName: nexus-analytics-platform-metrics
+        - S3CrudPolicy:
+            BucketName: !Ref ReportsBucket
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt ReportCompletedTopic.TopicName
+        - CloudWatchPutMetricPolicy: {}
+        - KMSEncryptPolicy:
+            KeyId: !Ref ReportsKmsKey
+      Events:
+        DailyReportSchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 12 * * ? *)
+            Description: Daily report generation at 6am Mexico City (UTC-6)
+            Input: >
+              {"reportDate":"YESTERDAY","reportTypes":["OPERATIONS","COMPLIANCE","BUSINESS_INTELLIGENCE","USER_STATEMENTS"]}
+
+  # ── S3 Bucket ─────────────────────────────────────────────
+  ReportsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub nexus-reports-${Environment}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref ReportsKmsKey
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ComplianceRetention7Years
+            Status: Enabled
+            Prefix: daily/compliance/
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: STANDARD_IA
+              - TransitionInDays: 365
+                StorageClass: GLACIER
+          - Id: OperationsRetention90Days
+            Status: Enabled
+            Prefix: daily/operations/
+            ExpirationInDays: 90
+          - Id: BIRetention1Year
+            Status: Enabled
+            Prefix: daily/business-intelligence/
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: STANDARD_IA
+            ExpirationInDays: 365
+          - Id: UserStatementsRetention1Year
+            Status: Enabled
+            Prefix: daily/user-statements/
+            ExpirationInDays: 365
+
+  # ── KMS Key ───────────────────────────────────────────────
+  ReportsKmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for nexus-reports S3 bucket encryption
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowRootAccount
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: '*'
+
+  # ── SNS Topic ─────────────────────────────────────────────
+  ReportCompletedTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: nexus-report-completed
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref OpsNotificationEmail
+
+  # ── CloudWatch Alarms ─────────────────────────────────────
+  ReportGenerationFailure:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: nexus-reporting-failure
+      AlarmDescription: >
+        Report generation Lambda error. Daily reports may be missing.
+        Investigate and re-run manually if needed.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: nexus-reporting-lambda
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref ReportCompletedTopic
+
+  ReportNotGenerated:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: nexus-daily-report-not-generated
+      AlarmDescription: >
+        No ReportGenerationComplete metric today. Lambda may not have run.
+        TreatMissingData=breaching catches complete Lambda failures.
+      Namespace: Nexus/Reporting
+      MetricName: ReportGenerationComplete
+      Statistic: Sum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref ReportCompletedTopic
+
+  ReportDurationHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: nexus-reporting-duration-high
+      AlarmDescription: >
+        Report generation took over 10 minutes. Approaching 15min timeout.
+        May need Step Functions split or memory increase.
+      Namespace: Nexus/Reporting
+      MetricName: ReportGenerationDuration
+      Statistic: Maximum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: 600000
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  ReportsBucketName:
+    Value: !Ref ReportsBucket
+  ReportsBucketArn:
+    Value: !GetAtt ReportsBucket.Arn
+  ReportCompletedTopicArn:
+    Value: !Ref ReportCompletedTopic
+  LambdaArn:
+    Value: !GetAtt ReportingLambda.Arn
+  KmsKeyArn:
+    Value: !GetAtt ReportsKmsKey.Arn

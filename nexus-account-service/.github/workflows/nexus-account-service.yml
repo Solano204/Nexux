@@ -1,0 +1,228 @@
+# .github/workflows/nexus-account-service.yml
+# RENAMED from nexus-account-service (no extension)
+
+name: Nexus Account Service Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'nexus-account-service/**'
+      - '.github/workflows/nexus-account-service.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'nexus-account-service/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SERVICE_NAME: nexus-account-service
+  JAVA_VERSION: '25'
+  DOCKER_IMAGE: nexusplatform/nexus-account-service
+
+jobs:
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 1: COMPILE + UNIT TESTS
+  # ════════════════════════════════════════════════════════════
+  unit-tests:
+    name: Compile + Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-account-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Compile
+        run: mvn compile -q --no-transfer-progress
+
+      - name: Run Unit Tests
+        run: |
+          mvn test \
+            -Dgroups="unit" \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            --no-transfer-progress
+
+      - name: Coverage Report
+        run: |
+          mvn verify \
+            -Dgroups="unit" \
+            -Pcoverage \
+            --no-transfer-progress
+
+      - name: Upload Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Unit Tests — ${{ env.SERVICE_NAME }}
+          path: nexus-account-service/target/surefire-reports/*.xml
+          reporter: java-junit
+
+      - name: Cache compiled artifacts
+        uses: actions/cache/save@v4
+        with:
+          path: nexus-account-service/target
+          key: compiled-account-${{ github.sha }}
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 2: INTEGRATION TESTS
+  # PostgreSQL + pgvector + MongoDB + Redis + Kafka (Testcontainers)
+  # ════════════════════════════════════════════════════════════
+  integration-tests:
+    name: Integration Tests
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-account-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Restore compiled artifacts
+        uses: actions/cache/restore@v4
+        with:
+          path: nexus-account-service/target
+          key: compiled-account-${{ github.sha }}
+
+      - name: Run Integration Tests
+        run: |
+          mvn test \
+            -Dgroups="integration" \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            --no-transfer-progress
+        env:
+          TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: /var/run/docker.sock
+          TESTCONTAINERS_RYUK_DISABLED: "false"
+          # Mock key — no real OpenAI calls in integration tests
+          OPENAI_API_KEY: "test-key-mock"
+
+      - name: Upload Integration Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Integration Tests — ${{ env.SERVICE_NAME }}
+          path: nexus-account-service/target/surefire-reports/*.xml
+          reporter: java-junit
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 3: CONTRACT TESTS
+  # ════════════════════════════════════════════════════════════
+  contract-tests:
+    name: Contract Tests
+    needs: integration-tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-account-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Run Contract Tests
+        run: |
+          mvn test \
+            -Dgroups="contract" \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            --no-transfer-progress
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 4: DOCKER BUILD + PUSH
+  # ════════════════════════════════════════════════════════════
+  docker-build:
+    name: Docker Build + Push
+    needs: [unit-tests, integration-tests, contract-tests]
+    if: |
+      always() && !failure() && !cancelled() &&
+      (github.ref == 'refs/heads/main' ||
+       github.ref == 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-account-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Build JAR
+        run: mvn package -DskipTests --no-transfer-progress
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: nexus-account-service
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 5: DEPLOY TO STAGING
+  # ════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy to Staging
+    needs: docker-build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Deploy nexus-account-service to staging
+        run: |
+          echo "Deploying nexus-account-service:${{ github.sha }} to staging"
+          # kubectl set image deployment/nexus-account-service \
+          #   nexus-account-service=${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+          # kubectl rollout status deployment/nexus-account-service --timeout=180s

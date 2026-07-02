@@ -1,0 +1,38 @@
+# samconfig.toml — missing from repo, created from scratch
+# SnapStart: AutoPublishAlias in template.yaml auto-publishes each deploy.
+# AWS snapshots the new version → ~200-500ms cold start vs 5-15s default.
+
+version = 0.1
+
+[default.build.parameters]
+use_container = false
+
+[default.deploy.parameters]
+stack_name = "nexus-auth-lambda-dev"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-dev"
+s3_prefix = "nexus-auth-lambda"
+parameter_overrides = "LocalPlaneIdentityUrl=http://host.docker.internal:8083"
+
+[staging.deploy.parameters]
+stack_name = "nexus-auth-lambda-staging"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-staging"
+s3_prefix = "nexus-auth-lambda"
+parameter_overrides = "LocalPlaneIdentityUrl=http://nexus-identity-service.staging.internal:8083"
+
+[prod.deploy.parameters]
+stack_name = "nexus-auth-lambda-prod"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-prod"
+s3_prefix = "nexus-auth-lambda"
+parameter_overrides = "LocalPlaneIdentityUrl=http://nexus-identity-service.prod.internal:8083"

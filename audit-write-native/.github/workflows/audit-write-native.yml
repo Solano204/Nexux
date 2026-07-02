@@ -1,0 +1,149 @@
+# .github/workflows/audit-write-native.yml
+#
+# IMPORTANT: This is a Quarkus GraalVM native service.
+# Native compilation runs inside Docker (quarkus.native.container-build=true)
+# so no local GraalVM installation is needed on the CI runner.
+# Build time: ~3-5 minutes for native compilation.
+
+name: Audit Write Native Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'audit-write-native/**'
+      - '.github/workflows/audit-write-native.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'audit-write-native/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SERVICE_NAME: audit-write-native
+  JAVA_VERSION: '21'           # GraalVM CE requires Java 21, NOT 25
+  DOCKER_IMAGE: nexusplatform/audit-write-native
+
+jobs:
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 1: COMPILE + UNIT TESTS (JVM mode — fast)
+  # Native compilation is slow; validate logic in JVM mode first
+  # ════════════════════════════════════════════════════════════
+  unit-tests:
+    name: Compile + Unit Tests (JVM mode)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: audit-write-native
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Compile (JVM)
+        run: mvn compile -q --no-transfer-progress
+
+      - name: Run Unit Tests (JVM mode — no native needed)
+        run: mvn test --no-transfer-progress
+        env:
+          QUARKUS_KAFKA_DEVSERVICES_ENABLED: "false"
+
+      - name: Cache compiled artifacts
+        uses: actions/cache/save@v4
+        with:
+          path: audit-write-native/target
+          key: compiled-audit-native-${{ github.sha }}
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 2: NATIVE BUILD + DOCKER PUSH
+  # Uses container build (no local GraalVM required).
+  # Only runs on main/develop after tests pass.
+  # Build time: ~3-5 minutes.
+  # ════════════════════════════════════════════════════════════
+  native-build:
+    name: Native Build + Push (~5 min)
+    needs: unit-tests
+    if: |
+      always() && !failure() && !cancelled() &&
+      (github.ref == 'refs/heads/main' ||
+       github.ref == 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: audit-write-native
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      # Native compilation inside a GraalVM Docker container.
+      # quarkus.native.container-build=true tells Quarkus to use
+      # ghcr.io/graalvm/graalvm-community:21 for the compilation.
+      - name: Build Native Binary (inside GraalVM container)
+        run: |
+          mvn package -Pnative -DskipTests \
+            -Dquarkus.native.container-build=true \
+            -Dquarkus.native.builder-image=ghcr.io/graalvm/graalvm-community:21 \
+            --no-transfer-progress
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and Push Native Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: audit-write-native
+          file: audit-write-native/Dockerfile.native
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # No layer caching for native — the binary changes every build
+          # and the GraalVM cache is already inside the builder container
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 3: DEPLOY TO STAGING
+  # ════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy to Staging
+    needs: native-build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Deploy audit-write-native to staging
+        run: |
+          echo "Deploying ${{ env.SERVICE_NAME }}:${{ github.sha }} to staging"
+          echo "Native binary: ~90ms startup, ~28MB RSS"

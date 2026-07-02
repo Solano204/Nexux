@@ -1,0 +1,125 @@
+================================================================
+ NEXUS — nexus-fraud-service — Complete Workflow Test Order
+================================================================
+Port: 8087 | Stack: Spring Boot | DB: PostgreSQL (nexus_fraud)
+                                       Elasticsearch (fraud index)
+                                       Redis (velocity/cache)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  SAGA participant in TransferSaga step 2: CheckFraud.
+  Runs a ReAct AI agent (OpenAI GPT-4o-mini) with fraud policy embeddings
+  (pgvector). Replies FraudClearedReply, FraudRejectedReply, or FraudReviewReply.
+  Also produces fraud.flagged for high-risk transactions (notification + audit).
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-postgres nexus-redis nexus-kafka nexus-zookeeper nexus-elasticsearch
+
+  Health checks:
+    PostgreSQL    :5434  — fraud cases + pgvector embeddings
+    Redis         :6381  — transaction velocity checks
+    Elasticsearch :9202  — historical fraud patterns
+    Kafka         :9003  — Kafdrop
+
+  OPENAI_API_KEY must be set in .env or environment.
+  Without it, the AI analysis will fail and transactions will be blocked.
+
+================================================================
+ STEP 2 — PLATFORM CORE
+================================================================
+  1. nexus-config-service   :8888
+  2. nexus-discovery-service :8761
+
+================================================================
+ STEP 3 — SERVICES NEEDED TO SEE FULL WORKFLOW
+================================================================
+  Fraud service is step 2 of TransferSaga. To see it in context:
+
+  REQUIRED — to trigger fraud check:
+  ├── nexus-identity-service    :8083  — register users, get JWT
+  ├── nexus-account-service     :8085  — must have funded accounts
+  ├── nexus-transaction-service :8086  — initiates the transfer
+  ├── nexus-saga-orchestrator   :8095  — sends CheckFraudCommand
+  └── nexus-ledger-service      :8088  — runs after fraud cleared
+
+  DOWNSTREAM — to see what happens after fraud decision:
+  ├── nexus-notification-service :8089
+  │     WHY: consumes fraud.flagged (high-priority alert, bypasses quiet hours)
+  ├── nexus-risk-scoring-service :8094
+  │     WHY: risk profile updated when fraud flag occurs
+  └── audit-write-native        :8096
+        WHY: records fraud.result and fraud.flagged to Elasticsearch
+
+================================================================
+ KAFKA TOPICS THIS SERVICE PARTICIPATES IN
+================================================================
+PRODUCES:
+  saga.replies           -> fraud decision back to saga-orchestrator
+    └── FraudClearedReply   (transaction is clean)
+        FraudRejectedReply  (transaction blocked)
+        FraudReviewReply    (needs manual review)
+  fraud.result           -> direct publish consumed by transaction-service
+    └── decision + fraudScore + reasons
+  fraud.flagged          -> when REJECTED, high-risk alert
+    └── consumed by: notification-service (FRAUD_ALERT)
+                     audit-write-native (compliance + rules engine)
+
+CONSUMES:
+  saga.commands          [group: fraud-service-saga-commands]
+    -> handles: CheckFraudCommand only (filters by commandType + targetService)
+
+================================================================
+ FULL WORKFLOW — FRAUD CHECK IN TRANSFER SAGA
+================================================================
+  1. saga-orchestrator sends saga.commands: CheckFraudCommand
+     Payload includes: transactionId, userId, amount, currency,
+                       sourceAccountId, targetAccountId,
+                       preComputedSignals (velocity, device info)
+
+  2. fraud-service.FraudCommandConsumer receives it
+     -> calls FraudAnalysisService.analyze(request)
+     -> runs ReAct AI agent:
+        Tool 1: velocity check (Redis — how many txns in last hour?)
+        Tool 2: amount threshold check (PostgreSQL fraud policies)
+        Tool 3: pgvector similarity search (similar fraud patterns)
+        Tool 4: account age check
+     -> GPT-4o-mini reasons over tool results
+     -> produces decision: CLEARED / REJECTED / REVIEW
+
+  3. IF CLEARED:
+     -> publishes saga.replies: FraudClearedReply
+     -> saga-orchestrator sends PostLedgerCommand to ledger-service
+
+  4. IF REJECTED:
+     -> publishes saga.replies: FraudRejectedReply
+     -> publishes fraud.flagged (notification-service sends FRAUD_ALERT)
+     -> publishes fraud.result  (transaction-service marks FRAUD_REJECTED)
+     -> saga-orchestrator sends ReleaseBalanceCommand (compensation)
+
+================================================================
+ HOW TO TEST FRAUD SERVICE
+================================================================
+  Direct REST (no JWT required for internal API, or check SecurityConfig):
+    POST /api/v1/fraud/analyze
+    Body: { "transactionId", "userId", "amount", "currency",
+            "transactionType", "sourceAccountId" }
+
+  Via full saga:
+    1. Set OPENAI_API_KEY in .env
+    2. Register two users, ensure accounts funded
+    3. POST /api/v1/transactions to transaction-service
+    4. Watch Kafdrop: saga.commands -> CheckFraudCommand appears
+    5. Watch Kafdrop: saga.replies  -> FraudClearedReply appears
+    6. If you want to TEST REJECTION: send a very large amount
+       that triggers the amount threshold rule in fraud policies
+
+================================================================
+ OBSERVE IN KAFDROP (http://localhost:9003)
+================================================================
+  saga.commands     -> look for CheckFraudCommand
+  saga.replies      -> FraudClearedReply OR FraudRejectedReply
+  fraud.result      -> full decision with score
+  fraud.flagged     -> only appears when transaction is REJECTED

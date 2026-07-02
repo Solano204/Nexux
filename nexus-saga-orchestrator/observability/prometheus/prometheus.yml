@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: nexus-saga-orchestrator
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-saga-orchestrator:8095]
+
+  - job_name: nexus-config-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-config-service:8888]
+
+  - job_name: nexus-discovery-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-discovery-service:8761]

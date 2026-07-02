@@ -7,17 +7,21 @@ spring:
 
   cloud:
     config:
-      uri: http://nexus-config-service:8888
-      fail-fast: true
+      uri: ${CONFIG_SERVER_URI:http://localhost:8888}
+      fail-fast: false
+      retry:
+        max-attempts: 3
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
 
   threads:
     virtual:
       enabled: true
 
   datasource:
-    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5432/nexus_fraud}
+    url: ${DATASOURCE_URL:jdbc:postgresql://localhost:5433/nexus_fraud}
     username: ${POSTGRES_USER:nexus}
-    password: ${POSTGRES_PASSWORD:}
+    password: ${POSTGRES_PASSWORD:nexus_dev_password}
     hikari:
       maximum-pool-size: 20
       minimum-idle: 5
@@ -37,13 +41,13 @@ spring:
 
   data:
     redis:
-      host: ${REDIS_HOST:nexus-redis}
-      port: ${REDIS_PORT:6379}
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6381}
       password: ${REDIS_PASSWORD:}
       timeout: 100ms
 
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
     producer:
       acks: all
       enable-idempotence: true
@@ -57,9 +61,6 @@ spring:
     listener:
       ack-mode: manual
 
-  # ════════════════════════════════════════════════════════════
-  # SPRING AI — Full configuration (M6 milestone)
-  # ════════════════════════════════════════════════════════════
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:}
@@ -77,7 +78,7 @@ spring:
         schema-validation: true
 
   elasticsearch:
-    uris: ${ELASTICSEARCH_URI:http://nexus-elasticsearch:9200}
+    uris: ${ELASTICSEARCH_URI:http://localhost:9201}
 
 server:
   port: 8087
@@ -85,11 +86,14 @@ server:
 eureka:
   client:
     service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
+    register-with-eureka: true
+    fetch-registry: true
   instance:
     prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 30
+    lease-expiration-duration-in-seconds: 90
 
-# Resilience4j for OpenAI circuit breaker
 resilience4j:
   circuitbreaker:
     instances:
@@ -108,8 +112,6 @@ management:
     distribution:
       percentiles-histogram:
         fraud.analysis.duration.seconds: true
-        fraud.tool.velocity_check.internal.duration.seconds: true
-        fraud.tool.rag_policy.internal.duration.seconds: true
       percentiles:
         fraud.analysis.duration.seconds: 0.5, 0.9, 0.95, 0.99
     tags:
@@ -120,14 +122,9 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
 
 logging:
   level:
     com.nexus.fraud: INFO
     org.springframework.ai: INFO
-  pattern:
-    console: >
-      %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
-      traceId=%X{traceId} spanId=%X{spanId}
-      service=nexus-fraud-service %logger{36} - %msg%n

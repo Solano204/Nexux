@@ -1,6 +1,5 @@
 package com.nexus.notification.application;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.nexus.notification.application.ai.NotificationContentGenerator;
 import com.nexus.notification.application.channel.*;
 import com.nexus.notification.domain.model.*;
@@ -10,13 +9,12 @@ import com.nexus.notification.infrastructure.redis.NotificationRedisRepository;
 import io.micrometer.core.instrument.*;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.*;
 import java.util.*;
-import java.util.concurrent.StructuredTaskScope;
+import java.util.concurrent.*;
 
 /**
  * Notification Processing Service — Core pipeline orchestrator.
@@ -24,7 +22,7 @@ import java.util.concurrent.StructuredTaskScope;
  * Processing steps:
  * 1. Deduplication check (Redis)
  * 2. Rate limit check (Redis)
- * 3. Concurrent data gathering (Structured Concurrency)
+ * 3. Concurrent data gathering (Virtual Threads)
  * 4. Quiet hours check
  * 5. AI content generation
  * 6. Channel selection
@@ -33,7 +31,10 @@ import java.util.concurrent.StructuredTaskScope;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
+// ← @RequiredArgsConstructor REMOVED — conflicts with the explicit constructor below.
+//   Lombok would generate a constructor for all final fields, but we also have a
+//   manual constructor that initializes Counter fields from MeterRegistry.
+//   Spring sees two constructors and can't pick one → NoSuchMethodException on <init>().
 public class NotificationProcessingService {
 
     private final NotificationContentGenerator contentGenerator;
@@ -50,6 +51,8 @@ public class NotificationProcessingService {
     private final Counter dedupSkippedCounter;
     private final Counter quietHoursDeferredCounter;
 
+    // Spring uses this constructor for injection.
+    // MeterRegistry is injected by Spring; Counters are built here, not injected.
     public NotificationProcessingService(
             NotificationContentGenerator contentGenerator,
             NotificationRepository notificationRepository,
@@ -127,17 +130,19 @@ public class NotificationProcessingService {
                 }
             }
 
-            // ── Step 3: Concurrent data gathering ─────────
+            // ── Step 3: Concurrent data gathering (Virtual Threads) ─
             UserNotificationPreferences prefs;
-            try (var scope2 =
-                         new StructuredTaskScope.ShutdownOnFailure()) {
+            try (ExecutorService executor =
+                         Executors.newVirtualThreadPerTaskExecutor()) {
 
-                var prefsFuture = scope2.fork(() ->
-                        loadPreferences(userId));
+                Future<UserNotificationPreferences> prefsFuture =
+                        executor.submit(() -> loadPreferences(userId));
 
-                scope2.join().throwIfFailed();
-                prefs = prefsFuture.get();
+                prefs = prefsFuture.get(5, TimeUnit.SECONDS);
 
+            } catch (TimeoutException e) {
+                log.warn("Preferences loading timed out, using defaults");
+                prefs = buildDefaultPreferences(userId);
             } catch (Exception e) {
                 log.warn("Data gathering failed, using defaults: {}",
                         e.getMessage());
@@ -259,13 +264,11 @@ public class NotificationProcessingService {
 
         List<NotificationChannel> channels = new ArrayList<>();
 
-        // Push: if enabled
         if (prefs.getPushConfig() != null &&
                 prefs.getPushConfig().enabled()) {
             channels.add(NotificationChannel.PUSH);
         }
 
-        // Urgent: always add all available channels
         if (isUrgentEventType(eventType)) {
             if (prefs.getEmailConfig() != null &&
                     prefs.getEmailConfig().enabled()) {
@@ -300,8 +303,6 @@ public class NotificationProcessingService {
 
     private String determineGenerationMethod(
             NotificationContent content) {
-        // If templateFallback is non-empty but highlights is empty,
-        // likely used fallback
         return (content.highlights() != null &&
                 !content.highlights().isEmpty())
                 ? "AI" : "FALLBACK";

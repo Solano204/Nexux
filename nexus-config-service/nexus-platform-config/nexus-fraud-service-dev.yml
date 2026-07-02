@@ -1,0 +1,11 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5433/nexus_fraud
+    username: nexus
+    password: nexus_dev_password
+  data:
+
+    redis:
+      host: localhost
+      port: 6380
+      password: ""

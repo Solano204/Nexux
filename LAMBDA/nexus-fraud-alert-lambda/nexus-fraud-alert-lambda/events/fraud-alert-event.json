@@ -1,0 +1,20 @@
+{
+  "Records": [
+    {
+      "messageId": "test-message-id-001",
+      "receiptHandle": "test-receipt-handle",
+      "body": "{\"alertId\":\"alert-abc-123\",\"transactionId\":\"txn-xyz-789\",\"userId\":\"user-456\",\"fraudScore\":92,\"riskLevel\":\"CRITICAL\",\"triggeringFactors\":[\"VELOCITY_SPIKE\",\"GEOLOCATION_ANOMALY\"],\"detectedPatterns\":[\"STRUCTURING\"],\"amount\":9500.00,\"currency\":\"MXN\",\"merchantId\":\"merchant-001\",\"merchantName\":\"Unknown Merchant\",\"detectedAt\":\"2024-01-15T03:45:00Z\"}",
+      "attributes": {
+        "ApproximateReceiveCount": "1",
+        "SentTimestamp": "1705290300000",
+        "SenderId": "AROAXXXXXXXXXXXXXXXX:nexus-fraud-service",
+        "ApproximateFirstReceiveTimestamp": "1705290300100"
+      },
+      "messageAttributes": {},
+      "md5OfBody": "test-md5",
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:us-east-1:000000000000:nexus-fraud-alerts-high-severity",
+      "awsRegion": "us-east-1"
+    }
+  ]
+}

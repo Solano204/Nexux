@@ -25,9 +25,13 @@ public class MerchantAggregationTopology {
 
     @Autowired
     public void buildMerchantTopology(StreamsBuilder builder) {
-        JsonSerde<JsonNode> jsonSerde = new JsonSerde<>(objectMapper);
+        JsonSerde<JsonNode> jsonSerde = new JsonSerde<>(JsonNode.class, objectMapper);
+        jsonSerde.ignoreTypeHeaders();
         KStream<String, JsonNode> completedStream = builder.stream(INPUT_TOPIC, Consumed.with(Serdes.String(), jsonSerde));
-        KStream<String, JsonNode> withMerchant = completedStream.filter((k, v) -> !v.path("merchantName").isMissingNode() && !v.path("merchantName").asText().isBlank());
+        KStream<String, JsonNode> withMerchant = completedStream.filter((k, v) -> {
+            JsonNode mn = v.path("merchantName");
+            return !mn.isMissingNode() && !mn.isNull() && !mn.asText().isBlank();
+        });
         KStream<String, JsonNode> keyedByMerchant = withMerchant.selectKey((k, v) -> v.path("merchantName").asText());
 
         KTable<Windowed<String>, JsonNode> merchantTable = keyedByMerchant
@@ -45,7 +49,7 @@ public class MerchantAggregationTopology {
                             result.put("computedAt", java.time.Instant.now().toString());
                             return result;
                         },
-                        Materialized.<String, JsonNode>as(Stores.persistentWindowStore(STORE_NAME, Duration.ofHours(24), WINDOW_SIZE, false))
+                        Materialized.<String, JsonNode>as(Stores.inMemoryWindowStore(STORE_NAME, Duration.ofHours(24), WINDOW_SIZE, false))
                                 .withKeySerde(Serdes.String()).withValueSerde(jsonSerde)
                 );
 

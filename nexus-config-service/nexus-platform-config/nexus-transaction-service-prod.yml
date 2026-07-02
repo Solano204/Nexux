@@ -1,0 +1,21 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:nexus-postgres}:5432/nexus_transactions
+    username: ${POSTGRES_USER:nexus}
+    password: ${POSTGRES_PASSWORD}
+  elasticsearch:
+    uris: http://${ELASTICSEARCH_HOST:nexus-elasticsearch}:9200
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    streams:
+      state-dir: /var/kafka-streams/transaction
+
+aws:
+  region: ${AWS_REGION:us-east-1}
+
+nexus:
+  plane-bridge-secret: ${PLANE_BRIDGE_SECRET:}
+  analytics:
+    dynamodb:
+      enabled: ${ANALYTICS_DYNAMODB_ENABLED:false}
+      table: ${ANALYTICS_TRANSACTIONS_TABLE:nexus-transactions}

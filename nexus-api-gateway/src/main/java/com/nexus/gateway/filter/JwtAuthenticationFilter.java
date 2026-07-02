@@ -79,7 +79,7 @@ public class JwtAuthenticationFilter
     private final TokenBlacklistService blacklistService;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
-    private final GatewayMetrics gatewayMetrics;
+    private final GatewayMetrics gatewayMetrics;  // was changed to non-final
 
     public JwtAuthenticationFilter(
             JwtValidator jwtValidator,
@@ -93,6 +93,11 @@ public class JwtAuthenticationFilter
         this.objectMapper = objectMapper;
         this.observationRegistry = observationRegistry;
         this.gatewayMetrics = gatewayMetrics;
+    }
+
+    @Override
+    public String name() {
+        return "JwtAuthentication";
     }
 
     @Override

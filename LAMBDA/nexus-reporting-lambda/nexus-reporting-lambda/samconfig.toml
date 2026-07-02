@@ -1,0 +1,50 @@
+# samconfig.toml — missing from repo, created from scratch
+#
+# IMPORTANT — OpsNotificationEmail must be a real, reachable address.
+# SNS sends an email subscription confirmation when this stack is created.
+# You must click the link before report completion notifications are delivered.
+#
+# Schedule: cron(0 12 * * ? *) = 06:00 Mexico City (UTC-6 standard, UTC-5 summer)
+# During CDT (April-October), reports run at 07:00 MCT — expected behavior.
+# If exact 06:00 is needed regardless of DST, use a Step Function with timezone.
+#
+# SnapStart on a daily batch job:
+#   The Lambda runs once per day. Without SnapStart, the JVM cold start
+#   (~5-15s) is irrelevant for a 15-minute job. SnapStart is still valuable
+#   if the Lambda needs to be re-run manually (compliance re-generation).
+
+version = 0.1
+
+[default.build.parameters]
+use_container = false
+
+[default.deploy.parameters]
+stack_name = "nexus-reporting-dev"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-dev"
+s3_prefix = "nexus-reporting-lambda"
+parameter_overrides = "Environment=dev OpsNotificationEmail=dev-ops@nexusbank.com ReportTimezone=America/Mexico_City"
+
+[staging.deploy.parameters]
+stack_name = "nexus-reporting-staging"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-staging"
+s3_prefix = "nexus-reporting-lambda"
+parameter_overrides = "Environment=dev OpsNotificationEmail=staging-ops@nexusbank.com ReportTimezone=America/Mexico_City"
+
+[prod.deploy.parameters]
+stack_name = "nexus-reporting-prod"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-prod"
+s3_prefix = "nexus-reporting-lambda"
+# Use prod environment to trigger the 7-year S3 lifecycle rules on compliance reports
+parameter_overrides = "Environment=prod OpsNotificationEmail=ops@nexusbank.com ReportTimezone=America/Mexico_City"

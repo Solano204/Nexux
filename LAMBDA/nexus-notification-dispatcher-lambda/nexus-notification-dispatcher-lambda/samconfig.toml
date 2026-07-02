@@ -1,0 +1,50 @@
+# samconfig.toml — missing from repo, created from scratch
+#
+# IMPORTANT — FromEmailAddress MUST be SES-verified before deploy.
+# Until SES is out of sandbox mode, you can only send to verified addresses.
+# Verify in AWS Console: SES → Verified identities → Create identity.
+#
+# Optional push parameters (leave empty to skip push dispatch):
+#   IosPlatformApplicationArn   — SNS APNs platform application ARN
+#   AndroidPlatformApplicationArn — SNS FCM platform application ARN
+#
+# SnapStart: AutoPublishAlias: live in template.yaml.
+# Thymeleaf templates are parsed once in the snapshot →
+# fast warm invocations even during morning notification bursts.
+
+version = 0.1
+
+[default.build.parameters]
+use_container = false
+
+[default.deploy.parameters]
+stack_name = "nexus-notification-dispatcher-dev"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-dev"
+s3_prefix = "nexus-notification-dispatcher-lambda"
+# Use a verified SES test address for dev
+parameter_overrides = "FromEmailAddress=dev-notifications@nexusbank.com FromEmailName=NexusBank-Dev UnsubscribeBaseUrl=http://localhost:3000"
+
+[staging.deploy.parameters]
+stack_name = "nexus-notification-dispatcher-staging"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-staging"
+s3_prefix = "nexus-notification-dispatcher-lambda"
+parameter_overrides = "FromEmailAddress=notificaciones-staging@nexusbank.com FromEmailName=NexusBank UnsubscribeBaseUrl=https://staging.nexusbank.com"
+
+[prod.deploy.parameters]
+stack_name = "nexus-notification-dispatcher-prod"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+s3_bucket = "nexus-sam-artifacts-prod"
+s3_prefix = "nexus-notification-dispatcher-lambda"
+# Push ARNs: set via --parameter-overrides or GitHub secrets
+parameter_overrides = "FromEmailAddress=notificaciones@nexusbank.com FromEmailName=Nexus Bank UnsubscribeBaseUrl=https://app.nexusbank.com"

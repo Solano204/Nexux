@@ -1,0 +1,23 @@
+{
+  "status": "DOWN",
+  "components": {
+    "db": {
+      "status": "DOWN",
+      "details": {
+        "error": "Connection refused: connect to localhost:5432"
+      }
+    },
+    "redis": {
+      "status": "UP",
+      "details": {
+        "version": "7.2.4"
+      }
+    },
+    "kafka": {
+      "status": "DOWN",
+      "details": {
+        "error": "Broker not available: localhost:9092"
+      }
+    }
+  }
+}

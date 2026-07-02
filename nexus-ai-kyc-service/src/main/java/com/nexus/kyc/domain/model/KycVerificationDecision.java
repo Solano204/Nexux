@@ -31,7 +31,7 @@ public record KycVerificationDecision(
         double confidenceScore,         // 0.0-1.0
 
         // Per-field comparison results
-        Map<String, FieldMatchResult> fieldMatches,
+        Map<String, Object> fieldMatches,
 
         // For REJECTED/REVIEW_REQUIRED
         List<RejectionReason> rejectionReasons,

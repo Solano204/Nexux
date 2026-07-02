@@ -2,17 +2,21 @@ package com.nexus.ledger.config;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.client.advisor.RetrievalAugmentationAdvisor;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
-import org.springframework.ai.chat.memory.InMemoryChatMemory;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
+import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.rag.generation.augmentation.ContextualQueryAugmenter;
 import org.springframework.ai.rag.preretrieval.query.expansion.MultiQueryExpander;
 import org.springframework.ai.rag.retrieval.search.VectorStoreDocumentRetriever;
+import org.springframework.ai.openai.OpenAiEmbeddingModel;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 @Configuration
 public class SpringAiConfig {
@@ -21,7 +25,7 @@ public class SpringAiConfig {
     public ChatClient ledgerExplainerClient(
             OpenAiChatModel model,
             PgVectorStore financialLiteracyVectorStore,
-            InMemoryChatMemory explainerMemory,
+            ChatMemory explainerMemory,
             com.nexus.ledger.infrastructure.ai.LedgerExplainerTools tools) {
 
         RetrievalAugmentationAdvisor ragAdvisor =
@@ -74,7 +78,20 @@ public class SpringAiConfig {
     }
 
     @Bean
-    public InMemoryChatMemory explainerMemory() {
-        return new InMemoryChatMemory();
+    public ChatMemory explainerMemory() {
+        return MessageWindowChatMemory.builder()
+                .chatMemoryRepository(new InMemoryChatMemoryRepository())
+                .maxMessages(10)
+                .build();
+    }
+
+    @Bean("financialLiteracyVectorStore")
+    public PgVectorStore financialLiteracyVectorStore(
+            JdbcTemplate jdbcTemplate,
+            OpenAiEmbeddingModel embeddingModel) {
+        return PgVectorStore.builder(jdbcTemplate, embeddingModel)
+                .vectorTableName("financial_literacy_embeddings")
+                .initializeSchema(true)
+                .build();
     }
 }

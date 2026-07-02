@@ -2,7 +2,7 @@ package com.nexus.risk.infrastructure.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.nexus.risk.agent.RiskScoringAgent;
+import com.nexus.risk.agent.model.RiskScoringAgent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -82,7 +82,8 @@ public class BehaviorEventConsumer {
                  "KYC_REVERIFICATION_COMPLETED",
                  "ACCOUNT_DORMANCY_ENDED",
                  "INCOME_PATTERN_BREAK_DETECTED",
-                 "COUNTERPARTY_FLAGGED" -> true;
+                 "COUNTERPARTY_FLAGGED",
+                 "TRANSACTION_COMPLETED" -> true;
             default -> false;
         };
     }

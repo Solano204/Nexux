@@ -1,0 +1,66 @@
+spring:
+  cloud:
+    config:
+      enabled: false
+
+  threads:
+    virtual:
+      enabled: true
+
+  data:
+    mongodb:
+      uri: mongodb://localhost:27018/nexus_notification
+    redis:
+      host: localhost
+      port: 6380
+      password: ""
+      timeout: 500ms
+
+  kafka:
+    bootstrap-servers: localhost:19092
+    consumer:
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.7
+
+server:
+  port: 8089
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+
+resilience4j:
+  retry:
+    instances:
+      openai-retry:
+        max-attempts: 2
+        wait-duration: 500ms
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9412/api/v2/spans
+
+logging:
+  level:
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    # Muestra solo el lifecycle de los listeners, no el ruido de Kafka client
+    org.springframework.kafka.listener: INFO

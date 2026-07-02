@@ -1,0 +1,85 @@
+spring:
+  cloud:
+    config:
+      uri: ${CONFIG_SERVER_URI:http://nexus-config-service:8888}
+      enabled: true
+      fail-fast: true
+      username: ${CONFIG_SERVER_USERNAME}
+      password: ${CONFIG_SERVER_PASSWORD}
+    bus:
+      enabled: true
+
+  datasource:
+    url: ${DATASOURCE_URL:jdbc:postgresql://nexus-postgres:5432/nexus_ai_assistant}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+
+  jpa:
+    show-sql: false
+    hibernate:
+      ddl-auto: validate
+
+  data:
+    redis:
+      host: ${REDIS_HOST:nexus-redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.7
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://nexus-ollama:11434}
+      chat:
+        options:
+          model: mistral:7b
+    vectorstore:
+      pgvector:
+        initialize-schema: false
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        dimensions: 1536
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+  instance:
+    health-check-url-path: /actuator/health
+
+nexus:
+  services:
+    account:
+      url: ${ACCOUNT_SERVICE_URL:http://nexus-account-service:8085}
+    transaction:
+      url: ${TRANSACTION_SERVICE_URL:http://nexus-transaction-service:8086}
+    fraud:
+      url: ${FRAUD_SERVICE_URL:http://nexus-fraud-service:8087}
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: ${TRACING_SAMPLE_RATE:0.05}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
+
+logging:
+  level:
+    root: WARN
+    com.nexus.assistant: INFO
+    org.springframework.ai: WARN
+    org.apache.kafka: WARN
+    com.netflix.eureka: WARN
+    com.netflix.discovery: WARN

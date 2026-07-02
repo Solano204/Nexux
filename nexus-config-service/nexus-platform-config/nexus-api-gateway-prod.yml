@@ -1,0 +1,20 @@
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:nexus-redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+      timeout: 5s
+      connect-timeout: 5s
+      lettuce:
+        pool:
+          enabled: true
+          max-active: 32
+          max-idle: 16
+          min-idle: 4
+          max-wait: 3s
+
+nexus:
+  gateway:
+    jwt:
+      public-key-url: http://${IDENTITY_SERVICE_HOST:nexus-identity-service}:8083/api/v1/auth/.well-known/jwks.json

@@ -1,0 +1,11 @@
+spring:
+  elasticsearch:
+    uris: http://localhost:9201
+  data:
+    redis:
+      host: localhost
+      port: 6380
+      password: ""
+  kafka:
+    streams:
+      state-dir: /tmp/kafka-streams/analytics

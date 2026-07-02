@@ -1,0 +1,521 @@
+{
+  "info": {
+    "name": "NEXUS - Audit Write Native (Quarkus)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Quarkus native GraalVM service — pure Kafka consumer with NO REST API.\n\nThis service consumes 15 Kafka topics and writes normalized AuditEvents to Elasticsearch (monthly rotating indices: nexus-audit-YYYY-MM) and compliance alerts to MongoDB (nexus_audit.compliance_alerts).\n\nThis collection is organized in 3 sections:\n1. Service Health & Metrics — real HTTP endpoints Quarkus exposes automatically at port 8096\n2. Produce Test Events — send test Kafka messages via Kafka REST Proxy (port 8082) to trigger each consumer\n3. Verify Output — query Elasticsearch to confirm events were indexed correctly\n\nPort: 8096 (Quarkus HTTP — health + metrics only)"
+  },
+  "item": [
+    {
+      "name": "1. Service Health & Metrics",
+      "item": [
+        {
+          "name": "Health Check (Overall)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/q/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["q", "health"]
+            },
+            "description": "Quarkus built-in health endpoint. Checks Kafka connectivity, Elasticsearch, MongoDB, and Redis.\n\nResponse 200 (all healthy):\n{\n  'status': 'UP',\n  'checks': [\n    { 'name': 'kafka', 'status': 'UP' },\n    { 'name': 'elasticsearch', 'status': 'UP' },\n    { 'name': 'mongodb', 'status': 'UP' },\n    { 'name': 'redis', 'status': 'UP' }\n  ]\n}\n\nResponse 503: { 'status': 'DOWN', 'checks': [...] } if any dependency is down"
+          },
+          "response": []
+        },
+        {
+          "name": "Liveness Probe",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/q/health/live",
+              "host": ["{{baseUrl}}"],
+              "path": ["q", "health", "live"]
+            },
+            "description": "Kubernetes liveness probe. Returns UP if the JVM/native process is alive.\n\nResponse 200: { 'status': 'UP', 'checks': [] }"
+          },
+          "response": []
+        },
+        {
+          "name": "Readiness Probe",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/q/health/ready",
+              "host": ["{{baseUrl}}"],
+              "path": ["q", "health", "ready"]
+            },
+            "description": "Kubernetes readiness probe. Returns UP when Kafka consumers are connected and ready.\n\nResponse 200: { 'status': 'UP', 'checks': [{ 'name': 'kafka-streams-state-health', 'status': 'UP' }] }"
+          },
+          "response": []
+        },
+        {
+          "name": "Prometheus Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/q/metrics",
+              "host": ["{{baseUrl}}"],
+              "path": ["q", "metrics"]
+            },
+            "description": "Prometheus metrics scrape endpoint. Exposes:\n- kafka_consumer_records_consumed_total (per topic)\n- elasticsearch_index_requests_total\n- compliance_alerts_generated_total\n- jvm_memory_used_bytes\n- process_cpu_usage\n\nResponse: Prometheus text format (text/plain; version=0.0.4)"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Produce Test Events (via Kafka REST Proxy)",
+      "item": [
+        {
+          "name": "── FINANCIAL EVENTS ──",
+          "item": [],
+          "description": "Financial events are processed by processEvent() — normalize + write to Elasticsearch only (no compliance rules)."
+        },
+        {
+          "name": "[FINANCIAL] Transaction Completed → transactions.completed",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440001\",\n      \"value\": {\n        \"eventId\": \"550e8400-e29b-41d4-a716-446655440099\",\n        \"eventType\": \"TRANSACTION_COMPLETED\",\n        \"transactionId\": \"550e8400-e29b-41d4-a716-446655440099\",\n        \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"sourceAccountId\": \"550e8400-e29b-41d4-a716-446655440000\",\n        \"targetAccountId\": \"550e8400-e29b-41d4-a716-446655440002\",\n        \"amount\": 1500.00,\n        \"currency\": \"MXN\",\n        \"transactionType\": \"TRANSFER\",\n        \"completedAt\": \"2026-06-15T20:00:00Z\",\n        \"traceId\": \"trace-abc123xyz\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/transactions.completed",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "transactions.completed"]
+            },
+            "description": "Produce a transaction.completed event to Kafka.\n\nThis triggers AuditEventConsumer.onTransactionCompleted() → normalizer → Elasticsearch.\n\nResulting AuditEvent written to index: nexus-audit-2026-06\nEventType: TRANSACTION_COMPLETED\nCategory: FINANCIAL\nSeverity: INFO (or WARNING if amount > MXN 10,000)\nConsumer group: audit-write-transactions-completed\n\nKafka message key: userId (for routing)\nKafka topic: transactions.completed"
+          },
+          "response": []
+        },
+        {
+          "name": "[FINANCIAL] Transaction Failed → transactions.failed",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440001\",\n      \"value\": {\n        \"eventId\": \"550e8400-e29b-41d4-a716-446655440100\",\n        \"eventType\": \"TRANSACTION_FAILED\",\n        \"transactionId\": \"550e8400-e29b-41d4-a716-446655440100\",\n        \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"sourceAccountId\": \"550e8400-e29b-41d4-a716-446655440000\",\n        \"amount\": 500.00,\n        \"currency\": \"MXN\",\n        \"failureReason\": \"INSUFFICIENT_FUNDS\",\n        \"occurredAt\": \"2026-06-15T20:01:00Z\",\n        \"traceId\": \"trace-def456abc\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/transactions.failed",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "transactions.failed"]
+            },
+            "description": "Produce a transaction.failed event.\n\nResulting AuditEvent:\nEventType: TRANSACTION_FAILED\nCategory: FINANCIAL\nSeverity: WARNING (FAILED events always WARNING)\nConsumer group: audit-write-transactions-failed"
+          },
+          "response": []
+        },
+        {
+          "name": "[FINANCIAL] Transaction Initiated → transactions.initiated",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440001\",\n      \"value\": {\n        \"eventId\": \"550e8400-e29b-41d4-a716-446655440101\",\n        \"transactionId\": \"550e8400-e29b-41d4-a716-446655440101\",\n        \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"sourceAccountId\": \"550e8400-e29b-41d4-a716-446655440000\",\n        \"targetAccountId\": \"550e8400-e29b-41d4-a716-446655440002\",\n        \"amount\": 750.00,\n        \"currency\": \"MXN\",\n        \"transactionType\": \"TRANSFER\",\n        \"channel\": \"APP\",\n        \"startedAt\": \"2026-06-15T20:02:00Z\",\n        \"ipAddress\": \"192.168.1.100\",\n        \"traceId\": \"trace-ghi789jkl\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/transactions.initiated",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "transactions.initiated"]
+            },
+            "description": "Produce a transaction.initiated event.\n\nEventType: TRANSACTION_INITIATED\nCategory: FINANCIAL\nSeverity: INFO\nConsumer group: audit-write-transactions-initiated"
+          },
+          "response": []
+        },
+        {
+          "name": "[FINANCIAL] Ledger Posted → ledger.posted",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440099\",\n      \"value\": {\n        \"eventId\": \"posting-abc123\",\n        \"transactionId\": \"550e8400-e29b-41d4-a716-446655440099\",\n        \"postingId\": \"posting-abc123\",\n        \"debitAccountId\": \"550e8400-e29b-41d4-a716-446655440000\",\n        \"creditAccountId\": \"550e8400-e29b-41d4-a716-446655440002\",\n        \"amount\": 1500.00,\n        \"currency\": \"MXN\",\n        \"description\": \"Transfer posting\",\n        \"occurredAt\": \"2026-06-15T20:03:00Z\",\n        \"traceId\": \"trace-abc123xyz\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/ledger.posted",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "ledger.posted"]
+            },
+            "description": "Produce a ledger.posted event.\n\nEventType: LEDGER_POSTED\nCategory: FINANCIAL\nSeverity: INFO\nConsumer group: audit-write-ledger-posted"
+          },
+          "response": []
+        },
+        {
+          "name": "[FINANCIAL] Ledger Reversed → ledger.reversed",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440099\",\n      \"value\": {\n        \"eventId\": \"reversal-def456\",\n        \"transactionId\": \"550e8400-e29b-41d4-a716-446655440099\",\n        \"originalPostingId\": \"posting-abc123\",\n        \"reversalPostingId\": \"reversal-def456\",\n        \"amount\": 1500.00,\n        \"currency\": \"MXN\",\n        \"reason\": \"CHARGEBACK\",\n        \"occurredAt\": \"2026-06-15T21:00:00Z\",\n        \"traceId\": \"trace-reversal-xyz\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/ledger.reversed",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "ledger.reversed"]
+            },
+            "description": "Produce a ledger.reversed event.\n\nEventType: LEDGER_REVERSED\nCategory: FINANCIAL\nSeverity: WARNING\nConsumer group: audit-write-ledger-reversed"
+          },
+          "response": []
+        },
+        {
+          "name": "[SECURITY] Fraud Result → fraud.result ⚠️ Compliance Rules",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440001\",\n      \"value\": {\n        \"eventId\": \"fraud-decision-abc123\",\n        \"transactionId\": \"550e8400-e29b-41d4-a716-446655440099\",\n        \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"decisionOutcome\": \"APPROVE\",\n        \"payload\": {\n          \"fraudScore\": 75,\n          \"riskTier\": \"MEDIUM\",\n          \"amount\": 1500.00\n        },\n        \"occurredAt\": \"2026-06-15T20:00:30Z\",\n        \"traceId\": \"trace-abc123xyz\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/fraud.result",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "fraud.result"]
+            },
+            "description": "Produce a fraud.result event. This uses processEventWithRules() — runs compliance rule evaluation AFTER Elasticsearch write.\n\nCompliance rules evaluated:\n- HIGH_FRAUD_SCORE: if payload.fraudScore > 70 → WARNING alert in MongoDB\n- HIGH_FRAUD_SCORE CRITICAL: if payload.fraudScore > 90 → CRITICAL alert + sarConsideration=true\n\nEventType: FRAUD_DECISION\nCategory: SECURITY\nSeverity: WARNING (contains FRAUD)\nConsumer group: audit-write-fraud-result\n\nNote: Set payload.fraudScore > 70 to trigger a HIGH_FRAUD_SCORE compliance alert in MongoDB."
+          },
+          "response": []
+        },
+        {
+          "name": "[SECURITY] Fraud Flagged → fraud.flagged ⚠️ Compliance Rules",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440001\",\n      \"value\": {\n        \"eventId\": \"fraud-flag-xyz789\",\n        \"eventType\": \"FRAUD_HIGH_SEVERITY\",\n        \"transactionId\": \"550e8400-e29b-41d4-a716-446655440099\",\n        \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"requiresSarReview\": true,\n        \"payload\": {\n          \"fraudScore\": 95,\n          \"flagReason\": \"DOCUMENT_FRAUD\",\n          \"amount\": 15000.00\n        },\n        \"occurredAt\": \"2026-06-15T20:00:45Z\",\n        \"traceId\": \"trace-fraud-high\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/fraud.flagged",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "fraud.flagged"]
+            },
+            "description": "Produce a fraud.flagged event. High-severity — triggers processEventWithRules().\n\nEventType: FRAUD_HIGH_SEVERITY\nCategory: SECURITY\nSeverity: CRITICAL (eventType contains FRAUD_HIGH)\n\nCompliance rules fired:\n- LARGE_TRANSACTION: amount > MXN 10,000 → WARNING alert\n- HIGH_FRAUD_SCORE: fraudScore > 90 → CRITICAL alert + sarConsideration=true\n- CRITICAL_EVENT: CRITICAL severity + requiresSarReview=true → CRITICAL alert\nConsumer group: audit-write-fraud-flagged"
+          },
+          "response": []
+        },
+        {
+          "name": "[SECURITY] Account Frozen → account.frozen ⚠️ Compliance Rules",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440001\",\n      \"value\": {\n        \"eventId\": \"freeze-event-abc\",\n        \"eventType\": \"ACCOUNT_FROZEN\",\n        \"accountId\": \"550e8400-e29b-41d4-a716-446655440000\",\n        \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"reason\": \"FRAUD_DETECTED: Multiple suspicious transactions\",\n        \"requiresSarReview\": true,\n        \"occurredAt\": \"2026-06-15T20:05:00Z\",\n        \"traceId\": \"trace-freeze-xyz\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/account.frozen",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "account.frozen"]
+            },
+            "description": "Produce an account.frozen event. Triggers processEventWithRules().\n\nEventType: ACCOUNT_FROZEN\nCategory: SECURITY\nSeverity: CRITICAL (contains FROZEN)\n\nCompliance rule fired:\n- CRITICAL_EVENT: CRITICAL severity + requiresSarReview=true → CRITICAL alert in MongoDB\nConsumer group: audit-write-account-frozen"
+          },
+          "response": []
+        },
+        {
+          "name": "[IDENTITY] User Registered → users.registered",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440001\",\n      \"value\": {\n        \"eventId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"email\": \"carlos@nexus.com\",\n        \"country\": \"MX\",\n        \"ipAddress\": \"192.168.1.100\",\n        \"userAgent\": \"Mozilla/5.0 NexusApp/1.0\",\n        \"occurredAt\": \"2026-06-15T10:00:00Z\",\n        \"traceId\": \"trace-register-abc\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/users.registered",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "users.registered"]
+            },
+            "description": "Produce a users.registered event.\n\nEventType: USER_REGISTERED\nCategory: GENERAL\nSeverity: INFO\nConsumer group: audit-write-users-registered"
+          },
+          "response": []
+        },
+        {
+          "name": "[COMPLIANCE] KYC Approved → identity.verified",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440001\",\n      \"value\": {\n        \"eventId\": \"ver-550e8400-kyc-approved\",\n        \"verificationId\": \"ver-550e8400-kyc-approved\",\n        \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"documentType\": \"NATIONAL_ID\",\n        \"nationality\": \"MX\",\n        \"confidence\": 0.97,\n        \"occurredAt\": \"2026-06-15T10:30:00Z\",\n        \"traceId\": \"trace-kyc-approved\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/identity.verified",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "identity.verified"]
+            },
+            "description": "Produce an identity.verified (KYC approved) event.\n\nEventType: KYC_APPROVED\nCategory: COMPLIANCE\nSeverity: INFO\nisSensitiveData: true\nisRegulatoryRequired: true\nConsumer group: audit-write-identity-verified"
+          },
+          "response": []
+        },
+        {
+          "name": "[COMPLIANCE] KYC Rejected → identity.rejected",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440001\",\n      \"value\": {\n        \"eventId\": \"ver-550e8400-kyc-rejected\",\n        \"verificationId\": \"ver-550e8400-kyc-rejected\",\n        \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"documentType\": \"NATIONAL_ID\",\n        \"rejectionReasons\": [\"BLURRY_IMAGE\", \"NAME_MISMATCH\"],\n        \"canRetry\": true,\n        \"occurredAt\": \"2026-06-15T10:35:00Z\",\n        \"traceId\": \"trace-kyc-rejected\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/identity.rejected",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "identity.rejected"]
+            },
+            "description": "Produce an identity.rejected (KYC rejected) event.\n\nEventType: KYC_REJECTED\nCategory: COMPLIANCE\nSeverity: WARNING (contains REJECTED)\nisSensitiveData: true\nisRegulatoryRequired: true\nConsumer group: audit-write-identity-rejected"
+          },
+          "response": []
+        },
+        {
+          "name": "[IDENTITY] Account Created → accounts.created",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440001\",\n      \"value\": {\n        \"eventId\": \"550e8400-e29b-41d4-a716-446655440000\",\n        \"accountId\": \"550e8400-e29b-41d4-a716-446655440000\",\n        \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"accountType\": \"CHECKING\",\n        \"currency\": \"MXN\",\n        \"occurredAt\": \"2026-06-15T10:31:00Z\",\n        \"traceId\": \"trace-account-created\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/accounts.created",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "accounts.created"]
+            },
+            "description": "Produce an accounts.created event.\n\nEventType: ACCOUNT_CREATED\nCategory: SECURITY (contains ACCOUNT)\nSeverity: INFO\nConsumer group: audit-write-accounts-created"
+          },
+          "response": []
+        },
+        {
+          "name": "[SYSTEM] Saga Completed → saga.completed",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440099\",\n      \"value\": {\n        \"sagaId\": \"saga-550e8400-e29b-41d4-a716-446655440098\",\n        \"transactionId\": \"550e8400-e29b-41d4-a716-446655440099\",\n        \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"sagaType\": \"TRANSFER_SAGA\",\n        \"finalStep\": \"NOTIFICATION_SENDING\",\n        \"durationMs\": 1250,\n        \"occurredAt\": \"2026-06-15T20:00:50Z\",\n        \"traceId\": \"trace-abc123xyz\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/saga.completed",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "saga.completed"]
+            },
+            "description": "Produce a saga.completed event.\n\nEventType: SAGA_COMPLETED\nCategory: SYSTEM\nSeverity: INFO\nConsumer group: audit-write-saga-completed"
+          },
+          "response": []
+        },
+        {
+          "name": "[AI] AI Query Logged → ai.query.logged",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440001\",\n      \"value\": {\n        \"eventId\": \"ai-query-abc123\",\n        \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"sessionId\": \"session-abc-123\",\n        \"queryType\": \"ADVISOR_CHAT\",\n        \"modelUsed\": \"claude-sonnet-4-6\",\n        \"promptTokens\": 512,\n        \"completionTokens\": 256,\n        \"latencyMs\": 1800,\n        \"occurredAt\": \"2026-06-15T20:10:00Z\",\n        \"traceId\": \"trace-ai-query\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/ai.query.logged",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "ai.query.logged"]
+            },
+            "description": "Produce an ai.query.logged event.\n\nEventType: AI_QUERY\nCategory: AI\nSeverity: INFO\nConsumer group: audit-write-ai-query-logged"
+          },
+          "response": []
+        },
+        {
+          "name": "[SYSTEM] Analytics Anomaly → analytics.anomalies.detected ⚠️ Compliance Rules",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/vnd.kafka.json.v2+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"records\": [\n    {\n      \"key\": \"550e8400-e29b-41d4-a716-446655440001\",\n      \"value\": {\n        \"eventId\": \"anomaly-abc123\",\n        \"userId\": \"550e8400-e29b-41d4-a716-446655440001\",\n        \"anomalyType\": \"SPENDING_SPIKE\",\n        \"description\": \"Spending 3x above monthly average\",\n        \"payload\": {\n          \"fraudScore\": 85,\n          \"amount\": 12000.00,\n          \"currency\": \"MXN\"\n        },\n        \"occurredAt\": \"2026-06-15T20:15:00Z\",\n        \"traceId\": \"trace-anomaly-xyz\"\n      }\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kafkaRestProxy}}/topics/analytics.anomalies.detected",
+              "host": ["{{kafkaRestProxy}}"],
+              "path": ["topics", "analytics.anomalies.detected"]
+            },
+            "description": "Produce an analytics.anomalies.detected event. Triggers processEventWithRules().\n\nNote: Kafka topic name is analytics.anomalies.detected (not analytics.anomalies).\n\nCompliance rules fired:\n- LARGE_TRANSACTION: if payload.amount > MXN 10,000\n- HIGH_FRAUD_SCORE: if payload.fraudScore > 70\nConsumer group: audit-write-analytics-anomalies"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Verify Output in Elasticsearch",
+      "item": [
+        {
+          "name": "Search Audit Events (Current Month Index)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{elasticsearchUrl}}/nexus-audit-2026-06/_search?pretty",
+              "host": ["{{elasticsearchUrl}}"],
+              "path": ["nexus-audit-2026-06", "_search"],
+              "query": [{ "key": "pretty", "value": "" }]
+            },
+            "description": "Search the current month's Elasticsearch index.\n\nIndex name pattern: nexus-audit-YYYY-MM (monthly rotation)\nRouting: by userId\n\nResponse: Elasticsearch hits with AuditEvent documents"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Events by User ID",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": {\n    \"term\": {\n      \"userId\": \"550e8400-e29b-41d4-a716-446655440001\"\n    }\n  },\n  \"sort\": [{ \"eventTimestamp\": { \"order\": \"desc\" } }],\n  \"size\": 20\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{elasticsearchUrl}}/nexus-audit-*/_search?pretty",
+              "host": ["{{elasticsearchUrl}}"],
+              "path": ["nexus-audit-*", "_search"],
+              "query": [{ "key": "pretty", "value": "" }]
+            },
+            "description": "Search all audit events for a specific user across all monthly indices.\n\nReturns: AuditEvent documents sorted by eventTimestamp descending"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Events by Transaction ID",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": {\n    \"bool\": {\n      \"should\": [\n        { \"term\": { \"eventId\": \"550e8400-e29b-41d4-a716-446655440099\" } },\n        { \"term\": { \"payload.transactionId\": \"550e8400-e29b-41d4-a716-446655440099\" } }\n      ]\n    }\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{elasticsearchUrl}}/nexus-audit-*/_search?pretty",
+              "host": ["{{elasticsearchUrl}}"],
+              "path": ["nexus-audit-*", "_search"],
+              "query": [{ "key": "pretty", "value": "" }]
+            },
+            "description": "Find all audit events related to a specific transaction ID."
+          },
+          "response": []
+        },
+        {
+          "name": "Search CRITICAL Severity Events",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": {\n    \"bool\": {\n      \"must\": [\n        { \"term\": { \"severity\": \"CRITICAL\" } }\n      ]\n    }\n  },\n  \"sort\": [{ \"eventTimestamp\": { \"order\": \"desc\" } }],\n  \"size\": 50\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{elasticsearchUrl}}/nexus-audit-*/_search?pretty",
+              "host": ["{{elasticsearchUrl}}"],
+              "path": ["nexus-audit-*", "_search"],
+              "query": [{ "key": "pretty", "value": "" }]
+            },
+            "description": "Find all CRITICAL severity audit events across all indices."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Index List (All Audit Indices)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{elasticsearchUrl}}/_cat/indices/nexus-audit-*?v&s=index",
+              "host": ["{{elasticsearchUrl}}"],
+              "path": ["_cat", "indices", "nexus-audit-*"],
+              "query": [
+                { "key": "v", "value": "" },
+                { "key": "s", "value": "index" }
+              ]
+            },
+            "description": "List all monthly audit indices with their document counts and sizes.\n\nResponse: text/plain table showing index name, status, docs.count, store.size"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Compliance Alerts (MongoDB via REST — requires mongo-express or similar)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{mongoExpressUrl}}/db/nexus_audit/compliance_alerts",
+              "host": ["{{mongoExpressUrl}}"],
+              "path": ["db", "nexus_audit", "compliance_alerts"]
+            },
+            "description": "View compliance alerts generated by ComplianceRuleEvaluator.\n\nDatabase: nexus_audit\nCollection: compliance_alerts\n\nComplianceAlert document structure:\n{\n  _id: String (alertId UUID),\n  alertType: VELOCITY_ANOMALY | LARGE_TRANSACTION | HIGH_FRAUD_SCORE | POTENTIAL_STRUCTURING | CRITICAL_EVENT_*,\n  severity: WARNING | HIGH | CRITICAL,\n  userId: String,\n  triggeringEventId: String,\n  description: String,\n  regulatoryReference: String (e.g. 'CNBV AML Section 6.1'),\n  sarConsideration: boolean,\n  generatedAt: String (ISO-8601),\n  reviewed: boolean (always false on creation)\n}\n\nNote: Use mongo-express (http://localhost:8081 in dev) or MongoDB Compass to browse directly if REST interface not available."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8096", "type": "string", "description": "Quarkus HTTP port (health + metrics only)" },
+    { "key": "kafkaRestProxy", "value": "http://localhost:8082", "type": "string", "description": "Confluent Kafka REST Proxy URL (to produce test events)" },
+    { "key": "elasticsearchUrl", "value": "http://localhost:9200", "type": "string", "description": "Elasticsearch URL (to verify indexed audit events)" },
+    { "key": "mongoExpressUrl", "value": "http://localhost:8081", "type": "string", "description": "Mongo Express UI or REST API (to view compliance alerts)" }
+  ]
+}

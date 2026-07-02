@@ -1,0 +1,70 @@
+spring:
+  cloud:
+    config:
+      enabled: false
+
+  threads:
+    virtual:
+      enabled: true
+
+  data:
+    elasticsearch:
+      uris: http://localhost:9201
+    redis:
+      host: localhost
+      port: 6381
+      password: ""
+      timeout: 500ms
+
+  kafka:
+    bootstrap-servers: localhost:19092
+    streams:
+      application-id: nexus-analytics-streams-dev
+      state-dir: ${java.io.tmpdir}/kafka-streams-dev
+      processing-guarantee: at_least_once
+      num-stream-threads: 2
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.4
+
+server:
+  port: 8092
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+
+management:
+  endpoint:
+    health:
+      show-details: always
+  health:
+    elasticsearch:
+      enabled: false
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9412/api/v2/spans
+
+logging:
+  level:
+    com.nexus.saga: DEBUG          # tus logs de negocio — los únicos que quieres ver
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    org.springframework.kafka.listener.KafkaMessageListenerContainer: WARN
+    org.hibernate.SQL: WARN
+    org.flywaydb: WARN
+    org.springframework.ai: WARN

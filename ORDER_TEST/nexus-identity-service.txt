@@ -1,0 +1,141 @@
+================================================================
+ NEXUS — nexus-identity-service — Complete Workflow Test Order
+================================================================
+Port: 8083 | Stack: Spring Boot | DB: PostgreSQL (nexus_identity)
+================================================================
+
+WHAT THIS SERVICE DOES:
+  User registration, login, JWT issuance, KYC initiation (S3 upload + SQS),
+  and compensation (CancelUserRegistrationCommand) in the OnboardingFlowSaga.
+
+================================================================
+ STEP 1 — INFRASTRUCTURE (always required)
+================================================================
+Start these containers before anything else:
+
+  docker compose -f docker-compose-prod.yml up -d \
+    nexus-postgres nexus-redis nexus-kafka nexus-zookeeper
+
+  Wait until healthy:
+    GET http://localhost:5434   -> PostgreSQL
+    GET http://localhost:6381   -> Redis
+    Kafdrop http://localhost:9003 -> Kafka
+
+  Also needed for tracing (optional but useful):
+    docker compose -f docker-compose-prod.yml up -d nexus-zipkin
+
+================================================================
+ STEP 2 — PLATFORM CORE (required before any service)
+================================================================
+Start in this order, wait for each one to be UP before starting the next:
+
+  1. nexus-config-service   :8888  — all services pull config from here
+  2. nexus-discovery-service :8761  — all services register here on startup
+
+  Health checks:
+    GET http://localhost:8888/actuator/health
+    GET http://localhost:8761/actuator/health
+
+================================================================
+ STEP 3 — SERVICES REQUIRED TO SEE THE FULL ONBOARDING WORKFLOW
+================================================================
+Without these services you only see identity in isolation.
+With them you see the complete OnboardingFlowSaga end-to-end.
+
+  REQUIRED — core saga participants:
+  ├── nexus-saga-orchestrator   :8095
+  │     WHY: consumes users.registered → starts OnboardingFlowSaga
+  │          sends CreateAccountsCommand, SendWelcomeNotificationCommand
+  ├── nexus-account-service     :8085
+  │     WHY: receives CreateAccountsCommand → creates checking + savings accounts
+  │          replies AccountsCreatedReply
+  ├── nexus-notification-service :8089
+  │     WHY: receives SendWelcomeNotificationCommand → sends welcome email/SMS
+  │          replies WelcomeNotificationSentReply
+  │          ALSO listens to users.registered directly (parallel notification)
+  └── nexus-ai-kyc-service      :8091
+        WHY: processes the KYC document upload → emits identity.verified
+             or identity.rejected → saga advances or compensates
+
+  OPTIONAL — downstream observers (won't block saga but give full picture):
+  ├── audit-write-native        :8096  — writes users.registered + identity.verified to ES
+  └── nexus-audit-query-jvm    :8097  — lets you query what was audited
+
+  EXTERNAL AWS DEPENDENCIES (must be real or LocalStack):
+  ├── AWS S3                    — KYC document upload (POST /kyc/initiate)
+  └── AWS SQS                   — triggers the KYC Rekognition Lambda downstream
+
+================================================================
+ KAFKA TOPICS THIS SERVICE PARTICIPATES IN
+================================================================
+PRODUCES:
+  users.registered
+    └── consumed by: saga-orchestrator (starts OnboardingFlowSaga)
+                     notification-service (parallel welcome event)
+                     audit-write-native (compliance record)
+
+CONSUMES:
+  saga.commands  [group: identity-service-saga-commands]
+    └── handles: CancelUserRegistrationCommand
+                 (fired by saga-orchestrator when KYC fails and saga compensates)
+
+================================================================
+ FULL WORKFLOW — ONBOARDING FLOW SAGA
+================================================================
+STEP-BY-STEP (all via api-gateway :8080 or identity direct :8083):
+
+  1. POST /api/v1/auth/register
+     Body: { "email", "password", "fullName", "phone" }
+     -> identity-service persists user, emits users.registered
+
+  2. WATCH Kafdrop :9003
+     Topic: users.registered         -> you see the event
+     Topic: saga.commands            -> saga sends CreateAccountsCommand
+     Topic: saga.replies             -> AccountsCreatedReply from account-service
+     Topic: saga.commands            -> saga sends SendWelcomeNotificationCommand
+     Topic: saga.replies             -> WelcomeNotificationSentReply
+
+  3. POST /api/v1/auth/login
+     -> receive JWT token
+
+  4. POST /api/v1/users/me/kyc/initiate   (requires JWT Bearer token)
+     Body: multipart/form-data with documentType + file
+     -> uploads document to S3
+     -> publishes to SQS (triggers Rekognition Lambda)
+     -> nexus-ai-kyc-service processes and calls POST /api/v1/kyc/process
+
+  5. WATCH Kafdrop :9003
+     Topic: identity.verified (or identity.rejected)
+     Topic: saga.replies             -> KycApprovedReply or KycRejectedReply
+     Topic: saga.completed           -> OnboardingFlowSaga done
+
+  6. IF KYC REJECTED:
+     Topic: saga.commands            -> CancelUserRegistrationCommand to identity
+     -> identity cancels registration (compensation)
+
+================================================================
+ OBSERVE IN KAFDROP (http://localhost:9003)
+================================================================
+After POST /register, watch these topics in order:
+  1. users.registered
+  2. saga.commands            (CreateAccountsCommand)
+  3. accounts.created
+  4. saga.replies             (AccountsCreatedReply)
+  5. saga.commands            (SendWelcomeNotificationCommand)
+  6. saga.replies             (WelcomeNotificationSentReply)
+
+After POST /kyc/initiate:
+  7. identity.verified OR identity.rejected
+  8. saga.replies             (KycApprovedReply or KycRejectedReply)
+  9. saga.completed
+
+================================================================
+ QUICK ISOLATED TEST (identity alone, no saga)
+================================================================
+Start only: postgres, redis, kafka, config-service, discovery-service, identity-service
+
+  POST /api/v1/auth/register     -> 201 Created
+  POST /api/v1/auth/login        -> 200 + JWT
+  GET  /api/v1/users/me/profile  -> 200 user profile
+  POST /api/v1/users/me/kyc/initiate -> will fail at S3 if AWS not configured
+                                       Redis warn on retry count is harmless

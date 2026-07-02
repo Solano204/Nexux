@@ -1,0 +1,114 @@
+# observability/prometheus/prometheus.yml
+# Prometheus configuration for the local Docker Compose stack.
+# Scrapes all Nexus services every 15 seconds.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: local-docker
+    platform: nexus-financial
+
+rule_files:
+  - /etc/prometheus/alerts/*.yml
+
+scrape_configs:
+
+  # ── API Gateway ──────────────────────────────────────────────
+  - job_name: nexus-api-gateway
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-api-gateway:8080]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: service
+        replacement: nexus-api-gateway
+
+  # ── Identity Service ─────────────────────────────────────────
+  - job_name: nexus-identity-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-identity-service:8083]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: service
+        replacement: nexus-identity-service
+
+  # ── Account Service ──────────────────────────────────────────
+  - job_name: nexus-account-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-account-service:8085]
+
+  # ── Transaction Service ──────────────────────────────────────
+  - job_name: nexus-transaction-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-transaction-service:8086]
+
+  # ── Fraud Service ────────────────────────────────────────────
+  - job_name: nexus-fraud-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-fraud-service:8087]
+
+  # ── Ledger Service ───────────────────────────────────────────
+  - job_name: nexus-ledger-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-ledger-service:8088]
+
+  # ── Notification Service ─────────────────────────────────────
+  - job_name: nexus-notification-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-notification-service:8089]
+
+  # ── AI Assistant Service ─────────────────────────────────────
+  - job_name: nexus-ai-assistant-service
+    metrics_path: /actuator/prometheus
+    scrape_interval: 30s   # AI service metrics are more expensive
+    static_configs:
+      - targets: [nexus-ai-assistant-service:8090]
+
+  # ── AI KYC Service ───────────────────────────────────────────
+  - job_name: nexus-ai-kyc-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-ai-kyc-service:8091]
+
+  # ── Analytics Service ────────────────────────────────────────
+  - job_name: nexus-analytics-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-analytics-service:8092]
+
+  # ── Audit Service ────────────────────────────────────────────
+  - job_name: nexus-audit-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-audit-service:8097]
+
+  # ── Risk Scoring Service ─────────────────────────────────────
+  - job_name: nexus-risk-scoring-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-risk-scoring-service:8094]
+
+  # ── Saga Orchestrator ────────────────────────────────────────
+  - job_name: nexus-saga-orchestrator
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-saga-orchestrator:8095]
+
+  # ── Config Service ───────────────────────────────────────────
+  - job_name: nexus-config-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-config-service:8888]
+
+  # ── Discovery Service (Eureka) ───────────────────────────────
+  - job_name: nexus-discovery-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [nexus-discovery-service:8761]

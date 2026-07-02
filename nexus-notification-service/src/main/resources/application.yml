@@ -7,8 +7,12 @@ spring:
 
   cloud:
     config:
-      uri: http://nexus-config-service:8888
-      fail-fast: true
+      uri: ${CONFIG_SERVER_URI:http://localhost:8888}
+      fail-fast: false
+      retry:
+        max-attempts: 3
+      username: ${CONFIG_SERVER_USERNAME:nexus-config}
+      password: ${CONFIG_SERVER_PASSWORD:nexus-config-password}
 
   threads:
     virtual:
@@ -16,24 +20,25 @@ spring:
 
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://nexus:nexus_dev@nexus-mongodb:27017/nexus_notification?authSource=admin}
+      uri: ${MONGODB_URI:mongodb://localhost:27018/nexus_notification}
       auto-index-creation: true
     redis:
-      host: ${REDIS_HOST:nexus-redis}
-      port: ${REDIS_PORT:6379}
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
       password: ${REDIS_PASSWORD:}
       timeout: 100ms
 
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
+    producer:
+      acks: all
+      enable-idempotence: true
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
     consumer:
+      group-id: saga-orchestrator
       auto-offset-reset: earliest
       enable-auto-commit: false
-      isolation-level: read_committed
-      max-poll-records: 100
-    listener:
-      ack-mode: manual
-
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:}
@@ -48,9 +53,13 @@ server:
 eureka:
   client:
     service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE:http://nexus-discovery-service:8761/eureka/}
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
+    register-with-eureka: true
+    fetch-registry: true
   instance:
     prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 30
+    lease-expiration-duration-in-seconds: 90
 
 resilience4j:
   retry:
@@ -79,13 +88,10 @@ management:
       probability: 1.0
   zipkin:
     tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
-
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9412/api/v2/spans}
 logging:
   level:
-    com.nexus.notification: INFO
-  pattern:
-    console: >
-      %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level
-      traceId=%X{traceId} spanId=%X{spanId}
-      service=nexus-notification-service %logger{36} - %msg%n
+    org.springframework.kafka: WARN
+    org.apache.kafka.clients: WARN
+    # Muestra solo el lifecycle de los listeners, no el ruido de Kafka client
+    org.springframework.kafka.listener: INFO

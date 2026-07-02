@@ -1,0 +1,20 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:nexus-postgres}:5432/nexus_kyc
+    username: ${POSTGRES_USER:nexus}
+    password: ${POSTGRES_PASSWORD}
+  data:
+    mongodb:
+      uri: mongodb://${MONGO_USER:nexus}:${MONGO_PASSWORD}@${MONGO_HOST:nexus-mongodb}:27017/nexus_kyc?authSource=admin
+  kafka:
+    producer:
+      compression-type: lz4
+
+nexus:
+  identity:
+    internal-url: http://nexus-identity-service:8083
+  aws:
+    region: ${AWS_REGION:us-east-1}
+    access-key-id: ${AWS_ACCESS_KEY_ID:}
+    secret-access-key: ${AWS_SECRET_ACCESS_KEY:}
+    kyc-rekognition-results-queue-url: ${KYC_REKOGNITION_RESULTS_QUEUE_URL:}

@@ -10,8 +10,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import io.lettuce.core.api.StatefulConnection;
+import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.connection.lettuce.LettucePoolingClientConfiguration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
@@ -29,8 +32,11 @@ import java.time.Duration;
  * Redis cache miss → returns null → controller returns 503 Retry-After.
  *
  * Connection tuning:
- * - Command timeout: 100ms (fast-fail, don't block on Redis issues)
+ * - Command timeout: 1000ms (was 100ms — too aggressive, was failing the
+ *   handshake itself under normal Docker networking, not just genuine
+ *   Redis unavailability)
  * - Connect timeout: 2s
+ * - Pool: 16 max-active / 8 max-idle / 2 min-idle (was unpooled)
  * - Auto-reconnect: enabled (Lettuce handles reconnection)
  * - Disconnect on close: true
  */
@@ -66,9 +72,16 @@ public class RedisConfig {
                 .disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS)
                 .build();
 
+        GenericObjectPoolConfig<StatefulConnection<?, ?>> poolConfig = new GenericObjectPoolConfig<>();
+        poolConfig.setMaxTotal(16);
+        poolConfig.setMaxIdle(8);
+        poolConfig.setMinIdle(2);
+        poolConfig.setMaxWait(Duration.ofSeconds(3));
+
         LettuceClientConfiguration clientConfig =
-                LettuceClientConfiguration.builder()
-                        .commandTimeout(Duration.ofMillis(100))
+                LettucePoolingClientConfiguration.builder()
+                        .poolConfig(poolConfig)
+                        .commandTimeout(Duration.ofMillis(1000))
                         .clientOptions(clientOptions)
                         .build();
 

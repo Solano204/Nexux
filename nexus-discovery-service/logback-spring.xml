@@ -1,0 +1,128 @@
+<!-- ══════════════════════════════════════════════════════════════════
+     nexus-discovery-service — logback-spring.xml
+
+     Improvements over the original:
+       1. Added Loki appender — original had console only.
+       2. Added ASYNC_LOKI with neverBlock — 13 services poll Eureka
+          every 30s; log shipping must never add latency to registration
+          or heartbeat responses.
+       3. Added <springProfile> guards — Loki only on docker/production.
+       4. Added plain-text console for dev/local profile (non-docker).
+       5. Added customFields: version, environment (missing in original).
+       6. Added production profile section.
+     ══════════════════════════════════════════════════════════════════ -->
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <springProperty name="appName"
+                    source="spring.application.name"
+                    defaultValue="nexus-discovery-service"/>
+    <springProperty name="appVersion"
+                    source="info.app.version"
+                    defaultValue="1.0.0"/>
+    <springProperty name="environment"
+                    source="management.metrics.tags.environment"
+                    defaultValue="local"/>
+    <springProperty name="lokiUrl"
+                    source="loki.url"
+                    defaultValue="http://nexus-loki:3100/loki/api/v1/push"/>
+
+    <!-- ══════════════════════════════════════════════════════════
+         PLAIN TEXT CONSOLE — dev/local profile
+     ══════════════════════════════════════════════════════════ -->
+    <springProfile name="!docker,!production">
+        <appender name="CONSOLE"
+                  class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level service=nexus-discovery-service %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <!-- ══════════════════════════════════════════════════════════
+         STRUCTURED JSON + LOKI — docker + production profiles
+         Dependencies:
+           net.logstash.logback:logstash-logback-encoder:7.4 (in pom.xml)
+           com.github.loki4j:loki-logback-appender:1.5.2 (add to pom.xml)
+     ══════════════════════════════════════════════════════════ -->
+    <springProfile name="docker,production">
+
+        <appender name="CONSOLE"
+                  class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <customFields>{"service":"${appName}","version":"${appVersion}","environment":"${environment}"}</customFields>
+                <includeMdcKeyName>traceId</includeMdcKeyName>
+                <includeMdcKeyName>spanId</includeMdcKeyName>
+                <shortenedLoggerNameLength>36</shortenedLoggerNameLength>
+            </encoder>
+        </appender>
+
+        <appender name="LOKI"
+                  class="com.github.loki4j.logback.Loki4jAppender">
+            <http>
+                <url>${lokiUrl}</url>
+                <connectionTimeoutMs>3000</connectionTimeoutMs>
+                <requestTimeoutMs>5000</requestTimeoutMs>
+            </http>
+            <format>
+                <label>
+                    <pattern>service=${appName},level=%level,environment=${environment}</pattern>
+                </label>
+                <message class="com.github.loki4j.logback.JsonLayout">
+                    <pattern>
+                        {"time":"%d{yyyy-MM-dd'T'HH:mm:ss.SSS'Z',UTC}",
+                         "level":"%level",
+                         "logger":"%logger{36}",
+                         "thread":"%thread",
+                         "traceId":"%X{traceId:-no-trace}",
+                         "message":"%message",
+                         "service":"${appName}",
+                         "environment":"${environment}"}%n
+                    </pattern>
+                </message>
+            </format>
+            <batchMaxItems>200</batchMaxItems>
+            <batchMaxBytes>1048576</batchMaxBytes>
+            <batchTimeoutMs>2000</batchTimeoutMs>
+        </appender>
+
+        <!-- neverBlock: 13 services poll Eureka every 30s.
+             Log shipping must never delay registration/heartbeat responses. -->
+        <appender name="ASYNC_LOKI"
+                  class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="LOKI"/>
+            <queueSize>5000</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+            <neverBlock>true</neverBlock>
+        </appender>
+
+        <!-- Nexus code -->
+        <logger name="com.nexus" level="INFO" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </logger>
+
+        <!-- Spring Cloud Eureka server — INFO for registration events -->
+        <logger name="org.springframework.cloud.netflix.eureka" level="INFO" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </logger>
+
+        <!-- Netflix internals — very chatty, suppress -->
+        <logger name="com.netflix.eureka" level="WARN"/>
+        <logger name="com.netflix.discovery" level="WARN"/>
+        <logger name="com.netflix.loadbalancer" level="WARN"/>
+        <logger name="org.springframework.security" level="WARN"/>
+
+        <root level="WARN">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </root>
+
+    </springProfile>
+
+</configuration>

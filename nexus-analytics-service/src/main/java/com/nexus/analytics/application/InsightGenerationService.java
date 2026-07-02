@@ -170,8 +170,8 @@ public class InsightGenerationService {
     private UserMonthlyAnalytics gatherAnalytics(
             String userId, YearMonth month) {
 
-        try (var scope =
-                     new StructuredTaskScope.ShutdownOnFailure()) {
+        try (var scope = StructuredTaskScope.open(
+                StructuredTaskScope.Joiner.awaitAllSuccessfulOrThrow())) {
 
             var currentFuture = scope.fork(() ->
                     queryService.getMonthlyAnalytics(userId, month));
@@ -183,7 +183,7 @@ public class InsightGenerationService {
             var anomaliesFuture = scope.fork(() ->
                     queryService.getAnomalies(userId, month));
 
-            scope.join().throwIfFailed();
+            scope.join();
 
             return queryService.mergeAnalytics(
                     userId, month,

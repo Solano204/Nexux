@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -37,9 +38,10 @@ public interface OutboxRepository extends JpaRepository<OutboxEntry, UUID> {
     List<OutboxEntry> findUnprocessedBefore(@Param("before") Instant before);
 
     /**
-     * Mark entries as processed (cleanup job only).
+     * Mark entries as processed (outbox relay + cleanup job).
      */
     @Modifying
+    @Transactional
     @Query("""
         UPDATE OutboxEntry o
         SET o.processedAt = :now

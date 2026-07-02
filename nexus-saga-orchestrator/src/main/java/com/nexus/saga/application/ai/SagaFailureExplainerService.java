@@ -11,8 +11,6 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
-import java.util.UUID;
-
 /**
  * Saga Failure Explainer Service — Section 3 structured output.
  *
@@ -41,8 +39,8 @@ public class SagaFailureExplainerService {
             ObservationRegistry observationRegistry,
             MeterRegistry meterRegistry) {
 
-        this.explainerClient = explainerClient;
-        this.observationRegistry = observationRegistry;
+        this.explainerClient       = explainerClient;
+        this.observationRegistry   = observationRegistry;
 
         this.aiExplanationCounter =
                 Counter.builder("saga.ai.explanation.total")
@@ -72,15 +70,15 @@ public class SagaFailureExplainerService {
                             .entity(SagaFailureExplanation.class);
 
             if (explanation == null) {
-                throw new RuntimeException(
-                        "AI returned null explanation");
+                throw new RuntimeException("AI returned null explanation");
             }
 
             aiExplanationCounter.increment();
             obs.event(Observation.Event.of("ai.explain.success"));
 
+            // ✅ FIX: SagaFailureContext uses @Getter — call getX(), not x()
             log.info("AI failure explanation: type={} lang={} canRetry={}",
-                    ctx.failureType(), ctx.language(),
+                    ctx.getFailureType(), ctx.getLanguage(),
                     explanation.canRetry());
 
             return explanation;
@@ -90,85 +88,87 @@ public class SagaFailureExplainerService {
             fallbackExplanationCounter.increment();
             log.warn("AI explanation failed, using fallback: {}",
                     e.getMessage());
+
+            // ✅ FIX: getX() throughout — SagaFailureContext is a @Getter class, not a record
             return SagaFailureExplanation.fallback(
-                    ctx.failureType().name(),
-                    ctx.fundsAreReleased(),
-                    ctx.canRetry(),
-                    ctx.language());
+                    ctx.getFailureType().name(),
+                    ctx.isFundsAreReleased(),
+                    ctx.isCanRetry(),
+                    ctx.getLanguage());
         } finally {
             obs.stop();
         }
     }
 
     private String buildPrompt(SagaFailureContext ctx) {
-        boolean es = "es".equals(ctx.language());
-
-        return switch (ctx.failureType()) {
+        // ✅ FIX: getFailureType() not failureType() — @Getter class
+        return switch (ctx.getFailureType()) {
 
             case FRAUD_REJECTED -> """
-                Explain a blocked transfer to the user.
-                Amount: %s %s to %s
-                Funds were reserved: %s
-                Funds have been released: %s
-                Can retry: yes
-                Language: %s
+                    Explain a blocked transfer to the user.
+                    Amount: %s %s to %s
+                    Funds were reserved: %s
+                    Funds have been released: %s
+                    Can retry: yes
+                    Language: %s
 
-                Important context:
-                - A security check blocked this transfer
-                - Do NOT explain why specifically
-                - Do NOT use words like "fraud" or "suspicious"
-                - DO say funds are safe if they were released
-                - Suggest retrying or calling support
-                """.formatted(
-                    ctx.amount(), ctx.currency(), ctx.targetName(),
-                    ctx.fundsWereReserved(), ctx.fundsAreReleased(),
-                    ctx.language());
+                    Important context:
+                    - A security check blocked this transfer
+                    - Do NOT explain why specifically
+                    - Do NOT use words like "fraud" or "suspicious"
+                    - DO say funds are safe if they were released
+                    - Suggest retrying or calling support
+                    """.formatted(
+                    ctx.getAmount(), ctx.getCurrency(), ctx.getTargetName(),
+                    ctx.isFundsWereReserved(), ctx.isFundsAreReleased(),
+                    ctx.getLanguage());
 
             case INSUFFICIENT_FUNDS -> """
-                Explain a failed transfer due to insufficient funds.
-                Attempted amount: %s %s
-                Can retry: yes, after adding funds
-                Language: %s
+                    Explain a failed transfer due to insufficient funds.
+                    Attempted amount: %s %s
+                    Can retry: yes, after adding funds
+                    Language: %s
 
-                Be direct but not harsh.
-                Tell them to check their balance and try again.
-                """.formatted(ctx.amount(), ctx.currency(),
-                    ctx.language());
+                    Be direct but not harsh.
+                    Tell them to check their balance and try again.
+                    """.formatted(
+                    ctx.getAmount(), ctx.getCurrency(), ctx.getLanguage());
 
             case KYC_REJECTED -> """
-                Explain a failed identity verification to a new user.
-                Can retry: %s
-                Retry guidance: submit a clear photo of a valid,
-                non-expired government-issued ID
-                Language: %s
+                    Explain a failed identity verification to a new user.
+                    Can retry: %s
+                    Retry guidance: submit a clear photo of a valid,
+                    non-expired government-issued ID
+                    Language: %s
 
-                Be empathetic — this is a new user.
-                This is not suspicious, just a quality issue.
-                """.formatted(ctx.canRetry(), ctx.language());
+                    Be empathetic — this is a new user.
+                    This is not suspicious, just a quality issue.
+                    """.formatted(ctx.isCanRetry(), ctx.getLanguage());
 
             case SAGA_TIMEOUT -> """
-                Explain that a financial operation timed out.
-                Amount: %s %s
-                Funds released: %s
-                Can retry: yes
-                Language: %s
+                    Explain that a financial operation timed out.
+                    Amount: %s %s
+                    Funds released: %s
+                    Can retry: yes
+                    Language: %s
 
-                Be reassuring — no funds were permanently lost.
-                Technical delays happen, user is not at fault.
-                """.formatted(ctx.amount(), ctx.currency(),
-                    ctx.fundsAreReleased(), ctx.language());
+                    Be reassuring — no funds were permanently lost.
+                    Technical delays happen, user is not at fault.
+                    """.formatted(
+                    ctx.getAmount(), ctx.getCurrency(),
+                    ctx.isFundsAreReleased(), ctx.getLanguage());
 
             case COMPENSATION_FAILED -> """
-                Explain that an operation failed AND our team
-                is manually resolving the situation.
-                Amount: %s %s
-                Language: %s
+                    Explain that an operation failed AND our team
+                    is manually resolving the situation.
+                    Amount: %s %s
+                    Language: %s
 
-                Be honest: there is an issue being resolved manually.
-                Give support reference number.
-                Do NOT explain technical details.
-                """.formatted(ctx.amount(), ctx.currency(),
-                    ctx.language());
+                    Be honest: there is an issue being resolved manually.
+                    Give support reference number.
+                    Do NOT explain technical details.
+                    """.formatted(
+                    ctx.getAmount(), ctx.getCurrency(), ctx.getLanguage());
         };
     }
 }

@@ -1,0 +1,21 @@
+{
+  "status": "UP",
+  "components": {
+    "db": {
+      "status": "UP",
+      "details": {
+        "database": "PostgreSQL",
+        "validationQuery": "isValid()"
+      }
+    },
+    "redis": {
+      "status": "UP",
+      "details": {
+        "version": "7.2.4"
+      }
+    },
+    "kafka": {
+      "status": "UP"
+    }
+  }
+}

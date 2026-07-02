@@ -2,15 +2,13 @@ package com.nexus.fraud.config;
 
 import com.nexus.fraud.agent.tools.*;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.client.advisor.RetrievalAugmentationAdvisor;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.SafeGuardAdvisor;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
-import org.springframework.ai.chat.client.advisor.api.CallAroundAdvisor;
-import org.springframework.ai.chat.client.advisor.api.CallAroundAdvisorChain;
-import org.springframework.ai.chat.client.advisor.api.AdvisedRequest;
-import org.springframework.ai.chat.client.advisor.api.AdvisedResponse;
-import org.springframework.ai.chat.memory.InMemoryChatMemory;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.ResponseFormat;
@@ -55,14 +53,21 @@ public class SpringAiConfig {
         You analyze financial transactions for fraud risk.
 
         DECISION FRAMEWORK:
-        - Risk score 0-29:  APPROVE — consistent with user history
-        - Risk score 30-69: REVIEW  — ambiguous signals, human review needed
-        - Risk score 70-100: REJECT — clear fraud indicators
+        The `decision` field MUST match the score range. No exceptions.
+        - Risk score  0-29:  decision = APPROVE
+        - Risk score 30-69:  decision = REVIEW
+        - Risk score 70-100: decision = REJECT
+        Confidence is INFORMATIONAL ONLY. Low confidence NEVER promotes
+        APPROVE to REVIEW. A new user with no transaction history has low
+        confidence by definition — that is normal, not suspicious.
+        Score 10 → decision = APPROVE, always.
 
         MANDATORY RULES:
         - velocity_check_tool MUST be called on EVERY transaction
         - rag_policy_tool MUST be called on EVERY transaction
-        - Never approve a transaction with impossible_travel=true without REVIEW
+        - Never set decision=REVIEW unless riskScore >= 30
+        - Never set decision=REJECT unless riskScore >= 70
+        - Never approve a transaction with impossible_travel=true
         - Never approve a blacklisted merchant transaction
         - Cite specific policy sections in every rejection
 
@@ -70,7 +75,6 @@ public class SpringAiConfig {
         - Always respond ONLY with valid JSON matching the FraudDecision schema
         - Never add prose before or after the JSON
         - Always populate all fields — null is not acceptable for decision fields
-        - Confidence < 0.6 should escalate to REVIEW
 
         POLICY CITATION FORMAT:
         When citing fraud policies retrieved from the knowledge base, always
@@ -122,9 +126,6 @@ public class SpringAiConfig {
                         .model("gpt-4o-mini")
                         .temperature(0.0)
                         .maxTokens(800)
-                        // M6: ResponseFormat via constructor
-                        .responseFormat(new ResponseFormat(
-                        ))
                         .build())
                 .defaultAdvisors(new SimpleLoggerAdvisor())
                 .build();
@@ -200,8 +201,7 @@ public class SpringAiConfig {
     @Bean("fraudSynthesisClient")
     public ChatClient fraudSynthesisClient(
             OpenAiChatModel model,
-            PgVectorStore policyVectorStore,
-            InMemoryChatMemory complianceMemory) {
+            PgVectorStore policyVectorStore) {
 
         // Section 10: RAG pipeline for policy retrieval
         // M6: no documentPostProcessors — citations handled in prompt
@@ -225,11 +225,6 @@ public class SpringAiConfig {
                                         .build())
                         .build();
 
-        // Section 7: Memory for compliance review sessions
-        MessageChatMemoryAdvisor memoryAdvisor =
-                MessageChatMemoryAdvisor.builder(complianceMemory)
-                        .build();
-
         return ChatClient.builder(model)
                 .defaultSystem(FRAUD_SYSTEM_PROMPT + """
 
@@ -237,7 +232,12 @@ public class SpringAiConfig {
                     Analyze ALL tool results provided in the conversation.
                     Produce a complete FraudDecision JSON.
 
-                    Scoring guide:
+                    BASE SCORE: 0 (not 50, not 60 — always start at zero).
+                    Add points ONLY for signals that are explicitly present.
+                    If a tool returned null or empty, that signal is ABSENT —
+                    treat absence of data as neutral (0 points), never as risk.
+
+                    Scoring guide (additive from base 0):
                     - impossible_travel=true: +50 points
                     - blacklisted merchant: +100 points (hard reject)
                     - high_velocity (>5 txn/5min): +35 points
@@ -252,6 +252,12 @@ public class SpringAiConfig {
                     - typical time of day: -5 points
                     - low-risk merchant category: -5 points
 
+                    IMPORTANT: If all tools returned null/empty, the only
+                    applicable signal is "new counterparty" (+10). Final
+                    score = 10 → decision = APPROVE. Do NOT invent signals.
+                    Low confidence on a new user is EXPECTED. It does NOT
+                    change APPROVE to REVIEW. Score < 30 → APPROVE always.
+
                     CITATION INSTRUCTIONS:
                     For each retrieved policy fragment, cite it as:
                     [policy: {title}, section: {number}] — {how it applies}
@@ -264,21 +270,12 @@ public class SpringAiConfig {
                         .model("gpt-4o-mini")
                         .temperature(0.1)
                         .maxTokens(3000)
-                        // M6: ResponseFormat via constructor
-                        .responseFormat(new ResponseFormat(
-                        ))
                         .build())
                 .defaultAdvisors(
                         new SimpleLoggerAdvisor(),
-                        memoryAdvisor,
                         ragAdvisor
                 )
                 .build();
-    }
-
-    @Bean
-    public InMemoryChatMemory complianceMemory() {
-        return new InMemoryChatMemory();
     }
 
     /**
@@ -289,14 +286,12 @@ public class SpringAiConfig {
      * In production, this would strip or escape suspicious patterns
      * from the description field before sending to the LLM.
      */
-    static class ContentSanitizerAdvisor implements CallAroundAdvisor {
+    static class ContentSanitizerAdvisor implements CallAdvisor {
 
         @Override
-        public AdvisedResponse aroundCall(AdvisedRequest advisedRequest,
-                                          CallAroundAdvisorChain chain) {
-            // In production: sanitize user-provided fields in the prompt
-            // to prevent injection via transaction descriptions
-            return chain.nextAroundCall(advisedRequest);
+        public ChatClientResponse adviseCall(ChatClientRequest request,
+                                             CallAdvisorChain chain) {
+            return chain.nextCall(request);
         }
 
         @Override

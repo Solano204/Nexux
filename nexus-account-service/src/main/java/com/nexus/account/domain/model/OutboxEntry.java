@@ -1,6 +1,6 @@
 package com.nexus.account.domain.model;
 
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -48,13 +48,11 @@ public class OutboxEntry {
     private String eventType;
 
     /**
-     * JSONB payload — the serialized domain event.
-     * Contains all data needed for downstream consumers to
-     * process the event without querying this service.
+     * JSONB payload — the serialized domain event as a JSON string.
      */
     @Column(name = "payload", columnDefinition = "jsonb", nullable = false, updatable = false)
     @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
-    private Object payload;
+    private String payload;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -74,12 +72,18 @@ public class OutboxEntry {
      */
     public static OutboxEntry of(String aggregateType, UUID aggregateId,
                                  String eventType, Object payload) {
+        String payloadStr = switch (payload) {
+            case String s -> s;
+            case JsonNode node -> node.toString();
+            case null -> "{}";
+            default -> String.valueOf(payload);
+        };
         return OutboxEntry.builder()
                 .outboxId(UUID.randomUUID())
                 .aggregateType(aggregateType)
                 .aggregateId(aggregateId)
                 .eventType(eventType)
-                .payload(payload)
+                .payload(payloadStr)
                 .createdAt(Instant.now())
                 .build();
     }

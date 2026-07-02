@@ -1,5 +1,7 @@
 package com.nexus.identity.config;
 
+import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -34,6 +36,8 @@ import java.util.Map;
  */
 @Configuration
 @EnableKafka
+@Slf4j
+
 public class KafkaConfig {
 
     @Value("${spring.kafka.bootstrap-servers:nexus-kafka:9092}")
@@ -41,6 +45,10 @@ public class KafkaConfig {
 
     @Value("${spring.kafka.consumer.group-id:identity-service-saga-commands}")
     private String groupId;
+    @PostConstruct
+    public void logConfig() {
+        log.info("=== KafkaConfig bootstrap-servers resolved: [{}] ===", bootstrapServers);
+    }
 
     @Bean
     public ConsumerFactory<String, String> consumerFactory() {
@@ -72,6 +80,7 @@ public class KafkaConfig {
         // MANUAL ACK — SagaCommandConsumer calls ack.acknowledge() explicitly
         factory.getContainerProperties()
                 .setAckMode(ContainerProperties.AckMode.MANUAL);
+        factory.getContainerProperties().setObservationEnabled(true);
         // Concurrency 1: SAGA commands are ordered per userId,
         // parallel consumption would break ordering
         factory.setConcurrency(1);

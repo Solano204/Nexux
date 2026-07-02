@@ -5,8 +5,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import io.lettuce.core.api.StatefulConnection;
+import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.connection.lettuce.LettucePoolingClientConfiguration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.Duration;
@@ -22,8 +25,12 @@ import java.time.Duration;
  * 5. user:locations:{userId} (LIST) — geolocation history (read-only, written by identity-service)
  * 6. user:behavioral:{userId} (STRING) — behavioral profile (read-only, written by risk-scoring-service)
  *
- * Connection timeout: 100ms — fraud analysis is latency-sensitive.
- * Lettuce with connection pooling for concurrent Virtual Thread access.
+ * Connection timeout: 1000ms (was 100ms — too aggressive, was failing the
+ *   handshake itself under normal Docker networking, not just genuine
+ *   Redis unavailability). Fraud analysis is still latency-sensitive, this
+ *   just gives real headroom instead of failing on jitter.
+ * Lettuce with connection pooling (16 max-active / 8 max-idle / 2 min-idle)
+ * for concurrent Virtual Thread access — was actually unpooled before.
  */
 @Configuration
 public class RedisConfig {
@@ -46,8 +53,15 @@ public class RedisConfig {
             config.setPassword(redisPassword);
         }
 
-        LettuceClientConfiguration clientConfig = LettuceClientConfiguration.builder()
-                .commandTimeout(Duration.ofMillis(100))
+        GenericObjectPoolConfig<StatefulConnection<?, ?>> poolConfig = new GenericObjectPoolConfig<>();
+        poolConfig.setMaxTotal(16);
+        poolConfig.setMaxIdle(8);
+        poolConfig.setMinIdle(2);
+        poolConfig.setMaxWait(Duration.ofSeconds(3));
+
+        LettuceClientConfiguration clientConfig = LettucePoolingClientConfiguration.builder()
+                .poolConfig(poolConfig)
+                .commandTimeout(Duration.ofMillis(1000))
                 .build();
 
         return new LettuceConnectionFactory(config, clientConfig);

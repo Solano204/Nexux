@@ -4,11 +4,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.saga.application.transfer.TransferSagaProcessor;
 import com.nexus.saga.application.onboarding.OnboardingFlowSagaProcessor;
+import com.nexus.saga.domain.exception.InvalidSagaStateException;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Component;
 
 /**
@@ -60,8 +62,14 @@ public class SagaReplyConsumer {
                         transferProcessor.handleBalanceFinalized(reply);
                 case "BalanceReleasedReply" ->
                         transferProcessor.handleBalanceReleased(reply);
-                case "NotificationSentReply" ->
+                case "NotificationSentReply" -> {
+                    String originalCommand = reply.path("originalCommand").asText("");
+                    if ("SendWelcomeNotificationCommand".equals(originalCommand)) {
+                        onboardingProcessor.handleWelcomeNotificationSent(reply);
+                    } else {
                         transferProcessor.handleNotificationSent(reply);
+                    }
+                }
 
                 // ── Onboarding saga replies ────────────────
                 case "AccountsCreatedReply" ->
@@ -69,8 +77,6 @@ public class SagaReplyConsumer {
                 case "AccountCreationFailedReply" ->
                         onboardingProcessor
                                 .handleAccountCreationFailed(reply);
-                case "WelcomeNotificationSentReply" ->
-                        onboardingProcessor.handleWelcomeNotificationSent(reply);
                 case "KycApprovedReply" ->
                         onboardingProcessor.handleKycApproved(reply);
                 case "KycRejectedReply" ->
@@ -82,6 +88,12 @@ public class SagaReplyConsumer {
 
             ack.acknowledge();
 
+        } catch (InvalidSagaStateException e) {
+            log.warn("Skipping stale reply for terminal saga: {}", e.getMessage());
+            ack.acknowledge();
+        } catch (ObjectOptimisticLockingFailureException e) {
+            log.warn("Concurrent saga reply — already committed by another consumer, acking");
+            ack.acknowledge();
         } catch (Exception e) {
             log.error("Failed to process saga reply: {}",
                     e.getMessage(), e);
@@ -90,82 +102,3 @@ public class SagaReplyConsumer {
     }
 }
 
-/**
- * Transaction Event Consumer — starts TransferSaga.
- */
-@Slf4j
-@Component
-@RequiredArgsConstructor
-class TransactionEventConsumer {
-
-    private final TransferSagaProcessor transferProcessor;
-    private final ObjectMapper objectMapper;
-
-    @KafkaListener(
-            topics = "transactions.initiated",
-            groupId = "saga-orchestrator-transactions",
-            containerFactory = "kafkaListenerContainerFactory"
-    )
-    public void consumeTransactionInitiated(String message,
-                                            Acknowledgment ack) {
-        try {
-            JsonNode event = objectMapper.readTree(message);
-            transferProcessor.handleTransactionInitiated(event);
-            ack.acknowledge();
-        } catch (Exception e) {
-            log.error("Failed to start TransferSaga: {}",
-                    e.getMessage(), e);
-        }
-    }
-}
-
-/**
- * Identity Event Consumer — starts and advances OnboardingFlowSaga.
- */
-@Slf4j
-@Component
-@RequiredArgsConstructor
-class IdentityEventConsumer {
-
-    private final OnboardingFlowSagaProcessor onboardingProcessor;
-    private final ObjectMapper objectMapper;
-
-    @KafkaListener(
-            topics = "users.registered",
-            groupId = "saga-orchestrator-identity",
-            containerFactory = "kafkaListenerContainerFactory"
-    )
-    public void consumeUserRegistered(String message,
-                                      Acknowledgment ack) {
-        try {
-            onboardingProcessor.handleUserRegistered(
-                    objectMapper.readTree(message));
-            ack.acknowledge();
-        } catch (Exception e) {
-            log.error("Failed to start OnboardingFlowSaga: {}",
-                    e.getMessage(), e);
-        }
-    }
-
-    @KafkaListener(
-            topics = {"identity.verified", "identity.rejected"},
-            groupId = "saga-orchestrator-kyc",
-            containerFactory = "kafkaListenerContainerFactory"
-    )
-    public void consumeKycResult(String message, Acknowledgment ack) {
-        try {
-            JsonNode event = objectMapper.readTree(message);
-            String eventType = event.path("eventType").asText("");
-
-            if (eventType.contains("verified")) {
-                onboardingProcessor.handleKycApproved(event);
-            } else {
-                onboardingProcessor.handleKycRejected(event);
-            }
-            ack.acknowledge();
-        } catch (Exception e) {
-            log.error("Failed to process KYC result: {}",
-                    e.getMessage(), e);
-        }
-    }
-}

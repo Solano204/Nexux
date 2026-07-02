@@ -1,0 +1,25 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /auth/validate",
+  "rawPath": "/auth/validate",
+  "rawQueryString": "",
+  "headers": {
+    "content-type": "application/json",
+    "authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InRlc3Qta2V5LWlkIn0.eyJzdWIiOiJ0ZXN0LWNvZ25pdG8tc3ViIiwiY2xpZW50X2lkIjoidGVzdC1jbGllbnQiLCJ0b2tlbl91c2UiOiJhY2Nlc3MiLCJpc3MiOiJodHRwczovL2NvZ25pdG8taWRwLnVzLWVhc3QtMS5hbWF6b25hd3MuY29tL3VzLWVhc3QtMV90ZXN0cG9vbCIsImV4cCI6OTk5OTk5OTk5OSwiaWF0IjoxNzE2MjAwMDAwLCJqdGkiOiJ0ZXN0LWp0aS0xMjMifQ.test-signature"
+  },
+  "requestContext": {
+    "accountId": "123456789012",
+    "apiId": "test-api",
+    "http": {
+      "method": "POST",
+      "path": "/auth/validate",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "127.0.0.1",
+      "userAgent": "SAM-CLI/1.0"
+    },
+    "requestId": "test-request-id",
+    "stage": "$default",
+    "time": "07/May/2025:14:30:00 +0000"
+  },
+  "isBase64Encoded": false
+}

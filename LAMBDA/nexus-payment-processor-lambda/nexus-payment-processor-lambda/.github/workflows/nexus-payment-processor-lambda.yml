@@ -1,0 +1,242 @@
+# .github/workflows/nexus-payment-processor-lambda.yml
+
+name: Payment Processor Lambda Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'nexus-payment-processor-lambda/**'
+      - '.github/workflows/nexus-payment-processor-lambda.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'nexus-payment-processor-lambda/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: '21'
+  AWS_REGION: us-east-1
+
+jobs:
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 1: BUILD + TEST
+  # Tests: validator, enricher, idempotency, bridge routing
+  # ════════════════════════════════════════════════════════════
+  build-test:
+    name: Build + Test (Validator + Idempotency + Bridge)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-payment-processor-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Build fat JAR
+        run: mvn package --no-transfer-progress
+
+      - name: Run Tests
+        run: mvn test --no-transfer-progress
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-payment-processor-jar-${{ github.sha }}
+          path: nexus-payment-processor-lambda/target/nexus-payment-processor-lambda-1.0.0.jar
+          retention-days: 7
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 2: DESIGN INVARIANT CHECKS
+  # ════════════════════════════════════════════════════════════
+  verify-design:
+    name: Verify Design Invariants
+    needs: build-test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-payment-processor-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify ReportBatchItemFailures enabled
+        run: |
+          grep -q "ReportBatchItemFailures" template.yaml && \
+            echo "✓ Partial batch failure reporting enabled" || \
+            (echo "✗ ReportBatchItemFailures must be set for payment safety" && exit 1)
+
+      - name: Verify idempotency check in handler
+        run: |
+          grep -q "idempotency\|Idempotency\|DUPLICATE" \
+            src/main/java/com/nexus/payment/lambda/PaymentProcessorHandler.java && \
+            echo "✓ Idempotency check present" || \
+            (echo "✗ Missing idempotency check" && exit 1)
+
+      - name: Verify both bridge modes supported
+        run: |
+          grep -q "HttpKafkaBridgeClient\|HTTP" \
+            src/main/java/com/nexus/payment/lambda/PaymentProcessorHandler.java && \
+            grep -q "MskKafkaBridgeClient\|MSK" \
+            src/main/java/com/nexus/payment/lambda/PaymentProcessorHandler.java && \
+            echo "✓ Both HTTP and MSK bridge modes present" || \
+            (echo "✗ Missing one of HTTP/MSK bridge modes" && exit 1)
+
+      - name: Verify DLQ handling
+        run: |
+          grep -q "DeadLetterHandler\|DLQ\|dlq" \
+            src/main/java/com/nexus/payment/lambda/PaymentProcessorHandler.java && \
+            echo "✓ DLQ handler referenced in main handler" || \
+            echo "⚠  DLQ handler not referenced from main handler — check routing"
+
+      - name: Verify existing test events
+        run: |
+          [ -f "events/visa-payment-event.json" ] && \
+            echo "✓ events/visa-payment-event.json present" || \
+            (echo "✗ Missing Visa test event" && exit 1)
+          [ -f "events/mastercard-payment-event.json" ] && \
+            echo "✓ events/mastercard-payment-event.json present" || \
+            (echo "✗ Missing Mastercard test event" && exit 1)
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 3: SAM BUILD + VALIDATE
+  # ════════════════════════════════════════════════════════════
+  sam-build:
+    name: SAM Build + Validate
+    needs: [build-test, verify-design]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-payment-processor-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus-payment-processor-jar-${{ github.sha }}
+          path: nexus-payment-processor-lambda/target/
+
+      - name: SAM Validate
+        run: sam validate --template template.yaml --lint
+
+      - name: SAM Build
+        run: sam build --template template.yaml
+
+      - name: Upload SAM build
+        uses: actions/upload-artifact@v4
+        with:
+          name: sam-build-payment-processor-${{ github.sha }}
+          path: nexus-payment-processor-lambda/.aws-sam/
+          retention-days: 7
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 4: DEPLOY TO STAGING
+  # ════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy to Staging
+    needs: sam-build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: staging
+    defaults:
+      run:
+        working-directory: nexus-payment-processor-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials (staging)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download SAM build
+        uses: actions/download-artifact@v4
+        with:
+          name: sam-build-payment-processor-${{ github.sha }}
+          path: nexus-payment-processor-lambda/.aws-sam/
+
+      - name: SAM Deploy to Staging
+        run: |
+          sam deploy \
+            --config-env staging \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --resolve-s3
+
+  # ════════════════════════════════════════════════════════════
+  # STAGE 5: DEPLOY TO PRODUCTION
+  # ════════════════════════════════════════════════════════════
+  deploy-prod:
+    name: Deploy to Production
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: nexus-payment-processor-lambda
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials (production)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download SAM build
+        uses: actions/download-artifact@v4
+        with:
+          name: sam-build-payment-processor-${{ github.sha }}
+          path: nexus-payment-processor-lambda/.aws-sam/
+
+      - name: SAM Deploy to Production
+        run: |
+          sam deploy \
+            --config-env prod \
+            --no-fail-on-empty-changeset \
+            --resolve-s3 \
+            --parameter-overrides \
+              "KafkaBridgeHttpUrl=${{ secrets.KAFKA_BRIDGE_HTTP_URL_PROD }}" \
+              "MskBootstrapServers=${{ secrets.MSK_BOOTSTRAP_SERVERS_PROD }}"

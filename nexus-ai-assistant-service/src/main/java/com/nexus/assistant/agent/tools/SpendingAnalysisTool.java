@@ -16,12 +16,3 @@ public class SpendingAnalysisTool {
     }
 }
 
-@Component
-public class SavingsRecommendationsTool {
-    @Tool(name = "get_savings_recommendations",
-            description = "Gets pre-computed AI savings recommendations based on spending history.")
-    public String getSavingsRecommendations(
-            @ToolParam(description = "Account UUID") String accountId) {
-        return "{\"status\": \"RECOMMENDATIONS_AVAILABLE\"}";
-    }
-}
