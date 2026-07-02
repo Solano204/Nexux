@@ -89,11 +89,16 @@
             <artifactId>aws-xray-recorder-sdk-core</artifactId>
             <version>2.14.0</version>
         </dependency>
-        <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-xray-recorder-sdk-aws-sdk-v2-instrumentor</artifactId>
-            <version>2.14.0</version>
-        </dependency>
+        <!-- aws-xray-recorder-sdk-aws-sdk-v2-instrumentor intentionally omitted:
+             its TracingInterceptor (auto-registered via AWS SDK v2's classpath
+             SPI scan, not called directly by app code) references
+             PropertyNamingStrategy.CAMEL_CASE_TO_LOWER_CASE_WITH_UNDERSCORES,
+             a field jackson-databind no longer has — crashes the Lambda at
+             cold-start init (NoSuchFieldError) if present. AWSXRay (used
+             directly by this code) lives in -core, unaffected by removing
+             this. Lambda's platform-level Tracing=Active still traces the
+             invocation itself; this only drops automatic per-AWS-SDK-call
+             subsegments. -->
 
         <!-- ══════════════════════════════════════════════════
              KAFKA CLIENT — for MSK direct bridge path

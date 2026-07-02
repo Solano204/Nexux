@@ -8,3 +8,9 @@ spring:
   kafka:
     streams:
       state-dir: /tmp/kafka-streams/transaction
+
+nexus:
+  plane-bridge-secret: dev-bridge-secret
+  analytics:
+    dynamodb:
+      enabled: false   # set true only with real AWS credentials in dev

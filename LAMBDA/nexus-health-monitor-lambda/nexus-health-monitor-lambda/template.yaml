@@ -3,7 +3,7 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   Nexus Health Monitor Lambda — external cross-plane health monitoring.
   Runs every 5 minutes via CloudWatch Events.
-  Checks all 15 local plane services via /actuator/health endpoints.
+  Checks all 16 local plane services via /actuator/health (Spring Boot) or /q/health (Quarkus).
   Parallel checks via ThreadPoolExecutor (8 workers, ~8s wall time vs ~75s sequential).
   Tiered alerting: CRITICAL (immediate page), HIGH (2 failures), STANDARD (2+ failures).
   Recovery detection: explicit all-clear notifications when services come back.

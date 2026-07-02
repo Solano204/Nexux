@@ -22,7 +22,7 @@ variable "environment" {
 variable "kyc_bucket_name" {
   description = "S3 bucket for KYC documents. nexus-identity-service uploads; nexus-ai-kyc-service reads."
   type        = string
-  default     = "nexus-kyc-documents"
+  default     = "nexus-josue-kyc-documents"
 }
 
 variable "document_retention_days" {
@@ -48,13 +48,13 @@ variable "cors_allowed_origins" {
 variable "kyc_queue_name" {
   description = "SQS queue consumed by nexus-ai-kyc-service. Must match KYC_QUEUE_URL / KYC_SQS_QUEUE_URL."
   type        = string
-  default     = "nexus-kyc-documents-pending"
+  default     = "nexus-josue-kyc-documents-pending"
 }
 
 variable "kyc_dlq_name" {
   description = "Dead-letter queue for messages that fail 3 processing attempts"
   type        = string
-  default     = "nexus-kyc-documents-pending-dlq"
+  default     = "nexus-josue-kyc-documents-pending-dlq"
 }
 
 # ── IAM ───────────────────────────────────────────────────────────────────────
@@ -62,5 +62,5 @@ variable "kyc_dlq_name" {
 variable "iam_user_name" {
   description = "IAM user whose access key is used by all Nexus services via AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY"
   type        = string
-  default     = "nexus-platform-svc"
+  default     = "nexus-josue-platform-svc"
 }

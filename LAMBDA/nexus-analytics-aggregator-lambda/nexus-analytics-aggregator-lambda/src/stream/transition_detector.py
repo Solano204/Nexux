@@ -42,13 +42,15 @@ def detect_transition(
     old_status = str(old_image.get("status", "")).upper() \
         if old_image else ""
 
-    # New item inserted
+    # New item inserted (e.g., Docker service writes a single snapshot at terminal state)
     if not old_image:
         if new_status in ("PENDING", "FRAUD_CHECKING"):
             return "NEW_TRANSACTION"
-        # Item inserted already completed (rare but handle it)
         if new_status in _COMPLETED_STATUSES:
             return "COMPLETED"
+        # FAILED insert: DynamoDB writer may do a single PUT at failure time
+        if new_status in _FAILED_STATUSES:
+            return "FAILED"
         return None
 
     # Status unchanged — skip

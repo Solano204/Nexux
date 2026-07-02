@@ -11,6 +11,15 @@ spring:
       host: ${REDIS_HOST:nexus-redis}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD}
+      timeout: 5s
+      connect-timeout: 5s
+      lettuce:
+        pool:
+          enabled: true
+          max-active: 24
+          max-idle: 12
+          min-idle: 4
+          max-wait: 3s
 
 nexus:
   identity:

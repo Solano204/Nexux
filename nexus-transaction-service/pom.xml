@@ -152,6 +152,12 @@
             <artifactId>commons-lang3</artifactId>
         </dependency>
 
+        <!-- AWS DynamoDB — analytics projection for nexus-analytics-aggregator-lambda -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>dynamodb</artifactId>
+        </dependency>
+
         <!-- Test Dependencies -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

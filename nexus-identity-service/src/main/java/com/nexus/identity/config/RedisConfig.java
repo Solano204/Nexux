@@ -16,8 +16,11 @@ import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import io.lettuce.core.api.StatefulConnection;
+import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.connection.lettuce.LettucePoolingClientConfiguration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
@@ -50,9 +53,13 @@ import java.util.Map;
  *   It is non-blocking (Netty-based) and shares connections via
  *   connection multiplexing — better for Virtual Thread workloads.
  *
- * Timeout: 100ms connect, 100ms command.
- *   Identity service operations are latency-sensitive (auth hot path).
- *   Fast failure prevents cascading delays.
+ * Timeout: 1000ms command (was 100ms — too aggressive, was failing the
+ *   handshake itself under normal Docker networking/startup latency, not
+ *   just genuine Redis unavailability). Identity service operations are
+ *   latency-sensitive (auth hot path), so this stays well under Spring's
+ *   default 60s, just no longer trigger-happy on the handshake.
+ * Pool: 24 max-active / 12 max-idle / 4 min-idle (was unpooled — a single
+ *   shared connection was the bottleneck under concurrent load).
  */
 @Configuration
 @EnableCaching
@@ -77,9 +84,16 @@ public class RedisConfig implements CachingConfigurer {
             serverConfig.setPassword(password);
         }
 
+        GenericObjectPoolConfig<StatefulConnection<?, ?>> poolConfig = new GenericObjectPoolConfig<>();
+        poolConfig.setMaxTotal(24);
+        poolConfig.setMaxIdle(12);
+        poolConfig.setMinIdle(4);
+        poolConfig.setMaxWait(Duration.ofSeconds(3));
+
         LettuceClientConfiguration clientConfig =
-                LettuceClientConfiguration.builder()
-                        .commandTimeout(Duration.ofMillis(100))
+                LettucePoolingClientConfiguration.builder()
+                        .poolConfig(poolConfig)
+                        .commandTimeout(Duration.ofMillis(1000))
                         .shutdownTimeout(Duration.ofMillis(200))
                         .build();
 

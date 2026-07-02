@@ -13,15 +13,37 @@ output "env_block" {
     AWS_REGION=${var.aws_region}
     AWS_ENDPOINT=
     AWS_ACCESS_KEY_ID=${aws_iam_access_key.nexus_platform.id}
+    # AWS_SECRET_ACCESS_KEY is never re-derivable for an imported key — keep
+    # whatever value is already in your .env from when this key was first created.
     AWS_SECRET_ACCESS_KEY=${aws_iam_access_key.nexus_platform.secret}
 
-    # ─── KYC Resources ───────────────────────────────────────────
+    # ─── KYC Resources (nexus-identity-service, nexus-ai-kyc-service) ─
     KYC_S3_BUCKET=${aws_s3_bucket.kyc_documents.bucket}
     KYC_QUEUE_URL=${aws_sqs_queue.kyc_pending.url}
     KYC_SQS_QUEUE_URL=${aws_sqs_queue.kyc_pending.url}
+    KYC_REKOGNITION_RESULTS_QUEUE_URL=${aws_sqs_queue.kyc_rekognition_results.url}
 
     # ─── Encryption (set to true once tested end-to-end) ─────────
     KYC_ENCRYPTION_ENABLED=false
+
+    # ─── Notification dispatch (nexus-notification-service) ──────
+    # Real, already-coded integration — AwsConfig.java wires a live SnsClient.
+    SNS_NOTIFICATION_DISPATCH_TOPIC_ARN=${aws_sns_topic.notification_dispatch.arn}
+
+    # ─── Fraud alerts (nexus-fraud-service) ───────────────────────
+    # nexus-fraud-service's AwsConfig.java only wires an SqsClient (no SNS) —
+    # SNS_FRAUD_ALERTS_TOPIC_ARN is not read anywhere in that service's code
+    # yet, so it's left blank here. FRAUD_ALERTS_QUEUE_URL is the SQS queue
+    # the fraud-alert Lambda actually listens on — wire fraud-service to send
+    # there directly (sqs:SendMessage) once that code path is built.
+    SNS_FRAUD_ALERTS_TOPIC_ARN=
+    FRAUD_ALERTS_QUEUE_URL=${aws_sqs_queue.fraud_alert_high_severity.url}
+
+    # ─── Plane bridge secret ──────────────────────────────────────
+    # Lambdas send this as the X-Plane-Bridge-Secret header when calling back
+    # into docker-compose. No current Plane A service validates it yet — wire
+    # this in whichever service ends up handling /internal/v1/... callbacks.
+    PLANE_BRIDGE_SECRET=${local.plane_bridge_secret_value}
 
   EOT
 }

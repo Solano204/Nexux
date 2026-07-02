@@ -30,7 +30,7 @@ public class KycInitiationConsumer {
     private final ObjectMapper objectMapper;
     private final RestTemplate restTemplate;
 
-    @Value("${nexus.identity.internal-url:http://localhost:8010}")
+    @Value("${nexus.identity.internal-url:http://localhost:8083}")
     private String identityServiceUrl;
 
     @KafkaListener(topics = "identity.kyc", groupId = "nexus-ai-kyc-service")

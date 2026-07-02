@@ -35,10 +35,11 @@ public class AlertClassifier {
     );
 
     public AlertClassification classify(FraudAlertEvent alert) {
-        List<String> factorCategories = alert.triggeringFactors()
-                .stream()
-                .map(TriggeringFactor::category)
-                .toList();
+        List<String> factorCategories = alert.triggeringFactors() != null
+                ? alert.triggeringFactors().stream()
+                        .map(TriggeringFactor::category)
+                        .toList()
+                : List.of();
 
         String alertCategory = deriveCategory(
                 factorCategories, alert);

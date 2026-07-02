@@ -57,14 +57,16 @@ _cw = boto3.client("cloudwatch",
 _CW_NS = os.environ.get("CLOUDWATCH_NAMESPACE", "Nexus/Analytics")
 
 # Transaction types that represent outflows (spending)
+# Matches TransactionType enum: PAYMENT, EXTERNAL_TRANSFER, INTERNAL_TRANSFER,
+# FEE, CASH_OUT. REVERSAL status changes are handled via _handle_reversed().
 _DEBIT_TYPES = frozenset([
-    "PAYMENT", "EXTERNAL_TRANSFER", "DIGITAL_PAYMENT",
-    "INTERNAL_TRANSFER", "FEE", "WITHDRAWAL",
+    "PAYMENT", "EXTERNAL_TRANSFER", "INTERNAL_TRANSFER",
+    "FEE", "CASH_OUT",
 ])
 # Transaction types that represent inflows (income)
+# Matches TransactionType enum: DIRECT_DEPOSIT, CASH_IN, INTEREST.
 _CREDIT_TYPES = frozenset([
-    "CREDIT", "REFUND", "INCOME_CREDIT",
-    "INTEREST", "DEPOSIT",
+    "DIRECT_DEPOSIT", "CASH_IN", "INTEREST",
 ])
 
 
@@ -151,6 +153,9 @@ def _process_record(record: dict) -> dict:
     completed_at = str(new_image.get(
         "completedAt",
         datetime.now(timezone.utc).isoformat()))
+    fraud_score_raw = new_image.get("fraudScore")
+    fraud_score = float(fraud_score_raw) \
+        if fraud_score_raw is not None else None
 
     is_debit  = txn_type in _DEBIT_TYPES
     is_credit = txn_type in _CREDIT_TYPES
@@ -176,7 +181,7 @@ def _process_record(record: dict) -> dict:
             user_id, amount, currency, category, mcc,
             merchant_id, merchant_name, txn_type, network,
             is_debit, is_credit,
-            date_str, year_month, hour_str, completed_at, seq)
+            date_str, year_month, hour_str, completed_at, fraud_score, seq)
 
     elif transition == "REVERSED":
         metrics = _handle_reversed(
@@ -184,7 +189,7 @@ def _process_record(record: dict) -> dict:
             date_str, year_month, seq)
 
     elif transition == "FAILED":
-        metrics = _handle_failed(currency, network)
+        metrics = _handle_failed(user_id, date_str, seq, currency, network)
 
     elif transition == "NEW_TRANSACTION":
         # Minimal tracking for pending transactions
@@ -201,7 +206,7 @@ def _handle_completed(
         txn_type: str, network: str,
         is_debit: bool, is_credit: bool,
         date_str: str, year_month: str, hour_str: str,
-        completed_at: str, seq: str) -> list[dict]:
+        completed_at: str, fraud_score: float, seq: str) -> list[dict]:
 
     daily_stats.update(
         user_id, date_str, amount, currency,
@@ -223,7 +228,7 @@ def _handle_completed(
         user_id, amount, currency, year_month,
         is_debit, is_credit, completed_at, seq)
 
-    platform_metrics.update(amount, currency, is_debit)
+    platform_metrics.update(user_id, amount, currency, is_debit, fraud_score)
 
     return [
         build_metric("TransactionsCompleted", 1.0, "Count",
@@ -255,7 +260,10 @@ def _handle_reversed(
     ]
 
 
-def _handle_failed(currency: str, network: str) -> list[dict]:
+def _handle_failed(user_id: str, date_str: str, seq: str,
+                   currency: str, network: str) -> list[dict]:
+    daily_stats.fail(user_id, date_str, seq)
+    platform_metrics.track_failed()
     return [
         build_metric("TransactionsFailed", 1.0, "Count",
                      [("Currency", currency), ("Network", network)])

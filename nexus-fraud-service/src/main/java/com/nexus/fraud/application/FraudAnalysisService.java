@@ -14,9 +14,12 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import software.amazon.awssdk.services.sqs.SqsClient;
+import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -44,6 +47,10 @@ public class FraudAnalysisService {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
+    private final SqsClient sqsClient;
+
+    @Value("${nexus.aws.fraud-alert-queue-url:}")
+    private String fraudAlertQueueUrl;
 
     private final Counter hardRejectCounter;
 
@@ -55,7 +62,8 @@ public class FraudAnalysisService {
             KafkaTemplate<String, String> kafkaTemplate,
             ObjectMapper objectMapper,
             ObservationRegistry observationRegistry,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            SqsClient sqsClient) {
 
         this.agent = agent;
         this.decisionRepository = decisionRepository;
@@ -64,6 +72,7 @@ public class FraudAnalysisService {
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
         this.observationRegistry = observationRegistry;
+        this.sqsClient = sqsClient;
 
         this.hardRejectCounter = Counter.builder(
                         "fraud.hard_reject.total")
@@ -268,20 +277,22 @@ public class FraudAnalysisService {
     private void writeHighSeverityAlert(FraudDecision decision,
                                         FraudAnalysisRequest request) {
         try {
+            String alertId = UUID.randomUUID().toString();
+            Instant now = Instant.now();
+
+            var triggeringFactorsList = objectMapper.createArrayNode();
+            decision.triggeringFactors().forEach(f ->
+                    triggeringFactorsList.add(f.category()));
+
             ObjectNode payload = objectMapper.createObjectNode()
                     .put("transactionId", request.transactionId())
                     .put("userId", request.userId())
                     .put("sourceAccountId", request.sourceAccountId())
                     .put("riskScore", decision.riskScore().toPlainString())
                     .put("decision", decision.decision().name())
-                    .put("recommendedAction",
-                            decision.recommendedAction().name())
-                    .put("alertedAt", Instant.now().toString());
-
-            var reasons = objectMapper.createArrayNode();
-            decision.triggeringFactors().forEach(f ->
-                    reasons.add(f.category()));
-            payload.set("triggeringFactors", reasons);
+                    .put("recommendedAction", decision.recommendedAction().name())
+                    .put("alertedAt", now.toString());
+            payload.set("triggeringFactors", triggeringFactorsList);
 
             outboxRepository.save(OutboxEntry.of(
                     "fraud.flagged",
@@ -289,8 +300,65 @@ public class FraudAnalysisService {
                     "FraudHighSeverityAlert",
                     payload));
 
+            if (!fraudAlertQueueUrl.isBlank()) {
+                publishFraudAlertToSqs(alertId, decision, request, now);
+            }
+
         } catch (Exception e) {
-            log.error("Failed to write high severity alert: {}",
+            log.error("Failed to write high severity alert: {}", e.getMessage());
+        }
+    }
+
+    private void publishFraudAlertToSqs(String alertId, FraudDecision decision,
+                                        FraudAnalysisRequest request, Instant now) {
+        try {
+            // triggeringFactors: full objects — lambda expects List<TriggeringFactor> with category/description/weight/evidence
+            var triggeringFactors = objectMapper.createArrayNode();
+            decision.triggeringFactors().forEach(f -> {
+                ObjectNode factor = objectMapper.createObjectNode()
+                        .put("category", f.category())
+                        .put("description", f.description())
+                        .put("evidence", f.evidence() != null ? f.evidence() : "");
+                if (f.weight() != null) factor.put("weight", f.weight());
+                triggeringFactors.add(factor);
+            });
+
+            // fraudDecision: full object — lambda expects FraudDecisionSummary with outcome/riskScore/reasoning
+            ObjectNode fraudDecisionNode = objectMapper.createObjectNode()
+                    .put("outcome", decision.decision().name())
+                    .put("reasoning", decision.reasoning() != null ? decision.reasoning() : "");
+            if (decision.riskScore() != null) fraudDecisionNode.put("riskScore", decision.riskScore());
+            if (decision.confidenceLevel() != null) fraudDecisionNode.put("confidenceLevel", decision.confidenceLevel());
+
+            ObjectNode event = objectMapper.createObjectNode()
+                    .put("alertId", alertId)
+                    .put("transactionId", request.transactionId())
+                    .put("userId", request.userId())
+                    .put("sourceAccountId", request.sourceAccountId())
+                    .put("targetAccountId", request.targetAccountId())
+                    // amount/riskScore as numeric BigDecimal — lambda deserializes to BigDecimal, string would fail
+                    .put("amount", request.amount() != null ? request.amount() : java.math.BigDecimal.ZERO)
+                    .put("currency", request.currency())
+                    .put("transactionType", request.transactionType())
+                    .put("riskScore", decision.riskScore())
+                    .put("alertCategory", "HIGH_SEVERITY_FRAUD")
+                    .put("recommendedAction", decision.recommendedAction().name())
+                    .put("sourceService", "nexus-fraud-service")
+                    .put("traceId", request.traceId())
+                    .put("detectedAt", now.toString());
+            event.set("fraudDecision", fraudDecisionNode);
+            event.set("triggeringFactors", triggeringFactors);
+
+            sqsClient.sendMessage(SendMessageRequest.builder()
+                    .queueUrl(fraudAlertQueueUrl)
+                    .messageBody(objectMapper.writeValueAsString(event))
+                    .build());
+
+            log.info("Fraud alert published to SQS: alertId={} txnId={} score={}",
+                    alertId, request.transactionId(), decision.riskScore());
+
+        } catch (Exception e) {
+            log.error("Failed to publish fraud alert to SQS — outbox fallback active: {}",
                     e.getMessage());
         }
     }

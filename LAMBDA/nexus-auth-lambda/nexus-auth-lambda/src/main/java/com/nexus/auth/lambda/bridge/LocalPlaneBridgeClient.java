@@ -69,7 +69,7 @@ public class LocalPlaneBridgeClient {
             if (response.statusCode() == 200) {
                 JsonNode body = mapper.readTree(response.body());
                 KycStatusResult result = new KycStatusResult(
-                        body.path("isVerified").asBoolean(false),
+                        body.path("kycVerified").asBoolean(false),
                         body.path("verifiedAt").asText(null),
                         body.path("kycTier").asText("BASIC"),
                         body.path("daysSinceVerification").asInt(0),

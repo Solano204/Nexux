@@ -6,6 +6,22 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.4"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.2"
+    }
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.5"
+    }
   }
 
   # ── Remote state backend (uncomment once you create the bucket manually) ──
@@ -16,11 +32,11 @@ terraform {
   #   3. Run: terraform init -migrate-state
   #
   # backend "s3" {
-  #   bucket         = "nexus-terraform-state-<your-account-id>"
-  #   key            = "nexus-platform/terraform.tfstate"
+  #   bucket         = "nexus-josue-terraform-state-<your-account-id>"
+  #   key            = "nexus-josue-platform/terraform.tfstate"
   #   region         = "us-east-1"
   #   encrypt        = true
-  #   dynamodb_table = "nexus-terraform-lock"   # optional but recommended
+  #   dynamodb_table = "nexus-josue-terraform-lock"   # optional but recommended
   # }
 }
 
@@ -29,7 +45,7 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project     = "nexus-platform"
+      Project     = "nexus-josue-platform"
       Environment = var.environment
       ManagedBy   = "terraform"
     }

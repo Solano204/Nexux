@@ -2,20 +2,26 @@ package com.nexus.notification.infrastructure.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.nexus.notification.application.NotificationProcessingService;
 import com.nexus.notification.domain.model.enums.NotificationEventType;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
+import software.amazon.awssdk.services.sns.SnsClient;
+import software.amazon.awssdk.services.sns.model.MessageAttributeValue;
+import software.amazon.awssdk.services.sns.model.PublishRequest;
 
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Saga Command Consumer — SAGA participant for notification delivery.
@@ -37,6 +43,10 @@ public class SagaCommandConsumer {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
+    private final SnsClient snsClient;
+
+    @Value("${nexus.aws.notification-dispatch-topic-arn:}")
+    private String notificationDispatchTopicArn;
 
     @KafkaListener(
             topics = "saga.commands",
@@ -90,10 +100,15 @@ public class SagaCommandConsumer {
             payload.fields().forEachRemaining(entry ->
                     ctx.put(entry.getKey(), entry.getValue().asText()));
 
-            // Process the notification
+            // Process the notification (in-app + local channels)
             boolean success = processingService.process(
                     eventType, userId, eventId, ctx,
                     traceId, "saga.commands");
+
+            // Dispatch via AWS Lambda for email/SMS/push
+            if (success && !notificationDispatchTopicArn.isBlank()) {
+                publishDispatchToSns(sagaId, eventId, userId, eventType, payload, command);
+            }
 
             // Publish SAGA reply
             publishSagaReply(sagaId, commandType, success, traceId);
@@ -134,5 +149,67 @@ public class SagaCommandConsumer {
             log.error("Failed to publish SAGA reply for sagaId={}: {}",
                     sagaId, e.getMessage());
         }
+    }
+
+    private void publishDispatchToSns(String sagaId, String notificationId,
+                                      String userId, NotificationEventType eventType,
+                                      JsonNode payload, JsonNode command) {
+        try {
+            String channel = resolveChannel(eventType, payload);
+
+            ObjectNode dispatch = objectMapper.createObjectNode()
+                    .put("dispatchId", UUID.randomUUID().toString())
+                    .put("notificationId", notificationId)
+                    .put("userId", userId)
+                    .put("channel", channel)
+                    .put("priority", isUrgentEvent(eventType) ? "HIGH" : "NORMAL")
+                    .put("eventType", eventType.name())
+                    .put("toEmail", payload.path("email").asText(""))
+                    .put("subject", payload.path("subject").asText(eventType.name()))
+                    .put("htmlBody", payload.path("htmlBody").asText(""))
+                    .put("textBody", payload.path("textBody").asText(payload.path("message").asText("")))
+                    .put("toPhoneNumber", payload.path("phoneNumber").asText(""))
+                    .put("smsBody", payload.path("smsBody").asText(payload.path("message").asText("")))
+                    .put("pushTitle", payload.path("pushTitle").asText(eventType.name()))
+                    .put("pushBody", payload.path("pushBody").asText(payload.path("message").asText("")))
+                    .put("deviceEndpointArn", payload.path("deviceEndpointArn").asText(""))
+                    .put("language", payload.path("language").asText("es"));
+
+            snsClient.publish(PublishRequest.builder()
+                    .topicArn(notificationDispatchTopicArn)
+                    .message(objectMapper.writeValueAsString(dispatch))
+                    .messageAttributes(Map.of(
+                            "channel", MessageAttributeValue.builder()
+                                    .dataType("String")
+                                    .stringValue(channel)
+                                    .build(),
+                            "eventType", MessageAttributeValue.builder()
+                                    .dataType("String")
+                                    .stringValue(eventType.name())
+                                    .build()))
+                    .build());
+
+            log.info("Notification dispatched to SNS: sagaId={} channel={} userId={}",
+                    sagaId, channel, userId);
+
+        } catch (Exception e) {
+            log.error("Failed to publish dispatch to SNS for sagaId={}: {}",
+                    sagaId, e.getMessage());
+        }
+    }
+
+    private String resolveChannel(NotificationEventType eventType, JsonNode payload) {
+        if (!payload.path("email").asText("").isBlank()) return "EMAIL";
+        if (!payload.path("phoneNumber").asText("").isBlank()) return "SMS";
+        if (!payload.path("deviceEndpointArn").asText("").isBlank()) return "PUSH";
+        return switch (eventType) {
+            case FRAUD_ALERT, TRANSACTION_COMPLETED -> "EMAIL";
+            case WELCOME -> "EMAIL";
+            default -> "EMAIL";
+        };
+    }
+
+    private boolean isUrgentEvent(NotificationEventType eventType) {
+        return eventType == NotificationEventType.FRAUD_ALERT;
     }
 }

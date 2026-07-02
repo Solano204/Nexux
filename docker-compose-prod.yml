@@ -138,7 +138,7 @@ services:
   nexus-redis:
     image: redis:7.2-alpine
     container_name: nexus-redis
-    command: redis-server --requirepass ${REDIS_PASSWORD:?required} --maxmemory 512mb --maxmemory-policy allkeys-lru
+    command: redis-server --requirepass ${REDIS_PASSWORD:?required} --maxmemory 1gb --maxmemory-policy allkeys-lru --maxclients 10000
     environment:
       # Needed so the healthcheck shell can read $$REDIS_PASSWORD
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
@@ -639,6 +639,12 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
+      # Analytics DynamoDB projection — set ANALYTICS_DYNAMODB_ENABLED=true with real AWS creds
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      ANALYTICS_DYNAMODB_ENABLED: ${ANALYTICS_DYNAMODB_ENABLED:-false}
+      ANALYTICS_TRANSACTIONS_TABLE: ${ANALYTICS_TRANSACTIONS_TABLE:-nexus-transactions}
     ports:
       - "8086:8086"
     networks:

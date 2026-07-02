@@ -16,6 +16,9 @@ secrets/
 .terraform/
 .terraform.lock.hcl
 
+# Terraform Lambda build artifacts (pip installs + zips, generated on apply)
+terraform/build/
+
 # Variable files that may contain secrets
 terraform.tfvars
 terraform.tfvars.dev

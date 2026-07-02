@@ -3,10 +3,12 @@
 # Its access key is injected as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
 #
 # Which services use this user:
-#   nexus-identity-service   → S3 PutObject, SQS SendMessage
-#   nexus-ai-kyc-service     → S3 GetObject, SQS ReceiveMessage/DeleteMessage
+#   nexus-identity-service        → S3 PutObject, SQS SendMessage
+#   nexus-ai-kyc-service          → S3 GetObject, SQS ReceiveMessage/DeleteMessage
+#   nexus-fraud-service           → SQS SendMessage (fraud alerts)
+#   nexus-notification-service    → SNS Publish (notification dispatch)
 #
-# All other services (account, fraud, transaction, ledger, etc.) only use:
+# All other services (account, transaction, ledger, etc.) only use:
 #   - Kafka (self-hosted)         → no AWS credential needed
 #   - PostgreSQL (self-hosted)    → no AWS credential needed
 #   - MongoDB (self-hosted)       → no AWS credential needed
@@ -29,7 +31,7 @@ resource "aws_iam_access_key" "nexus_platform" {
 # Both:                   ListBucket (for existence checks / SDK internal calls)
 
 resource "aws_iam_policy" "nexus_s3_kyc" {
-  name        = "nexus-s3-kyc-policy-${var.environment}"
+  name        = "nexus-josue-s3-kyc-policy-${var.environment}"
   description = "S3 KYC document bucket access for nexus-identity and nexus-ai-kyc services"
 
   policy = jsonencode({
@@ -45,7 +47,6 @@ resource "aws_iam_policy" "nexus_s3_kyc" {
           "s3:GetObjectTagging",
           "s3:DeleteObject"
         ]
-        # Scoped to kyc/ prefix — never grants access to other prefixes
         Resource = "${aws_s3_bucket.kyc_documents.arn}/kyc/*"
       },
       {
@@ -61,14 +62,14 @@ resource "aws_iam_policy" "nexus_s3_kyc" {
   })
 }
 
-# ── SQS Policy ────────────────────────────────────────────────────────────────
+# ── SQS Policy (KYC) ──────────────────────────────────────────────────────────
 # nexus-identity-service: SendMessage         (produces KYC jobs)
 # nexus-ai-kyc-service:   ReceiveMessage +    (consumes KYC jobs)
 #                         DeleteMessage +
 #                         ChangeMessageVisibility
 
 resource "aws_iam_policy" "nexus_sqs_kyc" {
-  name        = "nexus-sqs-kyc-policy-${var.environment}"
+  name        = "nexus-josue-sqs-kyc-policy-${var.environment}"
   description = "SQS KYC queue access for nexus-identity and nexus-ai-kyc services"
 
   policy = jsonencode({
@@ -101,6 +102,82 @@ resource "aws_iam_policy" "nexus_sqs_kyc" {
   })
 }
 
+# ── SQS Policy (Fraud Alerts) ─────────────────────────────────────────────────
+# nexus-fraud-service: SendMessage (produces high-severity fraud alerts consumed
+# by nexus-fraud-alert-lambda)
+
+resource "aws_iam_policy" "nexus_sqs_fraud" {
+  name        = "nexus-josue-sqs-fraud-policy-${var.environment}"
+  description = "SQS fraud alert queue write access for nexus-fraud-service"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "FraudAlertQueueSend"
+        Effect = "Allow"
+        Action = [
+          "sqs:SendMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl"
+        ]
+        Resource = aws_sqs_queue.fraud_alert_high_severity.arn
+      }
+    ]
+  })
+}
+
+# ── SQS Policy (KYC Rekognition Results) ──────────────────────────────────────
+# nexus-ai-kyc-service: consumes Rekognition processing results produced by
+# nexus-kyc-rekognition-lambda
+
+resource "aws_iam_policy" "nexus_sqs_kyc_rekognition" {
+  name        = "nexus-josue-sqs-kyc-rekognition-policy-${var.environment}"
+  description = "SQS rekognition results queue read access for nexus-ai-kyc-service"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "KycRekognitionResultsRead"
+        Effect = "Allow"
+        Action = [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl",
+          "sqs:ChangeMessageVisibility"
+        ]
+        Resource = aws_sqs_queue.kyc_rekognition_results.arn
+      }
+    ]
+  })
+}
+
+# ── SNS Policy (Notification Dispatch) ────────────────────────────────────────
+# nexus-notification-service: publishes to the dispatch topic that fans out to
+# nexus-notification-dispatcher-lambda
+
+resource "aws_iam_policy" "nexus_sns_notification" {
+  name        = "nexus-josue-sns-notification-policy-${var.environment}"
+  description = "SNS notification dispatch topic publish access for nexus-notification-service"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "NotificationDispatchPublish"
+        Effect = "Allow"
+        Action = [
+          "sns:Publish",
+          "sns:GetTopicAttributes"
+        ]
+        Resource = aws_sns_topic.notification_dispatch.arn
+      }
+    ]
+  })
+}
+
 # ── Attach policies to user ───────────────────────────────────────────────────
 
 resource "aws_iam_user_policy_attachment" "nexus_s3" {
@@ -111,4 +188,19 @@ resource "aws_iam_user_policy_attachment" "nexus_s3" {
 resource "aws_iam_user_policy_attachment" "nexus_sqs" {
   user       = aws_iam_user.nexus_platform.name
   policy_arn = aws_iam_policy.nexus_sqs_kyc.arn
+}
+
+resource "aws_iam_user_policy_attachment" "nexus_sqs_fraud" {
+  user       = aws_iam_user.nexus_platform.name
+  policy_arn = aws_iam_policy.nexus_sqs_fraud.arn
+}
+
+resource "aws_iam_user_policy_attachment" "nexus_sqs_kyc_rekognition" {
+  user       = aws_iam_user.nexus_platform.name
+  policy_arn = aws_iam_policy.nexus_sqs_kyc_rekognition.arn
+}
+
+resource "aws_iam_user_policy_attachment" "nexus_sns_notification" {
+  user       = aws_iam_user.nexus_platform.name
+  policy_arn = aws_iam_policy.nexus_sns_notification.arn
 }

@@ -162,7 +162,7 @@ public class AuthLambdaHandler
 
         if ("POST".equals(method) && "/auth/refresh".equals(path)) {
             return new TokenRefreshHandler(
-                    COGNITO, CLIENT_ID, SESSION_REPO,
+                    COGNITO, CLIENT_ID, SESSION_REPO, REVOKED_REPO,
                     BRIDGE_CLIENT, MAPPER)
                     .handle(event);
         }

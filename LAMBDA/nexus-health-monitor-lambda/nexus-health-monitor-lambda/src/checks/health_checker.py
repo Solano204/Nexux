@@ -15,9 +15,9 @@ retries=False is the critical decision:
   mean the next check doesn't happen for another 5 minutes anyway.
 
 Parallel execution via ThreadPoolExecutor (8 workers):
-  15 services / 8 workers = 2 batches.
+  16 services / 8 workers = 2 batches.
   Wall time ≈ max(slowest service) × 2 batches ≈ 10-15s
-  vs sequential worst-case: 15 × 5s = 75s
+  vs sequential worst-case: 16 × 5s = 80s
 """
 
 import json

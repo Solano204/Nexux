@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.auth.lambda.AuthLambdaHandler;
 import com.nexus.auth.lambda.bridge.LocalPlaneBridgeClient;
+import com.nexus.auth.lambda.dynamo.RevokedTokenRepository;
 import com.nexus.auth.lambda.dynamo.SessionRepository;
 import com.nexus.auth.lambda.model.TokenRefreshResult;
 import org.slf4j.Logger;
@@ -33,17 +34,20 @@ public class TokenRefreshHandler {
     private final CognitoIdentityProviderClient cognito;
     private final String clientId;
     private final SessionRepository sessionRepo;
+    private final RevokedTokenRepository revokedRepo;
     private final LocalPlaneBridgeClient bridgeClient;
     private final ObjectMapper mapper;
 
     public TokenRefreshHandler(CognitoIdentityProviderClient cognito,
                                String clientId,
                                SessionRepository sessionRepo,
+                               RevokedTokenRepository revokedRepo,
                                LocalPlaneBridgeClient bridgeClient,
                                ObjectMapper mapper) {
         this.cognito = cognito;
         this.clientId = clientId;
         this.sessionRepo = sessionRepo;
+        this.revokedRepo = revokedRepo;
         this.bridgeClient = bridgeClient;
         this.mapper = mapper;
     }
@@ -81,11 +85,10 @@ public class TokenRefreshHandler {
             // Sync KYC from local plane if cache is stale
             bridgeClient.syncKycIfStale(sessionRepo, newAccessToken);
 
-            // Revoke old JTI
+            // Revoke old JTI so the previous access token cannot be reused
             if (previousJti != null && !previousJti.isBlank()) {
-                // Old JTI is now superseded — add to revoked list
-                // (via RevokedTokenRepository, omitted for brevity)
-                log.debug("Old JTI superseded: {}", previousJti);
+                revokedRepo.revoke(previousJti, "SUPERSEDED_BY_REFRESH");
+                log.debug("Old JTI revoked after refresh: {}", previousJti);
             }
 
             TokenRefreshResult result = new TokenRefreshResult(

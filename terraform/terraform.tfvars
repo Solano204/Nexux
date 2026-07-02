@@ -3,14 +3,18 @@
 # For CI/CD, inject these as TF_VAR_* environment variables instead.
 # ─────────────────────────────────────────────────────────────────────────────
 
-aws_region   = "us-east-1"
-environment  = "prod"
+aws_region  = "us-east-1"
+environment = "prod"
 
-kyc_bucket_name         = "nexus-kyc-documents"
-kyc_queue_name          = "nexus-kyc-documents-pending"
-kyc_dlq_name            = "nexus-kyc-documents-pending-dlq"
-document_retention_days = 2555  # 7 years
+kyc_bucket_name         = "nexus-josue-kyc-documents"
+kyc_queue_name          = "nexus-josue-kyc-documents-pending"
+kyc_dlq_name            = "nexus-josue-kyc-documents-pending-dlq"
+document_retention_days = 2555 # 7 years
 
-iam_user_name = "nexus-platform-svc"
+iam_user_name = "nexus-josue-platform-svc"
 
 cors_allowed_origins = ["https://app.nexusbank.com"]
+
+# ── Lambda-specific ───────────────────────────────────────────────────────────
+compliance_team_email  = "chucho@shippilot.ai" # change if you want a different inbox
+ops_notification_email = "chucho@shippilot.ai"

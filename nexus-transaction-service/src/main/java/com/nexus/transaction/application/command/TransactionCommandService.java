@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.nexus.transaction.domain.exception.*;
 import com.nexus.transaction.domain.model.*;
 import com.nexus.transaction.domain.model.enums.*;
+import com.nexus.transaction.infrastructure.analytics.TransactionDynamoDbWriter;
 import com.nexus.transaction.infrastructure.elasticsearch.ElasticsearchIndexingService;
 import com.nexus.transaction.infrastructure.kafka.TransactionEventProducer;
 import com.nexus.transaction.infrastructure.persistence.*;
@@ -15,6 +16,8 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.tracing.Tracer;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
@@ -31,6 +34,10 @@ public class TransactionCommandService {
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
     private final Tracer tracer;
+
+    @Autowired(required = false)
+    @Nullable
+    private TransactionDynamoDbWriter dynamoWriter;
     private final Timer processingTimer;
     private final Counter initiatedCounter;
     private final Counter completedCounter;
@@ -102,6 +109,7 @@ public class TransactionCommandService {
             transactionRepository.save(txn);
             writeOutbox("transactions.failed", transactionId, sagaId, "TransactionFraudRejected", buildFraudRejectedPayload(txn, reasons, traceId));
             searchIndexer.indexAsync(txn);
+            if (dynamoWriter != null) dynamoWriter.writeFailed(txn);
             fraudRejectedCounter.increment();
         }
     }
@@ -127,6 +135,7 @@ public class TransactionCommandService {
             transactionRepository.save(txn);
             writeOutbox("transactions.failed", transactionId, sagaId, "TransactionFailed", buildFailedPayload(txn, failureReason, traceId));
             searchIndexer.indexAsync(txn);
+            if (dynamoWriter != null) dynamoWriter.writeFailed(txn);
             failedCounter.increment();
         }
     }
@@ -142,12 +151,16 @@ public class TransactionCommandService {
             txn.markLedgerPosted(ledgerEntryId); transactionRepository.saveAndFlush(txn); txn.markCompleted(); transactionRepository.save(txn);
             writeOutbox("transactions.completed", transactionId, sagaId, "TransactionCompleted", buildCompletedPayload(txn, traceId));
             writeOutbox("user.behavior.aggregated", transactionId, sagaId, "TransactionCompleted", buildBehaviorPayload(txn, traceId));
-            searchIndexer.indexAsync(txn); completedCounter.increment();
+            searchIndexer.indexAsync(txn);
+            if (dynamoWriter != null) dynamoWriter.writeCompleted(txn);
+            completedCounter.increment();
         } else {
             txn.markLedgerFailed(failureReason); transactionRepository.save(txn);
             writeOutbox("saga.commands", transactionId, sagaId, "BalanceReleaseRequested", buildBalanceReleasePayload(txn, traceId));
             writeOutbox("transactions.failed", transactionId, sagaId, "TransactionFailed", buildFailedPayload(txn, failureReason, traceId));
-            searchIndexer.indexAsync(txn); failedCounter.increment();
+            searchIndexer.indexAsync(txn);
+            if (dynamoWriter != null) dynamoWriter.writeFailed(txn);
+            failedCounter.increment();
         }
     }
 

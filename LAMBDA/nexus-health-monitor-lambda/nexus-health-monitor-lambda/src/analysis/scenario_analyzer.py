@@ -26,8 +26,8 @@ Scenarios:
    alerts already fire for each down participant).
 """
 
-from src.registry.service_registry import TRANSACTION_BLOCKING_SERVICES
-from src.utils.logging_config import log
+from registry.service_registry import TRANSACTION_BLOCKING_SERVICES
+from utils.logging_config import log
 
 
 def analyze(results: list[dict]) -> list[dict]:

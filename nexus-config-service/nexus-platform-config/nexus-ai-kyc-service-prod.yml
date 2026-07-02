@@ -13,3 +13,8 @@ spring:
 nexus:
   identity:
     internal-url: http://nexus-identity-service:8083
+  aws:
+    region: ${AWS_REGION:us-east-1}
+    access-key-id: ${AWS_ACCESS_KEY_ID:}
+    secret-access-key: ${AWS_SECRET_ACCESS_KEY:}
+    kyc-rekognition-results-queue-url: ${KYC_REKOGNITION_RESULTS_QUEUE_URL:}

@@ -6,3 +6,19 @@ spring:
       host: ${REDIS_HOST:nexus-redis}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD}
+      timeout: 5s
+      connect-timeout: 5s
+      lettuce:
+        pool:
+          enabled: true
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+          max-wait: 3s
+
+nexus:
+  aws:
+    region: ${AWS_REGION:us-east-1}
+    access-key-id: ${AWS_ACCESS_KEY_ID:}
+    secret-access-key: ${AWS_SECRET_ACCESS_KEY:}
+    notification-dispatch-topic-arn: ${NOTIFICATION_DISPATCH_TOPIC_ARN:}

@@ -9,6 +9,7 @@ import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.sqs.SqsClient;
 
 import java.net.URI;
 
@@ -48,6 +49,28 @@ public class AwsConfig {
                                     accessKeyId.isBlank() ? "test" : accessKeyId,
                                     secretAccessKey.isBlank() ? "test" : secretAccessKey)))
                     .forcePathStyle(true);
+        } else {
+            builder.credentialsProvider(DefaultCredentialsProvider.create());
+        }
+
+        return builder.build();
+    }
+
+    @Bean
+    public SqsClient sqsClient() {
+        var builder = SqsClient.builder()
+                .region(Region.of(awsRegion))
+                .httpClientBuilder(
+                        software.amazon.awssdk.http.urlconnection
+                                .UrlConnectionHttpClient.builder());
+
+        if (!endpointOverride.isBlank()) {
+            builder
+                    .endpointOverride(URI.create(endpointOverride))
+                    .credentialsProvider(StaticCredentialsProvider.create(
+                            AwsBasicCredentials.create(
+                                    accessKeyId.isBlank() ? "test" : accessKeyId,
+                                    secretAccessKey.isBlank() ? "test" : secretAccessKey)));
         } else {
             builder.credentialsProvider(DefaultCredentialsProvider.create());
         }

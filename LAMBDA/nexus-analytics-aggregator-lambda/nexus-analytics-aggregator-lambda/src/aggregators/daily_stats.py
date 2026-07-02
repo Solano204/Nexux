@@ -78,18 +78,36 @@ def update(user_id: str, date_str: str, amount: Decimal,
             ExpressionAttributeValues=expr_values,
             ExpressionAttributeNames={"#ttl": "ttl"},
         )
-        return True
-
     except _dynamo.meta.client.exceptions \
             .ConditionalCheckFailedException:
         log.debug("Duplicate stream record — daily stats skipped",
                   user_id=user_id, seq=sequence_number)
         return False
-
     except Exception as exc:
         log.error("daily_stats update failed",
                   user_id=user_id, date=date_str, error=str(exc))
         raise
+
+    # Track maxTransactionAmount with a conditional SET (non-atomic but best-effort)
+    if amount > Decimal("0"):
+        try:
+            _table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"DATE#{date_str}"},
+                UpdateExpression="SET maxTransactionAmount = :amount",
+                ConditionExpression=(
+                    "attribute_not_exists(maxTransactionAmount) "
+                    "OR maxTransactionAmount < :amount"
+                ),
+                ExpressionAttributeValues={":amount": amount},
+            )
+        except _dynamo.meta.client.exceptions \
+                .ConditionalCheckFailedException:
+            pass  # Stored max is already >= this amount
+        except Exception as exc:
+            log.warning("daily_stats maxTransactionAmount update failed "
+                        "(non-fatal)", user_id=user_id, error=str(exc))
+
+    return True
 
 
 def reverse(user_id: str, date_str: str, amount: Decimal,
@@ -127,6 +145,44 @@ def reverse(user_id: str, date_str: str, amount: Decimal,
     except Exception as exc:
         log.error("daily_stats reverse failed",
                   user_id=user_id, error=str(exc))
+        raise
+
+
+def fail(user_id: str, date_str: str, sequence_number: str) -> bool:
+    """
+    Increment failedCount when a transaction transitions to FAILED.
+    Idempotent via sequence number guard.
+    """
+    ttl = _ttl(date_str, _90_DAYS_SEC)
+    try:
+        _table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": f"DATE#{date_str}"},
+            UpdateExpression=(
+                "ADD failedCount :one "
+                "SET userId = :user_id, #ttl = :ttl, "
+                "    lastSequenceNumber = :seq"
+            ),
+            ConditionExpression=(
+                "attribute_not_exists(lastSequenceNumber) "
+                "OR lastSequenceNumber < :seq"
+            ),
+            ExpressionAttributeValues={
+                ":one":     Decimal("1"),
+                ":user_id": user_id,
+                ":ttl":     ttl,
+                ":seq":     sequence_number,
+            },
+            ExpressionAttributeNames={"#ttl": "ttl"},
+        )
+        return True
+    except _dynamo.meta.client.exceptions \
+            .ConditionalCheckFailedException:
+        log.debug("Duplicate stream record — fail count skipped",
+                  user_id=user_id, seq=sequence_number)
+        return False
+    except Exception as exc:
+        log.error("daily_stats fail update failed",
+                  user_id=user_id, date=date_str, error=str(exc))
         raise
 
 

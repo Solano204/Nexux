@@ -152,7 +152,14 @@ public class ReportDataQueryService {
             ScanResponse resp = dynamo.scan(req);
             resp.items().forEach(item -> {
                 String uid = str(item, "userId");
+                // Analytics aggregator embeds category in SK (MONTH#YYYY-MM#CAT#{category}),
+                // not as a top-level attribute. Extract it from SK.
                 String cat = str(item, "category");
+                if (cat.isEmpty()) {
+                    String sk = str(item, "SK");
+                    int catIdx = sk.indexOf("#CAT#");
+                    if (catIdx >= 0) cat = sk.substring(catIdx + 5);
+                }
                 if (!uid.isEmpty() && !cat.isEmpty()) {
                     result.computeIfAbsent(uid, k -> new CategoryStats(k, yearMonth, new HashMap<>()));
                     var detail = new CategoryStats.CategoryDetail(
@@ -203,10 +210,35 @@ public class ReportDataQueryService {
                 .build());
             if (resp.hasItem()) {
                 var i = resp.item();
-                return new PlatformMetrics(numInt(i, "transactionsToday"),
-                    num(i, "volumeToday"), numInt(i, "peakTransactionsPerMinute"),
-                    num(i, "avgFraudScore"), num(i, "fraudBlockRateToday"),
-                    numInt(i, "activeUsersToday"), str(i, "updatedAt"));
+                int transactionsToday = numInt(i, "transactionsToday");
+                BigDecimal volumeToday = num(i, "volumeToday");
+                int activeUsersToday = numInt(i, "activeUsersToday");
+                String updatedAt = str(i, "updatedAt");
+
+                // peakTransactionsPerMinute: fall back to last-minute counter
+                // (accurate peak tracking requires a windowing process)
+                int peak = numInt(i, "peakTransactionsPerMinute");
+                if (peak == 0) peak = numInt(i, "transactionsLastMinute");
+
+                // avgFraudScore: aggregator accumulates sum + count; compute here
+                BigDecimal totalFraudScoreSum = num(i, "totalFraudScoreSum");
+                int fraudScoredCount = numInt(i, "fraudScoredCount");
+                BigDecimal avgFraudScore = fraudScoredCount > 0
+                    ? totalFraudScoreSum.divide(
+                        BigDecimal.valueOf(fraudScoredCount), 4,
+                        java.math.RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+
+                // fraudBlockRateToday: failedTransactionsToday / transactionsToday
+                int failedToday = numInt(i, "failedTransactionsToday");
+                BigDecimal fraudBlockRateToday = transactionsToday > 0
+                    ? BigDecimal.valueOf(failedToday).divide(
+                        BigDecimal.valueOf(transactionsToday), 4,
+                        java.math.RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+
+                return new PlatformMetrics(transactionsToday, volumeToday, peak,
+                    avgFraudScore, fraudBlockRateToday, activeUsersToday, updatedAt);
             }
         } catch (Exception e) {
             log.warn("Failed to query platform metrics: {}", e.getMessage());
