@@ -1,10 +1,37 @@
 # nexus-platform-config/application-prod.yml
 # Applied to ALL services when spring.profiles.active=prod
 
+server:
+  # Lets in-flight requests finish (default up to the lifecycle timeout
+  # below) instead of dropping them mid-response on SIGTERM/`docker
+  # compose stop` — applies to both servlet services and the reactive
+  # (Netty/WebFlux) nexus-api-gateway. Single-source-of-truth here, same
+  # pattern as tracing.sampling below — no service should override this
+  # per-instance. audit-write-native is the one exception (Quarkus, not on
+  # Spring Cloud Config — see its own application.properties for
+  # quarkus.shutdown.timeout instead).
+  shutdown: graceful
+
 spring:
+  lifecycle:
+    # How long graceful shutdown above waits for in-flight work (HTTP
+    # requests AND, more importantly for this platform, Kafka listener
+    # containers finishing their current poll/ack cycle) before forcing
+    # the JVM down anyway. 30s covers a slow DB write or a saga step
+    # commit; if a shutdown regularly needs longer than this, that's a
+    # signal a handler is doing too much synchronous work per message,
+    # not a reason to keep raising the timeout.
+    timeout-per-shutdown-phase: 30s
+
   threads:
     virtual:
-      enabled: true
+      # disabled: Brave's ThreadLocal trace context doesn't survive virtual
+      # thread mount/unmount - controller-dispatched spans were silently
+      # never exported to Zipkin, only actuator/internal spans traced.
+      # Confirmed live via direct trace lookups against nexus-identity-service.
+      # This is the ONLY place this needs to be set for prod - matches the
+      # single-source-of-truth pattern used for tracing.sampling above.
+      enabled: false
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:nexus-kafka:9092}
@@ -25,6 +52,15 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     listener:
       ack-mode: manual
+      observation-enabled: true
+    template:
+      observation-enabled: true
+    # NOTE: only affects services using Spring Boot's auto-configured
+    # KafkaTemplate/ConcurrentKafkaListenerContainerFactory. Services with a
+    # custom KafkaConfig @Bean (identity, account, transaction, fraud, ledger,
+    # saga-orchestrator) build their own ProducerFactory/ConsumerFactory from
+    # a raw Map and never consult these properties - those 6 have
+    # kafkaTemplate().setObservationEnabled(true) set directly in code instead.
 
   jpa:
     show-sql: false
@@ -84,8 +120,30 @@ management:
       enabled: false
   tracing:
     enabled: true
+    propagation:
+      type: B3
+      produce: B3
+      consume: [B3, W3C]   # accept incoming W3C in case something upstream
+                            # uses it, but always produce B3
     sampling:
-      probability: 0.05
+      # 1.0 while we verify end-to-end propagation across the outbox/Debezium
+      # hop AND across the audit-write-native B3 boundary (see CHANGES-
+      # BESTPRACTICES/03_ZIPKIN_TRACING_CHANGES.md Section 1 - propagation
+      # fix applied but not yet confirmed live). This is the ONLY place this
+      # is set now - no service should carry its own TRACING_SAMPLE_RATE
+      # override (audit-write-native is the one necessary exception: it's
+      # outside Spring Cloud Config, see its own application.properties).
+      #
+      # Criterio para bajar este valor una vez confirmada la propagación:
+      # dado un solo desarrollador con tráfico bajo/medio en una plataforma
+      # financiera, arrancar en 0.2-0.3 (20-30%) en vez de los 0.05-0.1
+      # típicos de plataformas de alto tráfico - a este volumen, sampling
+      # alto es barato en storage/ingestión de Zipkin+Elasticsearch y da
+      # mucha más visibilidad para debugging que un ratio agresivo pensado
+      # para escala que todavía no existe acá. Bajar más solo si el volumen
+      # de spans/día empieza a pesar en el storage de Elasticsearch (Sección
+      # 4) o en el costo de ingestión de Zipkin, no antes.
+      probability: 1.0
   zipkin:
     tracing:
       endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
@@ -93,8 +151,21 @@ management:
     distribution:
       percentiles-histogram:
         http.server.requests: true
+        saga.duration.seconds: true
       percentiles:
         http.server.requests: 0.5, 0.9, 0.95, 0.99
+      # SLO buckets add exact-boundary _bucket series (le="0.5", le="5",
+      # le="10") on top of the existing percentile histogram/client-side
+      # percentiles - needed for 06-slo-tracking.json's burn-rate queries,
+      # which match a specific le value rather than interpolating via
+      # histogram_quantile(). saga.duration.seconds already publishes
+      # client-side percentiles via .publishPercentiles(...) in
+      # TransferSagaProcessor/OnboardingFlowSagaProcessor, but that's a
+      # different mechanism (gauge-style quantile summaries, no _bucket
+      # series) - this config is additive to that, not a replacement.
+      slo:
+        http.server.requests: 500ms, 1s, 2s
+        saga.duration.seconds: 5s, 10s, 30s
 
 logging:
   level:
@@ -107,6 +178,18 @@ logging:
     com.netflix.discovery: WARN
 
 nexus:
+  ai:
+    # Testing-only bypass for when there's no working OPENAI_API_KEY:
+    # KYC/fraud/risk-scoring skip the real AI call and return a synthetic
+    # always-positive decision, so registration/onboarding/transactions can
+    # be exercised end-to-end without AI. Flip to false once a real key is
+    # in place - every service reads this from the same place.
+    mock-mode: true
+    assistant:
+      rate-limit:
+        max-messages-per-day: 100
+        max-tokens-per-hour: 100000
+
   features:
     kyc-ai-analysis: true
     fraud-ai-analysis: true
@@ -125,12 +208,6 @@ nexus:
   transaction:
     rate-limit:
       max-per-user-per-minute: 20
-
-  ai:
-    assistant:
-      rate-limit:
-        max-messages-per-day: 100
-        max-tokens-per-hour: 100000
 
   kafka:
     topics:

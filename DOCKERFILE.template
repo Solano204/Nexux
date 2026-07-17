@@ -1,0 +1,90 @@
+# ================================================================
+# NEXUS platform — reusable Dockerfile template (Spring Boot services)
+# ================================================================
+# Stamping this out for a new service:
+#   1. cp DOCKERFILE.template nexus-NEW-service/Dockerfile
+#   2. In docker-compose-prod.yml, give that service's `build:` a matching
+#      `args:` block:
+#        build:
+#          context: ./nexus-new-service
+#          dockerfile: Dockerfile
+#          args:
+#            SERVICE_JAR: nexus-new-service-1.0.0.jar
+#            SERVICE_PORT: "8099"
+#   3. Copy docker-entrypoint.sh from any existing service directory
+#      unchanged (e.g. nexus-account-service/docker-entrypoint.sh) — it's
+#      identical across all 16 services by design, resolves Docker Compose
+#      *_FILE secrets before exec'ing java. Don't hand-edit per service.
+#   4. Adjust the JVM heap block at the bottom to this service's real
+#      traffic/memory profile — see the tier reference in that section.
+#      Deliberately NOT a build arg: heap sizing is real per-service
+#      tuning, not boilerplate, and should stay visible/hand-edited the
+#      same way it does in the 16 real Dockerfiles today, not hidden
+#      behind a default that quietly becomes wrong for a heavy service.
+#
+# A security/hardening fix (base image bump, a new HEALTHCHECK shape, an
+# extra COPY layer) belongs HERE first, then gets mechanically re-applied
+# to the 16 real per-service Dockerfiles — this file is the source of
+# truth for what "correct" looks like, it is not itself a live build
+# target and is never referenced by docker-compose-prod.yml.
+#
+# Only SERVICE_JAR/SERVICE_PORT are template args, matching every other
+# service's real build context: the Maven build happens on the HOST
+# (`mvn clean package` per CLAUDE.md), this Dockerfile only packages the
+# already-built jar — no multi-stage Maven-inside-Docker stage, no
+# BuildKit cache mounts for ~/.m2, because there is no `RUN mvn` here to
+# cache. (nexus-discovery-service used to be the one exception that built
+# inside Docker; it was aligned to this same pattern, see
+# CHANGES-BESTPRACTICES/11_DOCKER_COMPOSE_AND_IMAGE_HARDENING_CHANGES.md.)
+# ================================================================
+
+FROM eclipse-temurin:25-jre-alpine
+
+ARG SERVICE_JAR
+ARG SERVICE_PORT
+ENV SERVICE_PORT=${SERVICE_PORT}
+
+RUN addgroup -S nexus && adduser -S nexus -G nexus
+USER nexus
+WORKDIR /app
+
+COPY --chown=nexus:nexus target/${SERVICE_JAR} app.jar
+COPY --chown=nexus:nexus --chmod=755 docker-entrypoint.sh /app/docker-entrypoint.sh
+
+HEALTHCHECK \
+    --interval=15s \
+    --timeout=10s \
+    --start-period=90s \
+    --retries=5 \
+    CMD wget --quiet --tries=1 --spider \
+        http://localhost:$SERVICE_PORT/actuator/health || exit 1
+
+EXPOSE ${SERVICE_PORT}
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
+# ── JVM heap — hand-tune per service, do NOT templatize ─────────
+# Reference tiers already in use across the fleet (container mem_limit in
+# docker-compose-prod.yml is ~1.75x the heap below — see that file's
+# secrets/resource-limits comments for the full table):
+#   light    (config-service, discovery-service):        -Xms64m  -Xmx256m
+#   medium   (most business services — account, fraud,
+#             ledger, identity, transaction, ai-kyc,
+#             audit-query-jvm, saga-orchestrator*,
+#             notification*):                             -Xms512m -Xmx1g
+#             (*saga-orchestrator/notification run -Xms256m -Xmx768m — lighter
+#             traffic than the rest of this tier)
+#   heavy    (api-gateway, ai-assistant-service,
+#             risk-scoring-service):                       -Xms512m -Xmx1536m
+#   heaviest (analytics-service — Kafka Streams/RocksDB,
+#             needs jre-JAMMY not alpine, see that
+#             service's own Dockerfile for why):            -Xms1g   -Xmx2g
+CMD ["java", \
+    "-XX:+UseZGC", \
+    "-XX:MaxGCPauseMillis=10", \
+    "-Xms512m", \
+    "-Xmx1g", \
+    "-Djava.security.egd=file:/dev/./urandom", \
+    "-Dspring.classformat.ignore=true", \
+    "--enable-preview", \
+    "-jar", "app.jar"]

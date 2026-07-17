@@ -2,83 +2,193 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+rule_files:
+  - "alert_rules.yml"
+  - "recording_rules.yml"
+
 scrape_configs:
-  - job_name: nexus-config-service
-    metrics_path: /actuator/prometheus
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          group: 'monitoring'
+
+  - job_name: 'nexus-config-service'
+    metrics_path: '/actuator/prometheus'
     static_configs:
       - targets: ['nexus-config-service:8888']
+        labels:
+          service: 'config-service'
+          group: 'core'
 
-  - job_name: nexus-discovery-service
-    metrics_path: /actuator/prometheus
+  - job_name: 'nexus-discovery-service'
+    metrics_path: '/actuator/prometheus'
     static_configs:
       - targets: ['nexus-discovery-service:8761']
+        labels:
+          service: 'discovery-service'
+          group: 'core'
 
-  - job_name: nexus-api-gateway
-    metrics_path: /actuator/prometheus
-    static_configs:
-      - targets: ['nexus-api-gateway:8080']
-
-  - job_name: nexus-identity-service
-    metrics_path: /actuator/prometheus
+  - job_name: 'nexus-identity-service'
+    metrics_path: '/actuator/prometheus'
     static_configs:
       - targets: ['nexus-identity-service:8083']
+        labels:
+          service: 'identity-service'
+          group: 'auth'
 
-  - job_name: nexus-account-service
-    metrics_path: /actuator/prometheus
+  - job_name: 'nexus-account-service'
+    metrics_path: '/actuator/prometheus'
     static_configs:
       - targets: ['nexus-account-service:8085']
+        labels:
+          service: 'account-service'
+          group: 'txn'
 
-  - job_name: nexus-transaction-service
-    metrics_path: /actuator/prometheus
+  - job_name: 'nexus-transaction-service'
+    metrics_path: '/actuator/prometheus'
     static_configs:
       - targets: ['nexus-transaction-service:8086']
+        labels:
+          service: 'transaction-service'
+          group: 'txn'
 
-  - job_name: nexus-fraud-service
-    metrics_path: /actuator/prometheus
+  - job_name: 'nexus-fraud-service'
+    metrics_path: '/actuator/prometheus'
     static_configs:
       - targets: ['nexus-fraud-service:8087']
+        labels:
+          service: 'fraud-service'
+          group: 'txn'
 
-  - job_name: nexus-ledger-service
-    metrics_path: /actuator/prometheus
+  - job_name: 'nexus-ledger-service'
+    metrics_path: '/actuator/prometheus'
     static_configs:
       - targets: ['nexus-ledger-service:8088']
+        labels:
+          service: 'ledger-service'
+          group: 'txn'
 
-  - job_name: nexus-notification-service
-    metrics_path: /actuator/prometheus
-    static_configs:
-      - targets: ['nexus-notification-service:8089']
-
-  - job_name: nexus-ai-assistant-service
-    metrics_path: /actuator/prometheus
-    static_configs:
-      - targets: ['nexus-ai-assistant-service:8090']
-
-  - job_name: nexus-ai-kyc-service
-    metrics_path: /actuator/prometheus
-    static_configs:
-      - targets: ['nexus-ai-kyc-service:8091']
-
-  - job_name: nexus-analytics-service
-    metrics_path: /actuator/prometheus
-    static_configs:
-      - targets: ['nexus-analytics-service:8092']
-
-  - job_name: nexus-risk-scoring-service
-    metrics_path: /actuator/prometheus
-    static_configs:
-      - targets: ['nexus-risk-scoring-service:8094']
-
-  - job_name: nexus-saga-orchestrator
-    metrics_path: /actuator/prometheus
+  - job_name: 'nexus-saga-orchestrator'
+    metrics_path: '/actuator/prometheus'
     static_configs:
       - targets: ['nexus-saga-orchestrator:8095']
+        labels:
+          service: 'saga-orchestrator'
+          group: 'txn'
 
-  - job_name: nexus-audit-query-jvm
-    metrics_path: /actuator/prometheus
+  - job_name: 'nexus-ai-assistant-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['nexus-ai-assistant-service:8090']
+        labels:
+          service: 'ai-assistant-service'
+          group: 'ai'
+
+  - job_name: 'nexus-ai-kyc-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['nexus-ai-kyc-service:8091']
+        labels:
+          service: 'ai-kyc-service'
+          group: 'ai'
+
+  - job_name: 'nexus-analytics-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['nexus-analytics-service:8092']
+        labels:
+          service: 'analytics-service'
+          group: 'ai'
+
+  - job_name: 'nexus-notification-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['nexus-notification-service:8089']
+        labels:
+          service: 'notification-service'
+          group: 'support'
+
+  - job_name: 'nexus-risk-scoring-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['nexus-risk-scoring-service:8094']
+        labels:
+          service: 'risk-scoring-service'
+          group: 'support'
+
+  - job_name: 'nexus-audit-query-jvm'
+    metrics_path: '/actuator/prometheus'
     static_configs:
       - targets: ['nexus-audit-query-jvm:8097']
+        labels:
+          service: 'audit-query-jvm'
+          group: 'support'
 
-  - job_name: nexus-audit-write-native
-    metrics_path: /q/metrics
+  - job_name: 'nexus-audit-write-native'
+    metrics_path: '/q/metrics'
     static_configs:
       - targets: ['nexus-audit-write-native:8096']
+        labels:
+          service: 'audit-write-native'
+          group: 'support'
+
+  - job_name: 'nexus-api-gateway'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['nexus-api-gateway:8080']
+        labels:
+          service: 'api-gateway'
+          group: 'gateway'
+
+  # ── Pushgateway (Part 6 — JMeter load-test results) ─────────
+  - job_name: 'nexus-pushgateway'
+    honor_labels: true
+    static_configs:
+      - targets: ['nexus-pushgateway:9091']
+        labels:
+          service: 'jmeter-load-test'
+          group: 'test'
+
+  # ── cAdvisor (per-container CPU/memory/network vs mem_limit/cpus) ──
+  - job_name: 'nexus-cadvisor'
+    static_configs:
+      - targets: ['nexus-cadvisor:8080']
+        labels:
+          service: 'cadvisor'
+          group: 'infra'
+
+  # ── Infra exporters (Part 3.3) ──────────────────────────────
+  - job_name: 'nexus-postgres-exporter'
+    static_configs:
+      - targets: ['nexus-postgres-exporter:9187']
+        labels:
+          service: 'postgres'
+          group: 'infra'
+
+  - job_name: 'nexus-redis-exporter'
+    static_configs:
+      - targets: ['nexus-redis-exporter:9121']
+        labels:
+          service: 'redis'
+          group: 'infra'
+
+  - job_name: 'nexus-mongodb-exporter'
+    static_configs:
+      - targets: ['nexus-mongodb-exporter:9216']
+        labels:
+          service: 'mongodb'
+          group: 'infra'
+
+  - job_name: 'nexus-elasticsearch-exporter'
+    static_configs:
+      - targets: ['nexus-elasticsearch-exporter:9114']
+        labels:
+          service: 'elasticsearch'
+          group: 'infra'

@@ -2,7 +2,10 @@
 # NEXUS PLATFORM - GLOBAL PRODUCTION DOCKER COMPOSE
 # ================================================================
 # All 16 services + all infrastructure.
-# Network: nexus-network (containers communicate by service name).
+# Networks: nexus-frontend (api-gateway edge), nexus-backend (app services +
+# observability/admin tooling), nexus-data (internal:true — Postgres/Mongo/
+# Redis/Kafka/Elasticsearch + their admin UIs/exporters). Containers still
+# communicate by service name within whichever network(s) they share.
 #
 # HOST PORT MAPPING (PORT+1 from local dev to avoid conflicts):
 #   PostgreSQL:      5435:5432   (local dev uses 5434)
@@ -15,37 +18,32 @@
 #   Grafana:         3003:3000    (local dev uses 3002)
 #   Kafdrop:         9004:9000    (local dev uses 9003)
 #   Kafka Connect:   18083:8083   (avoids conflict with identity :8083)
+#   Risk Scoring:    18094:8094  (host 8094 got stuck bound to an
+#                                 orphaned WSL2 proxy from an earlier
+#                                 container crash; moved off it rather
+#                                 than chase the stuck process)
 #   Config Service:  8888:8888
 #   Discovery:       8761:8761
 #   API Gateway:     8080:8080
 #
-# STARTUP PROFILES (start in groups to manage memory):
+# STARTUP: use ./start-nexus.sh, not raw `docker compose up -d`.
+#   ./start-nexus.sh                        → core+auth only (default, lean)
+#   ./start-nexus.sh --profiles core,auth,txn   → add the group(s) you need
+#   ./start-nexus.sh --with-monitoring      → also start prometheus/grafana/kafdrop
 #
-#   Step 1 — Infrastructure (no profile needed):
-#     docker compose -f docker-compose-prod.yml up -d
+# Nothing here auto-starts on its own — every container uses restart: "no",
+# including infra. Opening Docker Desktop does NOT relaunch this stack; you
+# always start it explicitly. This is deliberate (see incident: the old
+# `restart: unless-stopped` policy silently relaunched all 26 containers
+# every time Docker Desktop started, which is what was overloading the host).
 #
-#   Step 2 — Core platform (config + discovery):
-#     docker compose -f docker-compose-prod.yml --profile core up -d
-#
-#   Step 3 — Auth service:
-#     docker compose -f docker-compose-prod.yml --profile auth up -d
-#
-#   Step 4 — Transaction cluster (account, txn, fraud, ledger, saga):
-#     docker compose -f docker-compose-prod.yml --profile txn up -d
-#
-#   Step 5 — AI cluster (assistant, kyc, analytics):
-#     docker compose -f docker-compose-prod.yml --profile ai up -d
-#
-#   Step 6 — Support cluster (notification, risk, audit):
-#     docker compose -f docker-compose-prod.yml --profile support up -d
-#
-#   Step 7 — API Gateway:
-#     docker compose -f docker-compose-prod.yml --profile gateway up -d
-#
-#   Or start everything at once (if memory allows):
-#     docker compose -f docker-compose-prod.yml \
-#       --profile core --profile auth --profile txn \
-#       --profile ai --profile support --profile gateway up -d
+# Profiles (for reference — start-nexus.sh sets COMPOSE_PROFILES for you):
+#   core     → config-service, discovery-service
+#   auth     → identity-service
+#   txn      → account, transaction, fraud, ledger, saga-orchestrator
+#   ai       → ai-assistant, ai-kyc, analytics
+#   support  → notification, risk-scoring, audit-query, audit-write-native
+#   gateway  → api-gateway
 #
 # REQUIRED .env VARIABLES:
 #   POSTGRES_PASSWORD, MONGO_PASSWORD, REDIS_PASSWORD
@@ -54,25 +52,122 @@
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
 #   KYC_S3_BUCKET, KYC_SQS_QUEUE_URL
 #   SNS_FRAUD_ALERTS_TOPIC_ARN, SNS_NOTIFICATION_DISPATCH_TOPIC_ARN
+#   FRAUD_ALERTS_QUEUE_URL
+#   COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID (Option B auth — see
+#   AWS-DOCKER-WORKFLOWS/02_LOGIN_FLOW.md; optional, blank = Cognito
+#   path disabled, local JWT path unaffected either way)
 # ================================================================
 
+# Shared log rotation for every container — prevents silent disk fill.
+# Referenced as `logging: *default-logging` on each service below.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# no-new-privileges: true blocks setuid/setgid privilege escalation inside
+# every container — cheap, zero functional impact (nothing here needs to
+# gain privileges after start), applied to all 38 services now per the
+# hardening prompt's "low effort, high impact, do it now" guidance.
+x-security-opt: &no-new-privileges
+  - no-new-privileges:true
+
 networks:
-  nexus-network:
+  # nexus-frontend: only api-gateway sits here — the one container meant
+  # to be the system's edge. Host port publishing works regardless of
+  # network placement, so this is about topology intent, not the only
+  # thing standing between containers and the internet.
+  nexus-frontend:
+    driver: bridge
+  # nexus-backend: the 16 app services + observability/admin tooling.
+  # Everything that needs Eureka/config-server/Zipkin/Prometheus or
+  # outbound internet (OpenAI, AWS) lives here.
+  nexus-backend:
     driver: bridge
     ipam:
       config:
         - subnet: 172.20.0.0/16
+  # nexus-data: internal:true — Postgres/MongoDB/Redis/Kafka/Elasticsearch
+  # and their admin UIs/exporters only. No route to the internet gateway,
+  # so a compromised DB container can't be used to exfiltrate data
+  # directly. App services that talk to a store directly join this
+  # network IN ADDITION to nexus-backend (multi-homed) — host port
+  # mappings (5435:5432 etc.) still work on an internal network; only
+  # outbound egress from the network itself is blocked.
+  nexus-data:
+    driver: bridge
+    internal: true
 
 volumes:
   postgres-data:
+  pgadmin-data:
   mongodb-data:
   redis-data:
   elasticsearch-data:
   kafka-data:
-  zookeeper-data:
   grafana-data:
   prometheus-data:
+  loki-data:
   ollama-data:
+
+# File-based secrets for the 16 app services (Spring Boot + Quarkus). Each
+# entry mounts read-only at /run/secrets/<name> inside any container that
+# lists it under its own `secrets:` — docker-entrypoint.sh (added to every
+# app service's image) resolves the matching FOO_FILE env var into a plain
+# FOO env var before the JVM starts. Unlike environment: ${VAR}, secret
+# values never appear in `docker inspect`/`docker compose config` output.
+#
+# ONE-TIME SETUP (not done by this repo — populate from your real values,
+# same source as today's .env, never commit these):
+#   mkdir -p secrets
+#   printf '%s' "$POSTGRES_PASSWORD"       > secrets/postgres_password.txt
+#   printf '%s' "$MONGO_PASSWORD"          > secrets/mongo_password.txt
+#   printf '%s' "$REDIS_PASSWORD"          > secrets/redis_password.txt
+#   printf '%s' "$JWT_KEYSTORE_PASSWORD"   > secrets/jwt_keystore_password.txt
+#   printf '%s' "$OPENAI_API_KEY"          > secrets/openai_api_key.txt
+#   printf '%s' "$AWS_ACCESS_KEY_ID"       > secrets/aws_access_key_id.txt
+#   printf '%s' "$AWS_SECRET_ACCESS_KEY"   > secrets/aws_secret_access_key.txt
+#   printf '%s' "$CONFIG_SERVER_PASSWORD"  > secrets/config_server_password.txt
+#   printf '%s' "$GIT_TOKEN"               > secrets/git_token.txt
+# `secrets/` is already in .gitignore (same directory nexus-identity.jks
+# already lives in) — printf, not echo, so no trailing newline ends up
+# inside the file and inside the password/key Spring Boot reads.
+#
+# Postgres/MongoDB/Redis/pgAdmin/mongo-express/Grafana/postgres-exporter/
+# redis-exporter are all migrated too — each *_FILE mechanism below was
+# checked against that image's actual docs/source/entrypoint before being
+# applied, not guessed. The one exception is nexus-mongodb-exporter: its
+# image is scratch/distroless (no shell, verified via its Docker Hub layer
+# history) and the exporter binary has no file-based URI option, so there
+# is no safe way to migrate it without a custom wrapper image — see the
+# comment on that service for the full reasoning. It still reads
+# MONGO_PASSWORD via plain compose interpolation, unchanged from before.
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  mongo_password:
+    file: ./secrets/mongo_password.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  jwt_keystore_password:
+    file: ./secrets/jwt_keystore_password.txt
+  openai_api_key:
+    file: ./secrets/openai_api_key.txt
+  aws_access_key_id:
+    file: ./secrets/aws_access_key_id.txt
+  aws_secret_access_key:
+    file: ./secrets/aws_secret_access_key.txt
+  config_server_password:
+    file: ./secrets/config_server_password.txt
+  git_token:
+    file: ./secrets/git_token.txt
+  pgadmin_password:
+    file: ./secrets/pgadmin_password.txt
+  mongo_express_password:
+    file: ./secrets/mongo_express_password.txt
+  grafana_password:
+    file: ./secrets/grafana_password.txt
 
 # ================================================================
 # INFRASTRUCTURE SERVICES (no profiles — always start first)
@@ -84,6 +179,8 @@ services:
   nexus-postgres:
     image: pgvector/pgvector:pg16-bookworm
     container_name: nexus-postgres
+    logging: *default-logging
+    security_opt: *no-new-privileges
     command:
       - "postgres"
       - "-c"
@@ -96,7 +193,10 @@ services:
       - "max_connections=300"
     environment:
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      # POSTGRES_PASSWORD_FILE: the official postgres docker-entrypoint.sh
+      # (pgvector/pgvector is FROM postgres:16, inherits it) natively
+      # resolves *_FILE for this var — no wrapper script needed here.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_MULTIPLE_DATABASES: nexus_accounts,nexus_transactions,nexus_identity,nexus_fraud,nexus_ledger,nexus_saga,nexus_risk,nexus_kyc,nexus_audit,nexus_ai_assistant
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -104,96 +204,143 @@ services:
     ports:
       - "5435:5432"
     networks:
-      - nexus-network
+      - nexus-data
+    secrets:
+      - postgres_password
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U nexus"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 90s
-    restart: unless-stopped
+
+  # ── pgAdmin (browse Postgres data — nexus-accounts, nexus-transactions, etc.) ──
+  nexus-pgadmin:
+    image: dpage/pgadmin4:8.6
+    container_name: nexus-pgadmin
+    logging: *default-logging
+    security_opt: *no-new-privileges
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@nexus.local}
+      # dpage/pgadmin4's own entrypoint resolves *_FILE for this var.
+      PGADMIN_DEFAULT_PASSWORD_FILE: /run/secrets/pgadmin_password
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+      - ./monitoring/pgadmin/servers.json:/pgadmin4/servers.json:ro
+    ports:
+      - "5050:80"
+    networks:
+      - nexus-data
+    secrets:
+      - pgadmin_password
+    depends_on:
+      nexus-postgres:
+        condition: service_healthy
+    restart: "no"
 
   # ── MongoDB ───────────────────────────────────────────────────
   nexus-mongodb:
     image: mongo:7.0
     container_name: nexus-mongodb
+    logging: *default-logging
+    security_opt: *no-new-privileges
     environment:
       MONGO_INITDB_ROOT_USERNAME: nexus
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?required}
+      # The official mongo docker-entrypoint.sh natively resolves *_FILE
+      # for this var — no wrapper script needed here.
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongo_password
     volumes:
       - mongodb-data:/data/db
     ports:
       - "27020:27017"
     networks:
-      - nexus-network
+      - nexus-data
+    secrets:
+      - mongo_password
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 90s
-    restart: unless-stopped
+
+  # ── mongo-express (browse MongoDB data — accounts/fraud/ledger/kyc/etc.) ──
+  nexus-mongo-express:
+    image: mongo-express:1.0.2
+    container_name: nexus-mongo-express
+    logging: *default-logging
+    security_opt: *no-new-privileges
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: nexus
+      # mongo-express's own entrypoint (getFileEnv()) resolves *_FILE for
+      # these natively — verified against its GitHub source before
+      # applying, not guessed.
+      ME_CONFIG_MONGODB_ADMINPASSWORD_FILE: /run/secrets/mongo_password
+      ME_CONFIG_MONGODB_SERVER: nexus-mongodb
+      ME_CONFIG_MONGODB_PORT: 27017
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USER:-admin}
+      ME_CONFIG_BASICAUTH_PASSWORD_FILE: /run/secrets/mongo_express_password
+    ports:
+      - "8081:8081"
+    networks:
+      - nexus-data
+    secrets:
+      - mongo_password
+      - mongo_express_password
+    depends_on:
+      nexus-mongodb:
+        condition: service_healthy
+    restart: "no"
 
   # ── Redis ─────────────────────────────────────────────────────
   nexus-redis:
     image: redis:7.2-alpine
     container_name: nexus-redis
-    command: redis-server --requirepass ${REDIS_PASSWORD:?required} --maxmemory 1gb --maxmemory-policy allkeys-lru --maxclients 10000
-    environment:
-      # Needed so the healthcheck shell can read $$REDIS_PASSWORD
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
-      SPRING_DATA_REDIS_HOST: nexus-redis
-      SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
-      SPRING_DATA_REDIS_TIMEOUT: 5s
-      SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
+    logging: *default-logging
+    security_opt: *no-new-privileges
+    # --requirepass read from the mounted secret file at container start
+    # instead of Compose's host-side ${VAR} interpolation. The official
+    # redis image has no *_FILE env-var convention (redis-server only
+    # takes this as a CLI arg) so it's resolved directly in the command's
+    # own shell instead — never baked into compose config, only readable
+    # from inside the container once it's actually running. The
+    # healthcheck reads the same file the same way.
+    command: >-
+      sh -c 'exec redis-server --requirepass "$$(cat /run/secrets/redis_password)" --maxmemory 1gb --maxmemory-policy allkeys-lru --maxclients 10000'
     volumes:
       - redis-data:/data
     ports:
       - "6382:6379"
     networks:
-      - nexus-network
+      - nexus-data
+    secrets:
+      - redis_password
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep -q PONG"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
-    restart: unless-stopped
+    restart: "no"
 
-  # ── Zookeeper ─────────────────────────────────────────────────
-  nexus-zookeeper:
-    image: confluentinc/cp-zookeeper:7.6.0
-    container_name: nexus-zookeeper
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-      ZOOKEEPER_SYNC_LIMIT: 2
-      ZOOKEEPER_4LW_COMMANDS_WHITELIST: "ruok,srvr,stat"
-    volumes:
-      - zookeeper-data:/var/lib/zookeeper
-    networks:
-      - nexus-network
-    healthcheck:
-      test: ["CMD-SHELL", "echo srvr | nc localhost 2181 | grep -q 'Zookeeper version'"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  # ── Kafka ─────────────────────────────────────────────────────
+  # ── Kafka (KRaft mode — no Zookeeper) ──────────────────────────
   nexus-kafka:
     image: confluentinc/cp-kafka:7.6.0
     container_name: nexus-kafka
-    depends_on:
-      nexus-zookeeper:
-        condition: service_healthy
+    logging: *default-logging
+    security_opt: *no-new-privileges
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: nexus-zookeeper:2181
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      CLUSTER_ID: vH7VuWQ6jEsC1pR4vxAvZg
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@nexus-kafka:19095
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:19094,CONTROLLER://0.0.0.0:19095
       # INTERNAL: used by all Docker services (nexus-kafka:9092)
       # EXTERNAL: used by host machine tools on localhost:19094
+      # CONTROLLER: internal-only KRaft quorum listener, not exposed on ports
       KAFKA_ADVERTISED_LISTENERS: INTERNAL://nexus-kafka:9092,EXTERNAL://localhost:19094
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
@@ -207,19 +354,21 @@ services:
     ports:
       - "19094:9092"
     networks:
-      - nexus-network
+      - nexus-data
     healthcheck:
       test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
       interval: 15s
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: unless-stopped
+    restart: "no"
 
   # ── Elasticsearch ─────────────────────────────────────────────
   nexus-elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
     container_name: nexus-elasticsearch
+    logging: *default-logging
+    security_opt: *no-new-privileges
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
@@ -230,35 +379,250 @@ services:
     ports:
       - "9203:9200"
     networks:
-      - nexus-network
+      - nexus-data
     healthcheck:
       test: ["CMD-SHELL", "curl -s -f http://localhost:9200/_cluster/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: unless-stopped
+    restart: "no"
+
+  # ── Elasticvue (browse Elasticsearch data — transactions/audit indices) ──
+  # No auth needed: nexus-elasticsearch runs with xpack.security.enabled=false,
+  # this is just a static browser client pointed at http://localhost:9203.
+  nexus-elasticvue:
+    image: cars10/elasticvue:1.0.9
+    container_name: nexus-elasticvue
+    logging: *default-logging
+    security_opt: *no-new-privileges
+    ports:
+      - "8082:8080"
+    networks:
+      - nexus-data
+    depends_on:
+      nexus-elasticsearch:
+        condition: service_healthy
+    restart: "no"
+
+  # ── Kibana (visual ES exploration — Discover view, charts, dashboards) ──
+  # Pinned to 8.13.0 to exactly match nexus-elasticsearch's version - Kibana
+  # enforces strict version compatibility with its ES server, same class of
+  # mismatch already fixed for the fraud/transaction-service ES clients.
+  nexus-kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.0
+    container_name: nexus-kibana
+    logging: *default-logging
+    security_opt: *no-new-privileges
+    environment:
+      ELASTICSEARCH_HOSTS: http://nexus-elasticsearch:9200
+      XPACK_SECURITY_ENABLED: "false"
+    ports:
+      - "5601:5601"
+    networks:
+      - nexus-data
+    depends_on:
+      nexus-elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -f http://localhost:5601/api/status || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    restart: "no"
 
   # ── Zipkin ────────────────────────────────────────────────────
   nexus-zipkin:
     image: openzipkin/zipkin:3.3
     container_name: nexus-zipkin
+    logging: *default-logging
+    security_opt: *no-new-privileges
+    environment:
+      STORAGE_TYPE: elasticsearch
+      ES_HOSTS: http://nexus-elasticsearch:9200
+      ES_INDEX_REPLICAS: "0"   # single-node cluster — replicas>0 leaves shards
+                                # permanently unassigned (yellow health forever)
     ports:
       - "9414:9411"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    depends_on:
+      nexus-elasticsearch:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:9411/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
-    restart: unless-stopped
+    restart: "no"
+
+  # ── Infra exporters (Part 3.3 "Infrastructure Deep Dive") ──────
+  # None of Postgres/MongoDB/Redis/Elasticsearch were scraped by
+  # Prometheus before this - only each Spring Boot service's own
+  # client-side view (HikariCP pool, etc.) existed. These give the
+  # actual server-side metrics (connections across all 10 databases,
+  # replication lag, MongoDB op counters, Redis memory/eviction/hit
+  # ratio, ES cluster health) the master prompt's Infra Deep Dive
+  # dashboard needs. Also closes the Part 2 ElasticsearchClusterNotGreen/
+  # ElasticsearchDiskWatermark gap (previously flagged as "not
+  # implemented, no scrape target").
+  nexus-postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: nexus-postgres-exporter
+    logging: *default-logging
+    security_opt: *no-new-privileges
+    environment:
+      DATA_SOURCE_URI: "nexus-postgres:5432/nexus_identity?sslmode=disable"
+      DATA_SOURCE_USER: nexus
+      # postgres_exporter's own binary resolves *_FILE for this natively
+      # (confirmed in its docs, not guessed). Runs as uid 65534, but
+      # Compose mounts secrets 0444 (world-readable) by default so that's
+      # not a problem.
+      DATA_SOURCE_PASS_FILE: /run/secrets/postgres_password
+      PG_EXPORTER_AUTO_DISCOVER_DATABASES: "true"
+    ports:
+      - "9187:9187"
+    networks:
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - postgres_password
+    depends_on:
+      nexus-postgres:
+        condition: service_healthy
+    restart: "no"
+
+  nexus-redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    container_name: nexus-redis-exporter
+    logging: *default-logging
+    security_opt: *no-new-privileges
+    environment:
+      REDIS_ADDR: "redis://nexus-redis:6379"
+      # redis_exporter's own binary resolves this natively (confirmed in
+      # its docs/PRs, not guessed) — mutually exclusive with REDIS_PASSWORD,
+      # so that plain var is intentionally not also set here.
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    ports:
+      - "9121:9121"
+    networks:
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - redis_password
+    depends_on:
+      nexus-redis:
+        condition: service_healthy
+    restart: "no"
+
+  nexus-mongodb-exporter:
+    image: percona/mongodb_exporter:0.40
+    container_name: nexus-mongodb-exporter
+    logging: *default-logging
+    security_opt: *no-new-privileges
+    # NOT migrated to a secret file — checked, not guessed: this image's
+    # own layers (docker.io/percona/mongodb_exporter:0.40, inspected via
+    # its Docker Hub layer history) are scratch/distroless — ENTRYPOINT is
+    # the bare binary with no shell present, so there is no way to read a
+    # secret file into the command the way nexus-redis does. The exporter
+    # binary itself has no --mongodb.uri-file flag or MONGODB_URI_FILE env
+    # var (checked its docs) — only a plain MONGODB_URI env var, which
+    # would be the same exposure as this CLI arg, not an improvement.
+    # Password stays compose-interpolated here; real fix would require a
+    # custom wrapper image, out of scope for this pass.
+    command:
+      - "--mongodb.uri=mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/admin"
+      - "--collect-all"
+    ports:
+      - "9216:9216"
+    networks:
+      - nexus-backend
+      - nexus-data
+    depends_on:
+      nexus-mongodb:
+        condition: service_healthy
+    restart: "no"
+
+  nexus-elasticsearch-exporter:
+    image: quay.io/prometheuscommunity/elasticsearch-exporter:v1.7.0
+    container_name: nexus-elasticsearch-exporter
+    logging: *default-logging
+    security_opt: *no-new-privileges
+    command:
+      - "--es.uri=http://nexus-elasticsearch:9200"
+      - "--es.all"
+      - "--es.indices"
+      - "--es.cluster_settings"
+    ports:
+      - "9114:9114"
+    networks:
+      - nexus-backend
+      - nexus-data
+    depends_on:
+      nexus-elasticsearch:
+        condition: service_healthy
+    restart: "no"
+
+  # ── Pushgateway (Part 6 — JMeter results land here, then get scraped
+  # into the same Prometheus/Grafana dashboards as everything else) ─
+  nexus-pushgateway:
+    image: prom/pushgateway:v1.9.0
+    container_name: nexus-pushgateway
+    logging: *default-logging
+    security_opt: *no-new-privileges
+    ports:
+      - "9091:9091"
+    networks:
+      - nexus-backend
+    restart: "no"
+
+  # ── cAdvisor (per-container CPU/memory/network time series) ────
+  # Closes a real gap: mem_limit/cpus were added to all 16 app services
+  # this session, but without this there was no way to see usage trending
+  # *against* those limits before an OOM kill happens — only after, via
+  # `docker inspect`'s OOMKilled flag. Needs host-level access (privileged,
+  # cgroup/proc/docker mounts) to read every container's resource usage —
+  # a real, standard exception to the no-new-privileges/least-privilege
+  # pattern everything else in this file follows, not an oversight. The
+  # bind-mounted host paths below resolve inside the Docker Desktop/WSL2
+  # Linux VM, not raw Windows paths — this is the same pattern used on
+  # native Linux, no Windows-specific translation needed.
+  nexus-cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: nexus-cadvisor
+    logging: *default-logging
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    mem_limit: 256m
+    cpus: 0.5
+    ports:
+      - "9280:8080"
+    networks:
+      - nexus-backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: "no"
 
   # ── Prometheus ────────────────────────────────────────────────
   nexus-prometheus:
     image: prom/prometheus:v2.51.0
     container_name: nexus-prometheus
+    logging: *default-logging
+    security_opt: *no-new-privileges
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -267,34 +631,49 @@ services:
       - '--storage.tsdb.retention.time=15d'
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - ./monitoring/recording_rules.yml:/etc/prometheus/recording_rules.yml:ro
       - prometheus-data:/prometheus
     ports:
       - "9094:9090"
     networks:
-      - nexus-network
+      - nexus-backend
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:9090/-/healthy || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
       start_period: 30s
-    restart: unless-stopped
+    restart: "no"
 
   # ── Grafana ───────────────────────────────────────────────────
   nexus-grafana:
     image: grafana/grafana:10.4.0
     container_name: nexus-grafana
+    logging: *default-logging
+    security_opt: *no-new-privileges
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-nexus-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?required}
+      # Double underscore is not a typo — Grafana's own env-provider only
+      # recognizes the __FILE suffix (confirmed via Grafana's docs/GitHub
+      # issue history: the single-underscore _FILE variant silently does
+      # NOT work, unlike every other image in this file).
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
       GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # Consumed via $__env{ALERT_WEBHOOK_URL} in
+      # monitoring/grafana/provisioning/alerting/contactpoints.yaml - unset
+      # is fine, the contact point just won't deliver anything until it's
+      # added to .env.
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
     volumes:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
       - "3003:3000"
     networks:
-      - nexus-network
+      - nexus-backend
+    secrets:
+      - grafana_password
     depends_on:
       nexus-prometheus:
         condition: service_healthy
@@ -304,23 +683,47 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    restart: unless-stopped
+    restart: "no"
+
+  # ── Loki (log aggregation — every service's Loki4j appender ships here) ──
+  nexus-loki:
+    image: grafana/loki:2.9.6
+    container_name: nexus-loki
+    logging: *default-logging
+    security_opt: *no-new-privileges
+    volumes:
+      - ./nexus-config-service/observability/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "3100:3100"
+    networks:
+      - nexus-backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:3100/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: "no"
 
   # ── Kafdrop (Kafka UI) ────────────────────────────────────────
   nexus-kafdrop:
     image: obsidiandynamics/kafdrop:4.0.1
     container_name: nexus-kafdrop
+    logging: *default-logging
+    security_opt: *no-new-privileges
     environment:
       KAFKA_BROKERCONNECT: nexus-kafka:9092
       JVM_OPTS: "-Xms64M -Xmx128M"
     ports:
       - "9004:9000"
     networks:
-      - nexus-network
+      - nexus-data
     depends_on:
       nexus-kafka:
         condition: service_healthy
-    restart: unless-stopped
+    restart: "no"
 
   # ── Kafka Connect (Debezium) ──────────────────────────────────
   # NOTE: Host port is 18083 (NOT 8083) to avoid conflict with
@@ -328,6 +731,8 @@ services:
   nexus-kafka-connect:
     image: debezium/connect:2.6
     container_name: nexus-kafka-connect
+    logging: *default-logging
+    security_opt: *no-new-privileges
     depends_on:
       nexus-kafka:
         condition: service_healthy
@@ -344,19 +749,21 @@ services:
     ports:
       - "18083:8083"
     networks:
-      - nexus-network
+      - nexus-data
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 10
       start_period: 120s
-    restart: unless-stopped
+    restart: "no"
 
   # ── Debezium Init (registers connectors once on first run) ────
   nexus-debezium-init:
     image: curlimages/curl:8.6.0
     container_name: nexus-debezium-init
+    logging: *default-logging
+    security_opt: *no-new-privileges
     depends_on:
       nexus-kafka-connect:
         condition: service_healthy
@@ -367,36 +774,98 @@ services:
     entrypoint: ["/bin/sh", "/scripts/register.sh"]
     restart: "no"
     networks:
-      - nexus-network
+      - nexus-data
 
   # ── Kafka Topics Init ─────────────────────────────────────────
   # Runs once after Kafka is healthy; pre-creates all platform topics
   # so Kafka Streams consumers don't throw MissingSourceTopicException.
+  # Each topic gets its own retry loop (5 attempts, 5s apart) instead of
+  # one long `&&` chain — under load a single broker request can time
+  # out transiently, and previously that aborted the whole init and
+  # required a manual re-run from the failed topic onward.
   nexus-kafka-topics-init:
     image: confluentinc/cp-kafka:7.6.0
     container_name: nexus-kafka-topics-init
+    logging: *default-logging
+    security_opt: *no-new-privileges
     depends_on:
       nexus-kafka:
         condition: service_healthy
     command: >
       bash -c "
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic transactions.initiated       --partitions 3 --replication-factor 1 &&
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic transactions.completed       --partitions 3 --replication-factor 1 &&
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic transactions.failed          --partitions 3 --replication-factor 1 &&
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic fraud.flagged               --partitions 3 --replication-factor 1 &&
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic fraud.result                --partitions 3 --replication-factor 1 &&
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic accounts.created            --partitions 3 --replication-factor 1 &&
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.verified           --partitions 3 --replication-factor 1 &&
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic identity.rejected           --partitions 3 --replication-factor 1 &&
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic users.registered            --partitions 3 --replication-factor 1 &&
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic saga.commands               --partitions 3 --replication-factor 1 &&
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic saga.replies                --partitions 3 --replication-factor 1 &&
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic ledger.posted               --partitions 3 --replication-factor 1 &&
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic analytics.anomalies.detected --partitions 3 --replication-factor 1 &&
-        kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic ai.query.logged             --partitions 3 --replication-factor 1
+        # Standard topics: default broker retention (168h / 7 days) - real
+        # business/audit events, all consumed by audit-write-native/
+        # audit-query-jvm or downstream services that benefit from a real
+        # replay window. Previously only 15 of the 22 real topics were
+        # listed here - the other 7 (identity.events, identity.kyc,
+        # identity.kyc.result, account.events, user.behavior.aggregated,
+        # ledger.reversed, risk.profile.updated) fell back to Kafka's
+        # single-partition auto-create default since KAFKA_NUM_PARTITIONS
+        # is not set on this broker - silently capping them at 1 consumer
+        # per group forever. See CHANGES-BESTPRACTICES Kafka hardening
+        # guide, Fase 2.
+        # saga.commands.dlt: Dead Letter Topic for account-service's
+        # saga.commands consumer (Fase 4 pilot, CHANGES-BESTPRACTICES/
+        # 09_KAFKA_HARDENING_CHANGES.md) - DeadLetterPublishingRecoverer
+        # preserves the original record's partition number when publishing
+        # here, so this needs at least as many partitions as saga.commands
+        # (3) or a message from partition 2 would fail to publish to a
+        # 1-partition DLT.
+        # *.dlt topics: DLT recoverers added to identity/account/transaction/
+        # fraud/ledger/saga-orchestrator/notification-service (Fase 4). The
+        # recoverer preserves the original record's partition number, so
+        # each needs >= the source topic's partition count (3) or a message
+        # from partition 1/2 fails to publish to a smaller DLT. NOT created
+        # for audit-query-jvm/risk-scoring-service - their consumers swallow
+        # exceptions internally and never let them reach the container's
+        # error handler, so a DLT there would be permanently empty; flagged
+        # in CHANGES-BESTPRACTICES/09_KAFKA_HARDENING_CHANGES.md as a real
+        # follow-up instead of wiring dead config.
+        TOPICS='transactions.initiated transactions.completed transactions.failed fraud.flagged fraud.result accounts.created account.events identity.verified identity.rejected identity.events identity.kyc identity.kyc.result users.registered ledger.posted ledger.reversed user.behavior.aggregated analytics.anomalies.detected ai.query.logged risk.profile.updated kyc.initiation.dlq saga.commands.dlt saga.replies.dlt transactions.initiated.dlt transactions.completed.dlt transactions.failed.dlt fraud.flagged.dlt accounts.created.dlt users.registered.dlt identity.verified.dlt identity.rejected.dlt'
+        for topic in $$TOPICS; do
+          attempt=1
+          until kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1; do
+            if [ $$attempt -ge 5 ]; then
+              echo FATAL: failed to create topic $$topic after 5 attempts >&2
+              exit 1
+            fi
+            echo retrying $$topic - attempt $$attempt/5...
+            attempt=$$((attempt+1))
+            sleep 5
+          done
+        done
+
+        # Ephemeral coordination topics: saga.commands/saga.replies carry
+        # transient SAGA step commands/replies, not durable business
+        # events - once a step is processed there is no value in
+        # replaying a 5-day-old saga command. 24h (86400000ms) covers a
+        # weekend of downtime for a single-developer project without
+        # accumulating retry/rebalance noise indefinitely. Deliberately
+        # NOT applied to kyc.initiation.dlq - a DLT needs MORE retention
+        # than normal, not less, so someone has time to investigate/replay
+        # failures; it stays on the 168h default above.
+        EPHEMERAL_TOPICS='saga.commands saga.replies'
+        for topic in $$EPHEMERAL_TOPICS; do
+          attempt=1
+          until kafka-topics --bootstrap-server nexus-kafka:9092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1 --config retention.ms=86400000; do
+            if [ $$attempt -ge 5 ]; then
+              echo FATAL: failed to create topic $$topic after 5 attempts >&2
+              exit 1
+            fi
+            echo retrying $$topic - attempt $$attempt/5...
+            attempt=$$((attempt+1))
+            sleep 5
+          done
+          # --create --if-not-exists is a no-op (including --config) on a
+          # topic that already exists - saga.commands/saga.replies existed
+          # before this retention change, so the config only actually
+          # lands via an explicit --alter, run unconditionally every start
+          # (idempotent, safe to repeat).
+          kafka-configs --bootstrap-server nexus-kafka:9092 --alter --entity-type topics --entity-name $$topic --add-config retention.ms=86400000
+        done
       "
     networks:
-      - nexus-network
+      - nexus-data
     restart: "no"
 
   # ── Ollama (local LLM fallback) — disabled by default ─────────
@@ -408,7 +877,7 @@ services:
   #   volumes:
   #     - ollama-data:/root/.ollama
   #   networks:
-  #     - nexus-network
+  #     - nexus-backend
   #   restart: unless-stopped
 
   # ================================================================
@@ -417,7 +886,9 @@ services:
   # Start groups in order:
   #   core → auth → txn → ai → support → gateway
   # Each step waits for depends_on health checks automatically.
-  # On failure: restart: on-failure retries with Docker's backoff.
+  # restart: "no" — a crashed service must be restarted explicitly via
+  # start-nexus.sh. Intentional: no container here (infra or app) should
+  # ever come back on its own, including when Docker Desktop restarts.
   # ================================================================
 
   # ── Config Service ─────────────────────── profile: core ──────
@@ -426,30 +897,41 @@ services:
       context: ./nexus-config-service
       dockerfile: Dockerfile
     container_name: nexus-config-service
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/config-service:latest
+    mem_limit: 512m
+    cpus: 0.5
     profiles: [core]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
-      GIT_TOKEN: ${GIT_TOKEN:?required}
+      GIT_TOKEN_FILE: /run/secrets/git_token
       GIT_USERNAME: ${GIT_USERNAME:-Solano204}
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
-      MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      MONGO_PASSWORD_FILE: /run/secrets/mongo_password
       MANAGEMENT_HEALTH_CONFIG_ENABLED: "false"
     ports:
       - "8888:8888"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - git_token
+      - config_server_password
+      - redis_password
+      - postgres_password
+      - mongo_password
     depends_on:
       nexus-kafka:
         condition: service_healthy
@@ -461,25 +943,31 @@ services:
       timeout: 10s
       retries: 8
       start_period: 60s
-    restart: on-failure
+    restart: "no"
 
   # ── Discovery Service ──────────────────── profile: core ──────
   nexus-discovery-service:
     build:
-      context: .
-      dockerfile: nexus-discovery-service/Dockerfile
+      context: ./nexus-discovery-service
+      dockerfile: Dockerfile
     container_name: nexus-discovery-service
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/discovery-service:latest
+    mem_limit: 512m
+    cpus: 0.5
     profiles: [core]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
     ports:
       - "8761:8761"
     networks:
-      - nexus-network
+      - nexus-backend
+    secrets:
+      - config_server_password
     depends_on:
       nexus-config-service:
         condition: service_healthy
@@ -489,7 +977,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── Identity Service ───────────────────── profile: auth ──────
   nexus-identity-service:
@@ -497,43 +985,61 @@ services:
       context: ./nexus-identity-service
       dockerfile: Dockerfile
     container_name: nexus-identity-service
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/identity-service:latest
+    mem_limit: 1792m
+    cpus: 1.0
     profiles: [auth]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       SERVER_PORT: 8083
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_identity
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
       JWT_KEYSTORE_PATH: /secrets/nexus-identity.jks
-      JWT_KEYSTORE_PASSWORD: ${JWT_KEYSTORE_PASSWORD:?required}
+      JWT_KEYSTORE_PASSWORD_FILE: /run/secrets/jwt_keystore_password
       # AWS — real S3 bucket for KYC documents + real SQS queue
       AWS_REGION: ${AWS_REGION:-us-east-1}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?required}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?required}
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/aws_access_key_id
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/aws_secret_access_key
       KYC_S3_BUCKET: ${KYC_S3_BUCKET:-nexus-kyc-documents}
       KYC_SQS_QUEUE_URL: ${KYC_SQS_QUEUE_URL:?required}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      COGNITO_USER_POOL_ID: ${COGNITO_USER_POOL_ID:-}
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
+      COGNITO_REGION: ${AWS_REGION:-us-east-1}
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
+      # TEMP — debugging missing-span investigation; remove once resolved
+      LOGGING_LEVEL_IO_MICROMETER: DEBUG
     volumes:
       - ./secrets:/secrets:ro
     ports:
       - "8083:8083"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - config_server_password
+      - postgres_password
+      - redis_password
+      - jwt_keystore_password
+      - aws_access_key_id
+      - aws_secret_access_key
+      - openai_api_key
     depends_on:
       nexus-postgres:
         condition: service_healthy
@@ -551,7 +1057,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── Account Service ────────────────────── profile: txn ───────
   nexus-account-service:
@@ -559,36 +1065,51 @@ services:
       context: ./nexus-account-service
       dockerfile: Dockerfile
     container_name: nexus-account-service
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/account-service:latest
+    mem_limit: 1792m
+    cpus: 1.0
     profiles: [txn]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_accounts
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       MONGO_USER: nexus
-      MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
+      MONGO_PASSWORD_FILE: /run/secrets/mongo_password
       MONGO_HOST: nexus-mongodb
-      MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_accounts?authSource=admin
+      # MONGODB_URI assembled by docker-entrypoint.sh from MONGO_DB + MONGO_HOST
+      # + MONGO_PASSWORD_FILE — a composite connection string can't be built by
+      # Compose's host-side ${VAR} interpolation without exposing the password
+      # in compose config.
+      MONGO_DB: nexus_accounts
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
     ports:
       - "8085:8085"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - config_server_password
+      - postgres_password
+      - mongo_password
+      - redis_password
+      - openai_api_key
     depends_on:
       nexus-postgres:
         condition: service_healthy
@@ -608,7 +1129,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── Transaction Service ────────────────── profile: txn ───────
   nexus-transaction-service:
@@ -616,24 +1137,28 @@ services:
       context: ./nexus-transaction-service
       dockerfile: Dockerfile
     container_name: nexus-transaction-service
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/transaction-service:latest
+    mem_limit: 1792m
+    cpus: 1.25
     profiles: [txn]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_transactions
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       # application-prod.yml reads: spring.elasticsearch.uris: ${ELASTICSEARCH_URI}
       ELASTICSEARCH_URI: http://nexus-elasticsearch:9200
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
@@ -648,7 +1173,12 @@ services:
     ports:
       - "8086:8086"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - config_server_password
+      - postgres_password
+      - redis_password
     depends_on:
       nexus-postgres:
         condition: service_healthy
@@ -670,7 +1200,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── Fraud Service ──────────────────────── profile: txn ───────
   nexus-fraud-service:
@@ -678,40 +1208,58 @@ services:
       context: ./nexus-fraud-service
       dockerfile: Dockerfile
     container_name: nexus-fraud-service
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/fraud-service:latest
+    mem_limit: 1792m
+    cpus: 1.0
     profiles: [txn]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_fraud
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
-      MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_fraud?authSource=admin
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      MONGO_PASSWORD_FILE: /run/secrets/mongo_password
+      # MONGODB_URI assembled by docker-entrypoint.sh from MONGO_DB + MONGO_HOST
+      # + MONGO_PASSWORD_FILE (see account-service for the full rationale).
+      MONGO_HOST: nexus-mongodb
+      MONGO_DB: nexus_fraud
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       # application-prod.yml reads: spring.elasticsearch.uris: ${ELASTICSEARCH_URI}
       ELASTICSEARCH_URI: http://nexus-elasticsearch:9200
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
       # AWS — real SNS topic for high-severity fraud alerts → fraud-alert-lambda
       AWS_REGION: ${AWS_REGION:-us-east-1}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?required}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?required}
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/aws_access_key_id
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/aws_secret_access_key
       SNS_FRAUD_ALERTS_TOPIC_ARN: ${SNS_FRAUD_ALERTS_TOPIC_ARN:-}
+      FRAUD_ALERTS_QUEUE_URL: ${FRAUD_ALERTS_QUEUE_URL:-}
     ports:
       - "8087:8087"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - config_server_password
+      - postgres_password
+      - mongo_password
+      - redis_password
+      - openai_api_key
+      - aws_access_key_id
+      - aws_secret_access_key
     depends_on:
       nexus-postgres:
         condition: service_healthy
@@ -733,7 +1281,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── Ledger Service ─────────────────────── profile: txn ───────
   nexus-ledger-service:
@@ -741,36 +1289,49 @@ services:
       context: ./nexus-ledger-service
       dockerfile: Dockerfile
     container_name: nexus-ledger-service
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/ledger-service:latest
+    mem_limit: 1792m
+    cpus: 1.0
     profiles: [txn]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_ledger
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       MONGO_USER: nexus
-      MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
+      MONGO_PASSWORD_FILE: /run/secrets/mongo_password
       MONGO_HOST: nexus-mongodb
-      MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_ledger?authSource=admin
+      # MONGODB_URI assembled by docker-entrypoint.sh from MONGO_DB + MONGO_HOST
+      # + MONGO_PASSWORD_FILE (see account-service for the full rationale).
+      MONGO_DB: nexus_ledger
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
     ports:
       - "8088:8088"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - config_server_password
+      - postgres_password
+      - mongo_password
+      - redis_password
+      - openai_api_key
     depends_on:
       nexus-postgres:
         condition: service_healthy
@@ -790,7 +1351,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── Saga Orchestrator ──────────────────── profile: txn ───────
   nexus-saga-orchestrator:
@@ -798,32 +1359,42 @@ services:
       context: ./nexus-saga-orchestrator
       dockerfile: Dockerfile
     container_name: nexus-saga-orchestrator
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/saga-orchestrator:latest
+    mem_limit: 1280m
+    cpus: 0.75
     profiles: [txn]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_saga
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
     ports:
       - "8095:8095"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - config_server_password
+      - postgres_password
+      - redis_password
+      - openai_api_key
     depends_on:
       nexus-postgres:
         condition: service_healthy
@@ -841,7 +1412,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── AI Assistant Service ───────────────── profile: ai ────────
   nexus-ai-assistant-service:
@@ -849,26 +1420,30 @@ services:
       context: ./nexus-ai-assistant-service
       dockerfile: Dockerfile
     container_name: nexus-ai-assistant-service
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/ai-assistant-service:latest
+    mem_limit: 2560m
+    cpus: 1.5
     profiles: [ai]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_ai_assistant
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       # Ollama fallback — only works if nexus-ollama container is enabled above
       OLLAMA_BASE_URL: http://nexus-ollama:11434
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
@@ -880,7 +1455,13 @@ services:
     ports:
       - "8090:8090"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - config_server_password
+      - postgres_password
+      - redis_password
+      - openai_api_key
     depends_on:
       nexus-postgres:
         condition: service_healthy
@@ -898,7 +1479,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── AI KYC Service ─────────────────────── profile: ai ────────
   nexus-ai-kyc-service:
@@ -906,35 +1487,41 @@ services:
       context: ./nexus-ai-kyc-service
       dockerfile: Dockerfile
     container_name: nexus-ai-kyc-service
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/ai-kyc-service:latest
+    mem_limit: 1792m
+    cpus: 1.0
     profiles: [ai]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_kyc
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       MONGO_USER: nexus
-      MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
+      MONGO_PASSWORD_FILE: /run/secrets/mongo_password
       MONGO_HOST: nexus-mongodb
-      MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_kyc?authSource=admin
+      # MONGODB_URI assembled by docker-entrypoint.sh from MONGO_DB + MONGO_HOST
+      # + MONGO_PASSWORD_FILE (see account-service for the full rationale).
+      MONGO_DB: nexus_kyc
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       KYC_ENCRYPTION_ENABLED: "true"
       # AWS — real S3 for KYC docs + Rekognition results SQS queue
       AWS_REGION: ${AWS_REGION:-us-east-1}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?required}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?required}
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/aws_access_key_id
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/aws_secret_access_key
       KYC_S3_BUCKET: ${KYC_S3_BUCKET:-nexus-kyc-documents}
       KYC_REKOGNITION_RESULTS_QUEUE_URL: ${KYC_REKOGNITION_RESULTS_QUEUE_URL:-}
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
@@ -942,7 +1529,16 @@ services:
     ports:
       - "8091:8091"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - config_server_password
+      - postgres_password
+      - mongo_password
+      - redis_password
+      - openai_api_key
+      - aws_access_key_id
+      - aws_secret_access_key
     depends_on:
       nexus-postgres:
         condition: service_healthy
@@ -962,7 +1558,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── Analytics Service ──────────────────── profile: ai ────────
   nexus-analytics-service:
@@ -970,31 +1566,40 @@ services:
       context: ./nexus-analytics-service
       dockerfile: Dockerfile
     container_name: nexus-analytics-service
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/analytics-service:latest
+    mem_limit: 3584m
+    cpus: 1.5
     profiles: [ai]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       # application-prod.yml reads: spring.elasticsearch.uris: ${ELASTICSEARCH_URIS}
       ELASTICSEARCH_URIS: http://nexus-elasticsearch:9200
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
     ports:
       - "8092:8092"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - config_server_password
+      - redis_password
+      - openai_api_key
     depends_on:
       nexus-elasticsearch:
         condition: service_healthy
@@ -1012,7 +1617,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── Notification Service ───────────────── profile: support ───
   nexus-notification-service:
@@ -1020,38 +1625,52 @@ services:
       context: ./nexus-notification-service
       dockerfile: Dockerfile
     container_name: nexus-notification-service
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/notification-service:latest
+    mem_limit: 1280m
+    cpus: 0.75
     profiles: [support]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       MONGO_USER: nexus
-      MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
+      MONGO_PASSWORD_FILE: /run/secrets/mongo_password
       MONGO_HOST: nexus-mongodb
-      MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_notification?authSource=admin
+      # MONGODB_URI assembled by docker-entrypoint.sh from MONGO_DB + MONGO_HOST
+      # + MONGO_PASSWORD_FILE (see account-service for the full rationale).
+      MONGO_DB: nexus_notification
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
       # AWS — real SNS for dispatching to notification-dispatcher-lambda
       AWS_REGION: ${AWS_REGION:-us-east-1}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?required}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?required}
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/aws_access_key_id
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/aws_secret_access_key
       SNS_NOTIFICATION_DISPATCH_TOPIC_ARN: ${SNS_NOTIFICATION_DISPATCH_TOPIC_ARN:-}
     ports:
       - "8089:8089"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - config_server_password
+      - mongo_password
+      - redis_password
+      - openai_api_key
+      - aws_access_key_id
+      - aws_secret_access_key
     depends_on:
       nexus-mongodb:
         condition: service_healthy
@@ -1069,7 +1688,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── Risk Scoring Service ───────────────── profile: support ───
   nexus-risk-scoring-service:
@@ -1077,32 +1696,42 @@ services:
       context: ./nexus-risk-scoring-service
       dockerfile: Dockerfile
     container_name: nexus-risk-scoring-service
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/risk-scoring-service:latest
+    mem_limit: 2560m
+    cpus: 1.0
     profiles: [support]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_risk
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
     ports:
-      - "8094:8094"
+      - "18094:8094"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - config_server_password
+      - postgres_password
+      - redis_password
+      - openai_api_key
     depends_on:
       nexus-postgres:
         condition: service_healthy
@@ -1120,7 +1749,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── Audit Query JVM ────────────────────── profile: support ───
   nexus-audit-query-jvm:
@@ -1128,29 +1757,41 @@ services:
       context: ./nexus-audit-query-jvm
       dockerfile: Dockerfile
     container_name: nexus-audit-query-jvm
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/audit-query-jvm:latest
+    mem_limit: 1792m
+    cpus: 0.75
     profiles: [support]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       DATASOURCE_URL: jdbc:postgresql://nexus-postgres:5432/nexus_audit
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       # application-prod.yml reads: spring.elasticsearch.uris: ${ELASTICSEARCH_URIS}
       ELASTICSEARCH_URIS: http://nexus-elasticsearch:9200
       MONGO_USER: nexus
-      MONGO_PASSWORD: ${MONGO_PASSWORD:?required}
+      MONGO_PASSWORD_FILE: /run/secrets/mongo_password
       MONGO_HOST: nexus-mongodb
-      MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_audit?authSource=admin
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?required}
+      # MONGODB_URI assembled by docker-entrypoint.sh from MONGO_DB + MONGO_HOST
+      # + MONGO_PASSWORD_FILE (see account-service for the full rationale).
+      MONGO_DB: nexus_audit
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       EUREKA_DEFAULT_ZONE: http://nexus-discovery-service:8761/eureka/
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
     ports:
       - "8097:8097"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - config_server_password
+      - postgres_password
+      - mongo_password
+      - openai_api_key
     depends_on:
       nexus-postgres:
         condition: service_healthy
@@ -1168,7 +1809,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── Audit Write Native (Quarkus) ───────── profile: support ───
   nexus-audit-write-native:
@@ -1176,28 +1817,40 @@ services:
       context: ./audit-write-native
       dockerfile: Dockerfile.native
     container_name: nexus-audit-write-native
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/audit-write-native:latest
+    mem_limit: 512m
+    cpus: 0.5
     profiles: [support]
     environment:
       QUARKUS_PROFILE: prod
       KAFKA_BOOTSTRAP_SERVERS: nexus-kafka:9092
       # application.properties %prod.elasticsearch.hosts: ${ELASTICSEARCH_HOSTS}
       ELASTICSEARCH_HOSTS: http://nexus-elasticsearch:9200
-      MONGODB_URI: mongodb://nexus:${MONGO_PASSWORD:?required}@nexus-mongodb:27017/nexus_audit?authSource=admin
+      MONGO_PASSWORD_FILE: /run/secrets/mongo_password
+      MONGO_HOST: nexus-mongodb
+      # MONGODB_URI assembled by docker-entrypoint.sh from MONGO_DB + MONGO_HOST
+      # + MONGO_PASSWORD_FILE (see account-service for the full rationale).
+      MONGO_DB: nexus_audit
       # application.properties %prod.quarkus.redis.hosts: ${REDIS_URL}
       REDIS_URL: redis://nexus-redis:6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
+      ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
       TRACING_SAMPLE_RATE: "0.05"
     ports:
       - "8096:8096"
     networks:
-      - nexus-network
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - mongo_password
+      - redis_password
     depends_on:
       nexus-kafka:
         condition: service_healthy
@@ -1213,7 +1866,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"
 
   # ── API Gateway ────────────────────────── profile: gateway ───
   nexus-api-gateway:
@@ -1221,19 +1874,23 @@ services:
       context: ./nexus-api-gateway
       dockerfile: Dockerfile
     container_name: nexus-api-gateway
+    logging: *default-logging
+    security_opt: *no-new-privileges
     image: nexus/api-gateway:latest
+    mem_limit: 2560m
+    cpus: 1.5
     profiles: [gateway]
     environment:
       SPRING_PROFILES_ACTIVE: prod
       CONFIG_SERVER_URI: http://nexus-config-service:8888
       CONFIG_SERVER_USERNAME: ${CONFIG_SERVER_USERNAME:-nexus-config}
-      CONFIG_SERVER_PASSWORD: ${CONFIG_SERVER_PASSWORD:?required}
+      CONFIG_SERVER_PASSWORD_FILE: /run/secrets/config_server_password
       REDIS_HOST: nexus-redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_HOST: nexus-redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       SPRING_DATA_REDIS_TIMEOUT: 5s
       SPRING_DATA_REDIS_CONNECT_TIMEOUT: 5s
       SPRING_DATA_REDIS_LETTUCE_POOL_MAX_WAIT: 2000ms
@@ -1242,13 +1899,22 @@ services:
       ZIPKIN_ENDPOINT: http://nexus-zipkin:9411/api/v2/spans
       # JWKS endpoint: gateway validates JWT using identity service public key
       JWT_JWKS_URI: http://nexus-identity-service:8083/api/v1/auth/.well-known/jwks.json
+      COGNITO_USER_POOL_ID: ${COGNITO_USER_POOL_ID:-}
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
+      COGNITO_REGION: ${AWS_REGION:-us-east-1}
       # Allow localhost for dev/testing in addition to production domain
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:4200,https://app.nexusbank.com}
-      TRACING_SAMPLE_RATE: "0.05"
+      # Sampling rate now lives centrally in nexus-platform-config
+      # (management.tracing.sampling.probability) - not overridden per-service.
     ports:
       - "8080:8080"
     networks:
-      - nexus-network
+      - nexus-frontend
+      - nexus-backend
+      - nexus-data
+    secrets:
+      - config_server_password
+      - redis_password
     depends_on:
       nexus-redis:
         condition: service_healthy
@@ -1266,4 +1932,4 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    restart: on-failure
+    restart: "no"

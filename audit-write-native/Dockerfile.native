@@ -8,6 +8,7 @@ COPY --chown=nexus:nexus target/quarkus-app/lib/ /app/lib/
 COPY --chown=nexus:nexus target/quarkus-app/*.jar /app/
 COPY --chown=nexus:nexus target/quarkus-app/app/ /app/app/
 COPY --chown=nexus:nexus target/quarkus-app/quarkus/ /app/quarkus/
+COPY --chown=nexus:nexus --chmod=755 docker-entrypoint.sh /app/docker-entrypoint.sh
 
 EXPOSE 8096
 
@@ -16,6 +17,7 @@ HEALTHCHECK --interval=30s --timeout=5s \
     CMD wget --quiet --tries=1 --spider \
         http://localhost:8096/q/health || exit 1
 
-ENTRYPOINT ["java", \
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["java", \
     "-Djava.util.logging.manager=org.jboss.logmanager.LogManager", \
     "-jar", "/app/quarkus-run.jar"]

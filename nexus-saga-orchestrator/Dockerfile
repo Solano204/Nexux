@@ -5,6 +5,7 @@ USER nexus
 WORKDIR /app
 
 COPY --chown=nexus:nexus target/nexus-saga-orchestrator-1.0.0.jar app.jar
+COPY --chown=nexus:nexus --chmod=755 docker-entrypoint.sh /app/docker-entrypoint.sh
 
 HEALTHCHECK \
     --interval=30s \
@@ -16,7 +17,8 @@ HEALTHCHECK \
 
 EXPOSE 8095
 
-ENTRYPOINT ["java", \
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["java", \
     "-XX:+UseZGC", \
     "-XX:MaxGCPauseMillis=5", \
     "-Xms256m", \

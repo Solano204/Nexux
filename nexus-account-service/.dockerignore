@@ -1,0 +1,20 @@
+# The Dockerfile only COPYs the pre-built jar (host `mvn package` already
+# ran per CLAUDE.md's build workflow) — everything else here just slows
+# down build-context transfer, especially over the Docker Desktop VM
+# boundary on Windows/Git Bash.
+src/
+pom.xml
+*.md
+observability/
+scripts/
+.git/
+.idea/
+*.iml
+.vscode/
+*.log
+
+# Keep only the built jar out of target/ — exclude its contents via
+# target/* (not target/) so the negation below can still reach into it;
+# Docker skips descending into a directory excluded by name outright.
+target/*
+!target/*.jar
