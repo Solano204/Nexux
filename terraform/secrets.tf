@@ -6,10 +6,20 @@
 #   - nexus-health-monitor-lambda→ checks /actuator/health on every service
 #   - nexus-payment-processor-lambda → HTTP bridge mode to API Gateway
 #
-# Lambdas send it as the `X-Plane-Bridge-Secret` header. The receiving
-# Plane A service must validate that header against this same value —
-# none of the current docker-compose-prod.yml services do this yet, so this
-# is the value to wire into whichever service ends up validating the header.
+# Lambdas send it as the `X-Plane-Bridge-Secret` header. Real state per
+# integration, audited in CHANGES-BESTPRACTICES/13_REST_API_DESIGN_CHANGES.md:
+#   - nexus-payment-processor-lambda → nexus-transaction-service: validated
+#     (InternalTransactionController.bridgePublish), already correct before
+#     this file's comment was last updated.
+#   - nexus-auth-lambda → nexus-identity-service: validated
+#     (InternalController.requirePlaneBridgeSecret). Same secret value also
+#     needs to go into nexus-identity-service's ./secrets/plane_bridge_secret.txt.
+#   - nexus-health-monitor-lambda → every service's /actuator/health: not
+#     validated, and shouldn't be — that endpoint is intentionally public
+#     everywhere (Docker's own HEALTHCHECK hits it without this header).
+#   - nexus-fraud-alert-lambda → no HTTP call back into Plane A exists in
+#     its code at all; this line describes an integration that was never
+#     built, not a validation gap.
 # ─────────────────────────────────────────────────────────────────────────────
 
 resource "random_password" "plane_bridge_secret" {

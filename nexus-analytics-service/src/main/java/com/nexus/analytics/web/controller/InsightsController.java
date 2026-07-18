@@ -1,6 +1,7 @@
 package com.nexus.analytics.web.controller;
 
 import com.nexus.analytics.application.InsightGenerationService;
+import com.nexus.analytics.domain.exception.UnauthorizedException;
 import com.nexus.analytics.domain.model.FinancialInsight;
 import com.nexus.analytics.infrastructure.redis.AnalyticsRedisRepository;
 import jakarta.servlet.http.HttpServletRequest;
@@ -52,7 +53,7 @@ public class InsightsController {
 
     private String extractUserId(HttpServletRequest request) {
         String userId = request.getHeader("X-User-Id");
-        if (userId == null) throw new RuntimeException("Authentication required");
+        if (userId == null) throw new UnauthorizedException("Authentication required");
         return userId;
     }
 }

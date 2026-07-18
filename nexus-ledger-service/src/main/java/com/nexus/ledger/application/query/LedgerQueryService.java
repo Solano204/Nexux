@@ -1,7 +1,11 @@
 package com.nexus.ledger.application.query;
 
+import com.nexus.ledger.domain.exception.AccessDeniedException;
+import com.nexus.ledger.domain.exception.AccountNotFoundException;
+import com.nexus.ledger.domain.model.ChartOfAccount;
 import com.nexus.ledger.domain.model.LedgerEntry;
 import com.nexus.ledger.infrastructure.mongodb.*;
+import com.nexus.ledger.infrastructure.persistence.ChartOfAccountRepository;
 import com.nexus.ledger.infrastructure.persistence.LedgerEntryRepository;
 import com.nexus.ledger.web.dto.response.*;
 import io.micrometer.observation.Observation;
@@ -39,7 +43,55 @@ public class LedgerQueryService {
     private final LedgerEntryRepository entryRepository;
     private final AccountLedgerSummaryRepository summaryRepository;
     private final PostingDocumentRepository postingDocRepository;
+    private final ChartOfAccountRepository coaRepository;
     private final ObservationRegistry observationRegistry;
+
+    /**
+     * accountId is a guessable/enumerable UUID, not a capability token —
+     * every accountId-scoped read must verify ownership server-side.
+     * userId comes from account-service's accounts.created event
+     * (Debezium outbox), replicated locally into chart_of_accounts by
+     * AccountCreatedConsumer — no synchronous call to account-service.
+     */
+    public void verifyAccountOwnership(UUID accountId, UUID requestingUserId) {
+        ChartOfAccount coa = coaRepository.findByAccountIdAndIsActiveTrue(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(
+                        "Account not found: " + accountId));
+
+        if (coa.getUserId() == null || !coa.getUserId().equals(requestingUserId)) {
+            throw new AccessDeniedException(
+                    "Account does not belong to requesting user");
+        }
+    }
+
+    /**
+     * A posting has two legs (debit + credit), possibly on different
+     * accounts (e.g. a transfer) — the requesting user only needs to own
+     * one side of it to be allowed to see the posting.
+     */
+    public void verifyPostingOwnership(UUID postingId, UUID requestingUserId) {
+        List<UUID> accountIds = entryRepository
+                .findByPostingIdOrderByEntryNumberAsc(postingId)
+                .stream()
+                .map(LedgerEntry::getAccountId)
+                .distinct()
+                .toList();
+
+        if (accountIds.isEmpty()) {
+            throw new AccountNotFoundException("Posting not found: " + postingId);
+        }
+
+        boolean owned = accountIds.stream().anyMatch(id ->
+                coaRepository.findByAccountIdAndIsActiveTrue(id)
+                        .map(ChartOfAccount::getUserId)
+                        .map(requestingUserId::equals)
+                        .orElse(false));
+
+        if (!owned) {
+            throw new AccessDeniedException(
+                    "Posting does not belong to requesting user");
+        }
+    }
 
     /**
      * Current balance — reads from MongoDB summary (O(1)).

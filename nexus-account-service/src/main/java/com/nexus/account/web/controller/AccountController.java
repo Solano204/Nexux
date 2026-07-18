@@ -56,9 +56,10 @@ public class AccountController {
      */
     @GetMapping("/{accountId}/balance")
     public ResponseEntity<?> getBalance(
-            @PathVariable UUID accountId) {
-
-        var cached = queryService.getBalanceCached(accountId);
+            @PathVariable UUID accountId,
+            HttpServletRequest request) {
+        UUID userId = extractUserId(request);
+        var cached = queryService.getBalanceCached(accountId, userId);
 
         if (cached == null) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
@@ -75,15 +76,19 @@ public class AccountController {
     @GetMapping("/{accountId}/events")
     public ResponseEntity<Page<AccountEventResponse>> getAccountEvents(
             @PathVariable UUID accountId,
-            Pageable pageable) {
+            Pageable pageable,
+            HttpServletRequest request) {
+        UUID userId = extractUserId(request);
         return ResponseEntity.ok(
-                queryService.getAccountEvents(accountId, pageable));
+                queryService.getAccountEvents(accountId, userId, pageable));
     }
 
     @GetMapping("/{accountId}/analytics")
     public ResponseEntity<?> getAccountAnalytics(
-            @PathVariable UUID accountId) {
-        var analytics = queryService.getAnalytics(accountId);
+            @PathVariable UUID accountId,
+            HttpServletRequest request) {
+        UUID userId = extractUserId(request);
+        var analytics = queryService.getAnalytics(accountId, userId);
         if (analytics == null) {
             return ResponseEntity.notFound().build();
         }

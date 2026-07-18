@@ -17,7 +17,7 @@ forward; once the import below is confirmed working, delete `nexus-infra/`.
 | `iam.tf` | Shared IAM user `nexus-platform-svc` (used by docker-compose services for S3/SQS/SNS) |
 | `s3.tf` | KYC documents S3 bucket |
 | `sqs.tf` | KYC pending queue + DLQ |
-| `secrets.tf` | `nexus/plane-bridge-secret` in Secrets Manager |
+| `secrets.tf` | `nexus-josue/plane-bridge-secret` in Secrets Manager |
 | `lambda-auth.tf` | Cognito pool/client, 2 DynamoDB tables, HTTP API Gateway, `nexus-auth-lambda` |
 | `lambda-fraud-alert.tf` | SQS queue+DLQ, KMS key, 2 DynamoDB tables, 2 SNS topics, `nexus-fraud-alert-lambda` |
 | `lambda-health-monitor.tf` | 3 SNS topics, EventBridge 5-min schedule, `nexus-health-monitor-lambda` |

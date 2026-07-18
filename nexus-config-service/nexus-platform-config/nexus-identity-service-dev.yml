@@ -10,3 +10,7 @@ spring:
       password: ""
   kafka:
     bootstrap-servers: localhost:19092
+
+nexus:
+  # Same dev default transaction-service uses for the same secret.
+  plane-bridge-secret: dev-bridge-secret

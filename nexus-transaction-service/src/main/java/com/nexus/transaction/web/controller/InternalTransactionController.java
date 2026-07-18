@@ -138,7 +138,9 @@ public class InternalTransactionController {
             @RequestBody String payload,
             @RequestHeader(value = "X-Plane-Bridge-Secret", required = false) String secret) {
 
-        if (planeBridgeSecret.isBlank() || !planeBridgeSecret.equals(secret)) {
+        if (planeBridgeSecret.isBlank() || secret == null || !java.security.MessageDigest.isEqual(
+                secret.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                planeBridgeSecret.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
             log.warn("Bridge publish rejected: invalid or missing X-Plane-Bridge-Secret");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("error", "unauthorized"));

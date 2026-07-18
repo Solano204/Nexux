@@ -1,5 +1,6 @@
 package com.nexus.notification.web.controller;
 
+import com.nexus.notification.domain.exception.UnauthorizedException;
 import com.nexus.notification.infrastructure.mongodb.NotificationRepository;
 import com.nexus.notification.infrastructure.redis.NotificationRedisRepository;
 import jakarta.servlet.http.HttpServletRequest;
@@ -73,7 +74,7 @@ public class NotificationController {
     private String extractUserId(HttpServletRequest request) {
         String userId = request.getHeader("X-User-Id");
         if (userId == null)
-            throw new RuntimeException("Authentication required");
+            throw new UnauthorizedException("Authentication required");
         return userId;
     }
 }

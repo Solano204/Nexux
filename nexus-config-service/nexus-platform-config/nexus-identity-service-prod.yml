@@ -22,6 +22,12 @@ spring:
           max-wait: 3s
 
 nexus:
+  # Same property transaction-service uses for the same secret — validates
+  # nexus-auth-lambda's X-Plane-Bridge-Secret on
+  # /internal/v1/users/{userId}/kyc/status (see InternalController).
+  # Blank default fails closed — see requirePlaneBridgeSecret.
+  plane-bridge-secret: ${PLANE_BRIDGE_SECRET:}
+
   identity:
     jwt:
       access-token-expiry-minutes: 60

@@ -40,7 +40,7 @@ Globals:
       Variables:
         LOCAL_PLANE_BASE_URL: !Ref LocalPlaneBaseUrl
         PLANE_BRIDGE_SECRET: !Sub
-          "{{resolve:secretsmanager:nexus/plane-bridge-secret:SecretString:secret}}"
+          "{{resolve:secretsmanager:nexus-josue/plane-bridge-secret:SecretString:secret}}"
         CRITICAL_ALERT_TOPIC_ARN: !Ref HealthAlertsCriticalTopic
         STANDARD_ALERT_TOPIC_ARN: !Ref HealthAlertsStandardTopic
         CLOUDWATCH_NAMESPACE: Nexus/HealthMonitor

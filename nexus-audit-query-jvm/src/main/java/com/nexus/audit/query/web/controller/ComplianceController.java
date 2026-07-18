@@ -6,14 +6,17 @@ import com.nexus.audit.query.application.model.ComplianceQuery;
 import com.nexus.audit.query.application.model.ComplianceQueryRequest;
 import com.nexus.audit.query.application.model.ComplianceQueryResult;
 import com.nexus.audit.query.application.model.QueryType;
+import com.nexus.audit.query.domain.exception.ForbiddenException;
+import com.nexus.audit.query.domain.exception.UnauthorizedException;
 import com.nexus.audit.query.infrastructure.mongodb.ComplianceReportRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.util.Arrays;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -42,6 +45,7 @@ public class ComplianceController {
             @RequestBody ComplianceQueryRequest request,
             HttpServletRequest httpRequest) {
 
+        requireComplianceRole(httpRequest);
         String auditorId = extractUserId(httpRequest);
 
         ComplianceQuery query = ComplianceQuery.builder()
@@ -70,7 +74,9 @@ public class ComplianceController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size,
             @RequestParam(required = false) String startDate,
-            @RequestParam(required = false) String endDate) {
+            @RequestParam(required = false) String endDate,
+            HttpServletRequest httpRequest) {
+        requireComplianceRole(httpRequest);
 
         return ResponseEntity.ok(
                 searchService.getUserTimeline(
@@ -82,7 +88,9 @@ public class ComplianceController {
             @RequestParam(defaultValue = "WARNING,CRITICAL")
             String severity,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest httpRequest) {
+        requireComplianceRole(httpRequest);
         return ResponseEntity.ok(
                 searchService.getActiveAlerts(severity, page, size));
     }
@@ -90,7 +98,9 @@ public class ComplianceController {
     @GetMapping("/compliance/reports")
     public ResponseEntity<?> getReports(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest httpRequest) {
+        requireComplianceRole(httpRequest);
         return ResponseEntity.ok(
                 reportRepository.findAll(
                         org.springframework.data.domain.PageRequest
@@ -99,8 +109,21 @@ public class ComplianceController {
 
     private String extractUserId(HttpServletRequest request) {
         String userId = request.getHeader("X-User-Id");
-        if (userId == null) throw new RuntimeException(
+        if (userId == null) throw new UnauthorizedException(
                 "Authentication required");
         return userId;
+    }
+
+    private void requireComplianceRole(HttpServletRequest request) {
+        extractUserId(request);
+
+        String rolesHeader = request.getHeader("X-User-Roles");
+        List<String> roles = rolesHeader != null
+                ? Arrays.asList(rolesHeader.split(","))
+                : List.of();
+        if (!roles.contains("COMPLIANCE_OFFICER") && !roles.contains("ADMIN")) {
+            throw new ForbiddenException(
+                    "COMPLIANCE_OFFICER or ADMIN role required");
+        }
     }
 }

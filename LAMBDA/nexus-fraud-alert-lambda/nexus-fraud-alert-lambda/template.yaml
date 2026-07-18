@@ -40,7 +40,7 @@ Globals:
         ENVIRONMENT: !Ref Environment
         LOCAL_PLANE_NOTIFICATION_URL: !Ref LocalPlaneNotificationUrl
         PLANE_BRIDGE_SECRET: !Sub
-          "{{resolve:secretsmanager:nexus/plane-bridge-secret:SecretString:secret}}"
+          "{{resolve:secretsmanager:nexus-josue/plane-bridge-secret:SecretString:secret}}"
 
 Resources:
 

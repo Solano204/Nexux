@@ -168,6 +168,8 @@ secrets:
     file: ./secrets/mongo_express_password.txt
   grafana_password:
     file: ./secrets/grafana_password.txt
+  plane_bridge_secret:
+    file: ./secrets/plane_bridge_secret.txt
 
 # ================================================================
 # INFRASTRUCTURE SERVICES (no profiles — always start first)
@@ -1023,6 +1025,13 @@ services:
       COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
       COGNITO_REGION: ${AWS_REGION:-us-east-1}
       OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
+      # Validates X-Plane-Bridge-Secret on GET /internal/v1/users/{id}/kyc/status
+      # — nexus-auth-lambda calls this from outside the Docker network (AWS),
+      # so RemoteAddr alone isn't enough there. Same secret Terraform already
+      # provisions (terraform/secrets.tf) and injects into the Lambda's env —
+      # copy that value into ./secrets/plane_bridge_secret.txt, don't generate
+      # a new one here. See CHANGES-BESTPRACTICES/13_REST_API_DESIGN_CHANGES.md.
+      PLANE_BRIDGE_SECRET_FILE: /run/secrets/plane_bridge_secret
       # TEMP — debugging missing-span investigation; remove once resolved
       LOGGING_LEVEL_IO_MICROMETER: DEBUG
     volumes:
@@ -1040,6 +1049,7 @@ services:
       - aws_access_key_id
       - aws_secret_access_key
       - openai_api_key
+      - plane_bridge_secret
     depends_on:
       nexus-postgres:
         condition: service_healthy

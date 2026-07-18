@@ -1,6 +1,7 @@
 package com.nexus.ledger.web.controller;
 
 import com.nexus.ledger.application.query.LedgerQueryService;
+import com.nexus.ledger.domain.exception.UnauthorizedException;
 import com.nexus.ledger.infrastructure.ai.LedgerExplainerService;
 import com.nexus.ledger.web.dto.request.ExplainRequest;
 import jakarta.servlet.http.HttpServletRequest;
@@ -31,7 +32,9 @@ public class LedgerController {
 
     @GetMapping("/accounts/{accountId}/balance")
     public ResponseEntity<?> getBalance(
-            @PathVariable UUID accountId) {
+            @PathVariable UUID accountId,
+            HttpServletRequest httpRequest) {
+        queryService.verifyAccountOwnership(accountId, extractUserId(httpRequest));
         var balance = queryService.getCurrentBalance(accountId);
         return ResponseEntity.ok(
                 java.util.Map.of(
@@ -45,7 +48,9 @@ public class LedgerController {
     public ResponseEntity<?> getEntries(
             @PathVariable UUID accountId,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest httpRequest) {
+        queryService.verifyAccountOwnership(accountId, extractUserId(httpRequest));
         return ResponseEntity.ok(
                 queryService.getFullHistory(accountId, page, size));
     }
@@ -54,14 +59,18 @@ public class LedgerController {
     public ResponseEntity<?> getMonthlySummary(
             @PathVariable UUID accountId,
             @RequestParam int year,
-            @RequestParam int month) {
+            @RequestParam int month,
+            HttpServletRequest httpRequest) {
+        queryService.verifyAccountOwnership(accountId, extractUserId(httpRequest));
         return ResponseEntity.ok(
                 queryService.getMonthlySummary(accountId, year, month));
     }
 
     @GetMapping("/transactions/{transactionId}/posting")
     public ResponseEntity<?> getPosting(
-            @PathVariable UUID transactionId) {
+            @PathVariable UUID transactionId,
+            HttpServletRequest httpRequest) {
+        queryService.verifyPostingOwnership(transactionId, extractUserId(httpRequest));
         // Find posting by transaction ID
         var detail = queryService.getPostingDetail(transactionId);
         if (detail == null) return ResponseEntity.notFound().build();
@@ -84,6 +93,7 @@ public class LedgerController {
             HttpServletRequest httpRequest) {
 
         UUID userId = extractUserId(httpRequest);
+        queryService.verifyAccountOwnership(accountId, userId);
 
         String sessionId = request.sessionId() != null
                 ? request.sessionId()
@@ -95,7 +105,7 @@ public class LedgerController {
 
     private UUID extractUserId(HttpServletRequest request) {
         String userId = request.getHeader("X-User-Id");
-        if (userId == null) throw new RuntimeException(
+        if (userId == null) throw new UnauthorizedException(
                 "Authentication required");
         return UUID.fromString(userId);
     }

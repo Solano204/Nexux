@@ -56,27 +56,16 @@ public class AccountQueryService {
 
     public AccountDetailResponse getAccountDetail(UUID accountId,
                                                   UUID requestingUserId) {
-        Account account = accountRepository.findById(accountId)
-                .orElseThrow(() -> new AccountNotFoundException(
-                        "Account not found: " + accountId));
-
-        if (!account.getUserId().equals(requestingUserId)) {
-            throw new AccessDeniedException(
-                    "Account does not belong to requesting user");
-        }
-
-        return toDetail(account);
+        return toDetail(verifyOwnership(accountId, requestingUserId));
     }
 
     public BalanceCacheRepository.BalanceCacheEntry getBalanceCached(
-            UUID accountId) {
+            UUID accountId, UUID requestingUserId) {
+        Account account = verifyOwnership(accountId, requestingUserId);
+
         BalanceCacheRepository.BalanceCacheEntry cached =
                 balanceCacheRepository.getBalance(accountId);
         if (cached != null) return cached;
-
-        Account account = accountRepository.findById(accountId)
-                .orElseThrow(() -> new AccountNotFoundException(
-                        "Account not found: " + accountId));
 
         var entry = new BalanceCacheRepository.BalanceCacheEntry(
                 account.getAvailableBalance(),
@@ -90,16 +79,36 @@ public class AccountQueryService {
         return entry;
     }
 
-    public AccountAnalyticsDocument getAnalytics(UUID accountId) {
+    public AccountAnalyticsDocument getAnalytics(UUID accountId, UUID requestingUserId) {
+        verifyOwnership(accountId, requestingUserId);
         return analyticsRepository.findByAccountId(accountId.toString())
                 .orElse(null);
     }
 
     public Page<AccountEventResponse> getAccountEvents(
-            UUID accountId, Pageable pageable) {
+            UUID accountId, UUID requestingUserId, Pageable pageable) {
+        verifyOwnership(accountId, requestingUserId);
         return accountEventRepository
                 .findByAccountIdOrderByOccurredAtDesc(accountId, pageable)
                 .map(this::toEventResponse);
+    }
+
+    /**
+     * Every accountId-scoped read must go through this — accountId is a
+     * guessable/enumerable UUID, not a capability token, so ownership has
+     * to be checked server-side on each call.
+     */
+    public Account verifyOwnership(UUID accountId, UUID requestingUserId) {
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(
+                        "Account not found: " + accountId));
+
+        if (!account.getUserId().equals(requestingUserId)) {
+            throw new AccessDeniedException(
+                    "Account does not belong to requesting user");
+        }
+
+        return account;
     }
 
     private AccountSummaryResponse toSummary(Account a) {

@@ -14,6 +14,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import jakarta.servlet.http.HttpServletResponse;
 import java.net.URI;
 import java.time.Instant;
 
@@ -220,6 +221,38 @@ public class GlobalExceptionHandler {
     }
 
     // ══════════════════════════════════════════════════════════
+    // AUTH — 401 / 403
+    // ══════════════════════════════════════════════════════════
+
+    @ExceptionHandler(UnauthorizedException.class)
+    public ResponseEntity<ProblemDetail> handleUnauthorized(
+            UnauthorizedException ex) {
+        log.warn("Unauthorized: {}", ex.getMessage());
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.UNAUTHORIZED, ex.getMessage());
+        problem.setTitle("Unauthorized");
+        problem.setType(URI.create("https://nexus.com/errors/unauthorized"));
+        problem.setProperty("errorCode", "UNAUTHORIZED");
+        problem.setProperty("timestamp", Instant.now().toString());
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(problem);
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ProblemDetail> handleAccessDenied(
+            AccessDeniedException ex) {
+        log.warn("Access denied: {}", ex.getMessage());
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.FORBIDDEN, ex.getMessage());
+        problem.setTitle("Access Denied");
+        problem.setType(URI.create("https://nexus.com/errors/access-denied"));
+        problem.setProperty("errorCode", "ACCESS_DENIED");
+        problem.setProperty("timestamp", Instant.now().toString());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(problem);
+    }
+
+    // ══════════════════════════════════════════════════════════
     // VALIDATION & GENERAL EXCEPTIONS
     // ══════════════════════════════════════════════════════════
 
@@ -276,8 +309,15 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ProblemDetail> handleGeneral(Exception ex) {
+    public ResponseEntity<ProblemDetail> handleGeneral(Exception ex, HttpServletResponse response) {
         log.error("Unhandled exception: {}", ex.getMessage(), ex);
+
+        // Response already committed to a non-JSON content type (e.g. an
+        // /actuator/prometheus scrape aborted mid-write) — writing a
+        // ProblemDetail here would only raise a secondary conversion error.
+        if (response.isCommitted()) {
+            return null;
+        }
 
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
                 HttpStatus.INTERNAL_SERVER_ERROR,

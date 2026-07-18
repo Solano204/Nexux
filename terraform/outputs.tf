@@ -41,8 +41,12 @@ output "env_block" {
 
     # ─── Plane bridge secret ──────────────────────────────────────
     # Lambdas send this as the X-Plane-Bridge-Secret header when calling back
-    # into docker-compose. No current Plane A service validates it yet — wire
-    # this in whichever service ends up handling /internal/v1/... callbacks.
+    # into docker-compose. nexus-identity-service validates it on
+    # /internal/v1/users/{userId}/kyc/status — this same value also needs to
+    # go into nexus-identity-service's ./secrets/plane_bridge_secret.txt
+    # (Docker secret file, not a plain env var — see docker-compose-prod.yml).
+    # The other 3 Lambda integrations (see terraform/secrets.tf) don't
+    # validate it yet.
     PLANE_BRIDGE_SECRET=${local.plane_bridge_secret_value}
 
   EOT

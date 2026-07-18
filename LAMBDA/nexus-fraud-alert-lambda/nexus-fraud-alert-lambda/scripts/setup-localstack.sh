@@ -93,7 +93,7 @@ aws --endpoint-url="${ENDPOINT}" --region="${REGION}" \
 # ── Secrets Manager ─────────────────────────────────────────
 aws --endpoint-url="${ENDPOINT}" --region="${REGION}" \
     secretsmanager create-secret \
-    --name "nexus/plane-bridge-secret" \
+    --name "nexus-josue/plane-bridge-secret" \
     --secret-string '{"secret":"dev-plane-bridge-secret-change-in-prod"}' \
     2>/dev/null || true
 

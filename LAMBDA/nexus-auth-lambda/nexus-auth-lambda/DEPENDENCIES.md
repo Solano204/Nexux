@@ -130,7 +130,7 @@ IAM permissions needed: Lambda, DynamoDB, Cognito, CloudFormation, IAM, S3, Secr
 
 The KYC status endpoint (`GET /auth/kyc-status/{userId}`) calls out to `nexus-identity-service` (the Spring Boot service running in Docker). This is the "local plane" — the Lambda in AWS bridges to infrastructure running on-premise/in Docker.
 
-The bridge is authenticated with a shared secret stored in AWS Secrets Manager under `nexus/plane-bridge-secret`. The `LocalPlaneBridgeClient` retrieves this on initialization (snapshot captures it) and re-fetches after SnapStart restore.
+The bridge is authenticated with a shared secret stored in AWS Secrets Manager under `nexus-josue/plane-bridge-secret`. The `LocalPlaneBridgeClient` retrieves this on initialization (snapshot captures it) and re-fetches after SnapStart restore.
 
 In `events/env.json` for local dev, `LOCAL_PLANE_IDENTITY_URL` points to `host.docker.internal:8083` — which resolves to the Spring Boot service running locally on your machine.
 

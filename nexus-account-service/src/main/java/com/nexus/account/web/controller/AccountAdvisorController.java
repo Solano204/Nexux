@@ -1,5 +1,6 @@
 package com.nexus.account.web.controller;
 
+import com.nexus.account.application.query.AccountQueryService;
 import com.nexus.account.domain.exception.UnauthorizedException;
 import com.nexus.account.infrastructure.ai.AccountAdvisorService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -19,6 +20,7 @@ import java.util.UUID;
 public class AccountAdvisorController {
 
     private final AccountAdvisorService advisorService;
+    private final AccountQueryService queryService;
 
     @PostMapping(
             value = "/{accountId}/advisor/chat",
@@ -30,6 +32,7 @@ public class AccountAdvisorController {
             HttpServletRequest httpRequest) {
 
         UUID userId = extractUserId(httpRequest);
+        queryService.verifyOwnership(accountId, userId);
 
         String sessionId = request.sessionId() != null
                 ? request.sessionId()
@@ -62,7 +65,10 @@ public class AccountAdvisorController {
 
     @GetMapping("/{accountId}/advisor/insights")
     public AccountAdvisorService.FinancialAdviceResponse getInsights(
-            @PathVariable UUID accountId) {
+            @PathVariable UUID accountId,
+            HttpServletRequest httpRequest) {
+        UUID userId = extractUserId(httpRequest);
+        queryService.verifyOwnership(accountId, userId);
         return advisorService.getProactiveAdvice(accountId);
     }
 

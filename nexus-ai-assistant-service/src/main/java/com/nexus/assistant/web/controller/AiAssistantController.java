@@ -2,6 +2,7 @@ package com.nexus.assistant.web.controller;
 
 import com.nexus.assistant.application.ChatService;
 import com.nexus.assistant.application.DocumentAnalysisService;
+import com.nexus.assistant.domain.exception.UnauthorizedException;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.ByteArrayResource;
@@ -76,7 +77,7 @@ public class AiAssistantController {
     private String extractUserId(HttpServletRequest request) {
         String userId = request.getHeader("X-User-Id");
         if (userId == null)
-            throw new RuntimeException("Authentication required");
+            throw new UnauthorizedException("Authentication required");
         return userId;
     }
 }
