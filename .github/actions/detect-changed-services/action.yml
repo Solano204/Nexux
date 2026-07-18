@@ -1,0 +1,41 @@
+name: Detect changed Nexus services
+description: >
+  Path-filters the current push/PR against every Spring Boot service
+  directory in the monorepo, plus nexus-tracing-common (the shared lib
+  every service depends on — see each workflow's own expand-shared-changes
+  step for what happens when it changes). Single source of truth for the
+  filter list — ci-pr.yml, ci-develop.yml, and cd-staging.yml all called
+  this same list copy-pasted three times before; a new service now only
+  needs adding here. Deliberately excludes audit-write-native: it's a
+  standalone Quarkus/GraalVM module outside the root pom.xml's <modules>
+  reactor (see root pom.xml's comment), so none of the three consumers of
+  this action — which all run `mvn -pl <service> --also-make` assuming
+  every matrix entry is a reactor module — can build it this way. It needs
+  its own dedicated job if/when CI coverage for it is added.
+outputs:
+  services:
+    description: JSON array of changed service directory names (dorny/paths-filter changes output)
+    value: ${{ steps.filter.outputs.changes }}
+runs:
+  using: composite
+  steps:
+    - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
+      id: filter
+      with:
+        filters: |
+          nexus-config-service: ['nexus-config-service/**']
+          nexus-discovery-service: ['nexus-discovery-service/**']
+          nexus-identity-service: ['nexus-identity-service/**']
+          nexus-account-service: ['nexus-account-service/**']
+          nexus-transaction-service: ['nexus-transaction-service/**']
+          nexus-fraud-service: ['nexus-fraud-service/**']
+          nexus-ledger-service: ['nexus-ledger-service/**']
+          nexus-notification-service: ['nexus-notification-service/**']
+          nexus-ai-assistant-service: ['nexus-ai-assistant-service/**']
+          nexus-ai-kyc-service: ['nexus-ai-kyc-service/**']
+          nexus-analytics-service: ['nexus-analytics-service/**']
+          nexus-risk-scoring-service: ['nexus-risk-scoring-service/**']
+          nexus-saga-orchestrator: ['nexus-saga-orchestrator/**']
+          nexus-audit-query-jvm: ['nexus-audit-query-jvm/**']
+          nexus-api-gateway: ['nexus-api-gateway/**']
+          nexus-tracing-common: ['nexus-tracing-common/**']

@@ -1,0 +1,103 @@
+name: Release — PR into main, tag, prod deploy
+
+# Master prompt 8.2's final tier. Same registry/deploy-target caveat as
+# cd-staging.yml — flagged there, not repeated as a guess here. Confirmed
+# with Carlos (2026-07-18): no remote prod host wanted yet, so the deploy
+# step below stays a placeholder. The E2E-on-PR-into-main and the tagged
+# GitHub Release itself are both real and worth keeping regardless of
+# whether a remote deploy destination ever exists.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false # never cancel a prod tag/release job mid-flight
+
+permissions:
+  contents: read
+
+jobs:
+  full-e2e:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Verify source branch is release/* or hotfix/*
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          if [[ "$BRANCH" != release/* && "$BRANCH" != hotfix/* ]]; then
+            echo "PRs into main must come from release/* or hotfix/* — see CONTRIBUTING.md. Got: $BRANCH"
+            exit 1
+          fi
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Full test pyramid, all services
+        run: mvn -B verify
+      - name: Full E2E suite through nexus-api-gateway
+        run: echo "Same JMeter plan as cd-staging.yml's smoke test, full thread/loop counts this time, run against a prod-mirroring compose stack — needs docker-compose-prod.yml itself brought up in CI, which needs the secrets in the Environments section below wired to real values first."
+
+  # Manual approval gate: configure a "production" GitHub Environment with
+  # required reviewers (Settings → Environments → production → Required
+  # reviewers) — this job won't run until someone approves it there.
+  #
+  # IMPORTANT (CHANGES-BESTPRACTICES/16, Fase 6): if that Environment does
+  # NOT exist yet in the repo settings, GitHub auto-creates it on first
+  # reference with NO protection rules — meaning this "approval gate" would
+  # silently approve itself with zero human involvement the first time this
+  # job runs, exactly the opposite of what it's for. Confirmed with Carlos
+  # this Environment is not configured yet — create it in Settings →
+  # Environments → New environment → name it exactly "production" → add
+  # yourself as a required reviewer BEFORE the first PR into main from a
+  # release/* or hotfix/* branch, not after.
+  approval-gate:
+    if: github.event_name == 'pull_request'
+    needs: full-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 1440 # up to 24h waiting on manual approval — this is a human-gate job, not compute
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - run: echo "Approved for merge to main"
+
+  tag-and-release:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: write # needs to create the GitHub Release + tag
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - name: Determine version tag
+        id: version
+        run: echo "tag=v$(date +%Y.%m.%d)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        # Placeholder scheme — no VERSION file or existing tag convention
+        # found in this repo (checked `git tag -l`, none exist yet). Real
+        # semver (vX.Y.Z) needs a decision on where the source of truth for
+        # the version number lives (root pom.xml's <version>1.0.0</version>
+        # is currently the same across every module and hasn't changed
+        # since this session started looking at the codebase) - flagging
+        # rather than inventing a bump policy.
+      - name: Create GitHub Release with changelog from conventional commits
+        uses: mikepenz/release-changelog-builder-action@32e3c96f29a6532607f638797455e9e98cfc703d # v4
+        with:
+          tag: ${{ steps.version.outputs.tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build + push version-tagged + latest images, deploy to prod
+        run: |
+          echo "Same registry-push pattern as cd-staging.yml, tagged ${{ steps.version.outputs.tag }} and latest."
+          echo "Prod deploy target - same flag as cd-staging.yml's deploy-staging step, no deploy mechanism defined in this repo yet. Confirmed with Carlos 2026-07-18: intentionally not wanted yet."

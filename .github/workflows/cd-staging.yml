@@ -1,0 +1,93 @@
+name: CD — build, push, deploy to staging
+
+# Master prompt 8.2 third tier. Registry is a placeholder
+# (${{ vars.CONTAINER_REGISTRY }}) - this repo has no registry configured
+# anywhere I could find (no GITHUB_TOKEN-based GHCR push, no ECR reference
+# in docker-compose-prod.yml). Set a repo/environment variable named
+# CONTAINER_REGISTRY before this workflow can actually push anything -
+# flagging rather than guessing ghcr.io vs ECR vs Docker Hub.
+#
+# Confirmed directly with Carlos (2026-07-18): no remote staging/production
+# host exists today, docker-compose-prod.yml is run manually/locally, and
+# no CD to a remote destination is wanted yet. This workflow stays as an
+# honest placeholder — hardened structurally (permissions, pinned actions,
+# timeouts) so it's not a security gap the day it does become real, but the
+# deploy/e2e steps are left as explicit placeholders rather than invented.
+# It also cannot fire at all today: no `develop` branch exists (see
+# CONTRIBUTING.md), and this triggers on push to develop only.
+
+on:
+  push:
+    branches: [develop]
+
+concurrency:
+  group: cd-staging-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      services: ${{ steps.filter.outputs.services }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/detect-changed-services
+        id: filter
+
+  build-push:
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.services != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+      - run: mvn -B clean package -DskipTests -pl ${{ matrix.service }} --also-make
+      - name: Build + tag image
+        run: docker build -t ${{ vars.CONTAINER_REGISTRY }}/nexus/${{ matrix.service }}:develop-${{ github.sha }} ${{ matrix.service }}
+      - name: Push image
+        run: |
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login ${{ vars.CONTAINER_REGISTRY }} -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+          docker push ${{ vars.CONTAINER_REGISTRY }}/nexus/${{ matrix.service }}:develop-${{ github.sha }}
+
+  deploy-staging:
+    needs: build-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Deploy to staging host
+        run: |
+          echo "Placeholder — actual deploy mechanism (SSH+compose pull, or a staging docker-compose stack per master prompt 8.2) isn't defined anywhere in this repo today. docker-compose-prod.yml is the only compose file that exists; there's no docker-compose-staging.yml. Needs one before this step can do anything real — flagging rather than inventing a deploy target. Confirmed with Carlos 2026-07-18: no remote host exists yet, this is intentionally left undone."
+
+  e2e-smoke:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Run JMeter smoke test against staging
+        run: |
+          echo "Uses jmeter/nexus-load-test.jmx (Part 6) with -Jgateway.host pointed at the staging host and low thread/loop counts (registration.threads=1, transaction.threads=1) for a smoke run, not a load run."
+          echo "Placeholder: needs STAGING_GATEWAY_HOST as a repo/environment variable once staging actually exists (see deploy-staging above)."

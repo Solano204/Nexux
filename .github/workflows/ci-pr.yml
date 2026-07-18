@@ -1,0 +1,139 @@
+name: CI — lint & unit/slice tests (path-filtered)
+
+# Master prompt 8.2: "On every push to any branch: lint + unit tests + slice
+# tests for the changed service(s) only." Path filtering via the shared
+# detect-changed-services composite action (.github/actions/) rather than
+# duplicating the filter list in three workflows. Uses JDK 25 (matches
+# nexus-tracing-common/pom.xml's <release>25</release> - confirmed this
+# session while rebuilding services for the observability work; a wrong JDK
+# here would fail every job the same way local `mvn` builds failed until
+# JAVA_HOME was pointed at JDK 25 explicitly).
+#
+# Hardened per CHANGES-BESTPRACTICES/16_CICD_GITHUB_ACTIONS_CHANGES.md:
+# explicit minimal permissions per job, every third-party action pinned by
+# commit SHA (not a mutable tag), timeout-minutes on every job so a hung
+# runner can't burn the account's Actions minutes indefinitely, and a
+# concurrency group so three quick commits to the same branch don't run
+# three full builds in parallel - only the latest matters, the rest cancel.
+
+on:
+  push:
+    branches-ignore:
+      - main
+  workflow_dispatch: {} # manual re-run from the Actions tab without needing a new commit
+
+concurrency:
+  group: ci-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      services: ${{ steps.filter.outputs.services }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/detect-changed-services
+        id: filter
+
+  # Every service depends on nexus-tracing-common (confirmed this session:
+  # 13 of 15 Spring Boot services declare it as a dependency) - a change to
+  # the shared module has to trigger every downstream service's tests, not
+  # just itself. Expanded here rather than left for each job to guess.
+  expand-shared-changes:
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      services: ${{ steps.expand.outputs.result }}
+    steps:
+      - id: expand
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const changed = JSON.parse('${{ needs.detect-changes.outputs.services }}');
+            const allSpringBoot = ["nexus-config-service","nexus-discovery-service","nexus-identity-service","nexus-account-service","nexus-transaction-service","nexus-fraud-service","nexus-ledger-service","nexus-notification-service","nexus-ai-assistant-service","nexus-ai-kyc-service","nexus-analytics-service","nexus-risk-scoring-service","nexus-saga-orchestrator","nexus-audit-query-jvm","nexus-api-gateway"];
+            let services = Object.keys(changed).filter(k => changed[k] === 'true' && k !== 'nexus-tracing-common');
+            if (changed['nexus-tracing-common'] === 'true') {
+              services = [...new Set([...services, ...allSpringBoot])];
+            }
+            return services;
+
+  build-and-test:
+    needs: expand-shared-changes
+    if: ${{ needs.expand-shared-changes.outputs.services != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.expand-shared-changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # Maven build cache keyed by pom.xml hash - per master prompt 8.2's
+      # ask, keeps this fast across the reactor even though only one
+      # module's tests actually run. actions/setup-java's cache:'maven'
+      # above already covers the common case; this second explicit cache
+      # step is redundant with it and removed - restore-keys fallback is
+      # handled by setup-java's own cache internally.
+
+      - name: Build (skip tests) — needed for the reactor's own inter-module deps
+        run: mvn -B clean install -DskipTests -pl ${{ matrix.service }} --also-make
+
+      - name: Unit + slice tests
+        run: mvn -B test -pl ${{ matrix.service }}
+        # Deliberately NOT running integration/@SpringBootTest+Testcontainers
+        # tests here - those need Docker-in-Docker and belong in
+        # ci-develop.yml per 8.2's tiering (full pyramid only on PR into
+        # develop, not on every push to every branch).
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-results-${{ matrix.service }}
+          path: ${{ matrix.service }}/target/surefire-reports/
+          retention-days: 14
+
+      # Master prompt 8.5: pipeline observability, same Pushgateway added
+      # for Part 6's JMeter results - build duration and pass/fail land in
+      # the same Prometheus/Grafana as everything else, not buried in the
+      # Actions tab only. NEXUS_PUSHGATEWAY_URL needs to be a repo/org
+      # secret pointing at a publicly reachable Pushgateway - the one added
+      # to docker-compose-prod.yml this session is only reachable on the
+      # local Docker network, not from a GitHub-hosted runner. Flagging
+      # rather than assuming a URL that doesn't exist yet. Guarded on the
+      # secret being present so this doesn't spam a `curl` to localhost on
+      # every run until that Pushgateway actually exists.
+      - name: Push build metrics to Pushgateway
+        if: ${{ always() && vars.NEXUS_PUSHGATEWAY_URL != '' }}
+        continue-on-error: true
+        run: |
+          TESTS=$(grep -oP '(?<=<testsuite )[^>]*' ${{ matrix.service }}/target/surefire-reports/*.xml 2>/dev/null | grep -oP '(?<=tests=")[0-9]+' | awk '{s+=$1} END {print s+0}')
+          FAILURES=$(grep -oP '(?<=<testsuite )[^>]*' ${{ matrix.service }}/target/surefire-reports/*.xml 2>/dev/null | grep -oP '(?<=failures=")[0-9]+' | awk '{s+=$1} END {print s+0}')
+          cat <<EOF | curl --data-binary @- "${NEXUS_PUSHGATEWAY_URL}/metrics/job/ci_pr/instance/${{ matrix.service }}" || true
+          # TYPE ci_build_tests_total gauge
+          ci_build_tests_total{service="${{ matrix.service }}"} ${TESTS:-0}
+          # TYPE ci_build_test_failures_total gauge
+          ci_build_test_failures_total{service="${{ matrix.service }}"} ${FAILURES:-0}
+          EOF
+        env:
+          NEXUS_PUSHGATEWAY_URL: ${{ vars.NEXUS_PUSHGATEWAY_URL }}

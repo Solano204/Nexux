@@ -1,0 +1,122 @@
+name: CI — full pyramid on PR into develop
+
+# Master prompt 8.2's second tier. Contract-test and ArchUnit steps are
+# marked continue-on-error with an explanation - per Part 7's investigation,
+# ArchUnit doesn't exist in this codebase at all yet, and the existing
+# `contract/` test packages are local consumer-side checks, not a real
+# cross-service Spring Cloud Contract/Pact setup. Making these hard-fail
+# today would block every PR on tooling that was never actually built -
+# that's Part 7's job, not this workflow's. Flip continue-on-error off once
+# Part 7's Batch 1 lands real ArchUnit rules.
+#
+# NOTE: no `develop` branch exists in this repo yet (see CONTRIBUTING.md) -
+# this workflow cannot fire until one is created. Hardened anyway so it's
+# ready the moment it can run, not left to bit-rot.
+#
+# Two real bugs fixed while hardening (CHANGES-BESTPRACTICES/16):
+# `jacoco/[email protected]` was not a real action (no such org/repo on
+# GitHub) - replaced with madrapps/jacoco-report, whose actual inputs match
+# what this file was already passing (paths/min-coverage-overall/
+# min-coverage-changed-files), so whoever wrote this had the right action
+# in mind, just the wrong reference. `aquasecurity/trivy-action@0.24.0` is
+# also not a real tag (current tags are v0.28.0+, prefixed with v) -
+# bumped to the current v0.36.0.
+
+on:
+  pull_request:
+    branches: [develop]
+
+concurrency:
+  group: ci-develop-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      services: ${{ steps.filter.outputs.services }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/detect-changed-services
+        id: filter
+
+  full-pyramid:
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.services != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # Docker-in-Docker for Testcontainers - GitHub-hosted runners have
+      # Docker pre-installed, no extra setup action needed.
+      - name: Full test pyramid (unit + slice + Testcontainers integration)
+        run: mvn -B verify -pl ${{ matrix.service }} --also-make
+
+      - name: ArchUnit layering check
+        continue-on-error: true
+        run: |
+          echo "SKIPPED - no ArchUnit rules exist in this codebase yet, see TESTING_STRATEGY.md Part 7.1."
+          echo "This step is a placeholder so the workflow structure is ready the moment those rules are added."
+
+      - name: Contract tests (producer/consumer schema compatibility)
+        continue-on-error: true
+        run: |
+          echo "SKIPPED - existing contract/ test packages are local consumer-side checks, not real cross-service Spring Cloud Contract/Pact verification, see TESTING_STRATEGY.md."
+          echo "No cross-service contract tooling exists yet to run here."
+
+      - name: JaCoCo coverage report
+        run: mvn -B jacoco:report -pl ${{ matrix.service }}
+
+      - name: Coverage gate (50% line / 40% branch — starting bar per TESTING_STRATEGY.md 7.2)
+        uses: madrapps/jacoco-report@e51ce1f46f7f8b5331593f935e59cbaf44b84920 # v1.8.0
+        with:
+          paths: ${{ matrix.service }}/target/site/jacoco/jacoco.xml
+          min-coverage-overall: 50
+          min-coverage-changed-files: 40
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker image (no push)
+        run: docker build -t nexus/${{ matrix.service }}:pr-${{ github.event.pull_request.number }} ${{ matrix.service }}
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: nexus/${{ matrix.service }}:pr-${{ github.event.pull_request.number }}
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'  # warn on HIGH, hard-fail only on CRITICAL below
+      - name: Trivy — hard fail on CRITICAL only
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: nexus/${{ matrix.service }}:pr-${{ github.event.pull_request.number }}
+          severity: 'CRITICAL'
+          exit-code: '1'
+
+  pr-title-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # amannn/action-semantic-pull-request only needs to read the PR title, not write anything
+    steps:
+      - uses: amannn/action-semantic-pull-request@e32d7e603df1aa1ba07e981f2a23455dee596825 # v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

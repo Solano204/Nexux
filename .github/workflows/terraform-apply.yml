@@ -1,0 +1,67 @@
+name: Terraform — apply on merge to main
+
+# 05_TERRAFORM_AWS_CHANGES.md Section 7.
+# Same prerequisite as terraform-plan.yml: needs Section 1's S3 backend
+# migration applied first, or `terraform init` here has nothing to attach to.
+#
+# DO NOT let terraform/** changes reach `main` before doing this manual
+# step (CHANGES-BESTPRACTICES/16, Fase 6): Settings → Environments → New
+# environment → name it exactly "production" → add yourself as a required
+# reviewer. If that Environment doesn't already exist with a reviewer
+# configured the first time this workflow references it, GitHub
+# auto-creates it with NO protection rules and `terraform apply
+# -auto-approve` runs immediately and unattended with real AWS
+# credentials. Confirmed with Carlos (2026-07-18) this Environment is not
+# configured yet — this workflow is safe today only because
+# secrets.TERRAFORM_CI_ROLE_ARN also doesn't exist yet, which is a fragile
+# accident, not a real gate. Set up the Environment before either the
+# secret or a terraform/** change ever reaches main.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+  workflow_dispatch: {} # manual re-run only — never add pull_request here
+
+concurrency:
+  group: terraform-apply-main
+  cancel-in-progress: false # never cancel an apply mid-flight
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Requires a GitHub Environment named "production" with a required
+    # reviewer configured (Settings -> Environments) - this job pauses here
+    # for manual approval even after merge, which is the "show me the plan
+    # before applying" rule from the session's working rules, carried into
+    # the pipeline: the plan was already visible on the PR (previous
+    # workflow), this is the explicit confirm-before-apply click. See the
+    # warning above — this only works if the Environment is pre-configured.
+    environment: production
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.11.4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ secrets.TERRAFORM_CI_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: terraform init
+        run: terraform init
+
+      - name: terraform apply
+        run: terraform apply -auto-approve
