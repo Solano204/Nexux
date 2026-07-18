@@ -1,0 +1,60 @@
+name: PR — metadata (labels, size, description check)
+
+# Separate from ci-develop.yml/pr-title-lint.yml on purpose (per Carlos's
+# request, 2026-07-18 — one action per file): this is hygiene/visibility
+# metadata, not a pass/fail quality gate. Runs on every PR regardless of
+# target branch — auto-labels which service(s) it touches (.github/labeler.yml),
+# labels its size (XS-XL by lines changed), and flags (warns, doesn't
+# block) an empty description.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write # needs to write: apply labels
+
+jobs:
+  label-by-service:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/labeler@8558fd74291d67161a8a78ce36a881fa63b766a9 # v5
+        with:
+          configuration-path: .github/labeler.yml
+          sync-labels: true
+
+  label-by-size:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: codelytv/pr-size-labeler@095a41fca88b8764fd9e008ad269bcdb82bb38b9 # v1
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          xs_label: 'size/XS'
+          xs_max_size: '10'
+          s_label: 'size/S'
+          s_max_size: '100'
+          m_label: 'size/M'
+          m_max_size: '500'
+          l_label: 'size/L'
+          l_max_size: '1000'
+          xl_label: 'size/XL'
+          fail_if_xl: 'false' # informational only, never blocks the PR
+
+  check-description:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Warn if PR description is empty
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body;
+            if (!body || body.trim().length < 10) {
+              core.warning('This PR has no description (or a near-empty one). Not blocking the PR — this is a hygiene warning, not a required check — but a reviewer will have to reconstruct the "why" from the commits alone.');
+            }

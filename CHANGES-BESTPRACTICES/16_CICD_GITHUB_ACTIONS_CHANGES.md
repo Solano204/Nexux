@@ -6,6 +6,15 @@ cero: ya existían 6 workflows escritos en una sesión anterior (todavía sin
 commitear) — el trabajo real fue auditarlos contra este prompt, no
 inventarlos.
 
+**Actualización del mismo día (2026-07-18, segunda ronda)**: después del
+hardening inicial (Secciones 0-9 originales, abajo, sin editar para no
+perder el rastro de qué se decidió y por qué), Carlos pidió explícitamente
+un split adicional — un archivo de workflow por servicio en vez del
+matrix consolidado en `ci-pr.yml`, más workflows nuevos por tipo de
+evento (rama nueva, metadata de PR). Ver **Sección 10** al final para el
+detalle completo de ese segundo pase — no repetido acá arriba para no
+duplicar contenido ya escrito.
+
 ---
 
 ## Sección 0 — Fase 0: Diagnóstico
@@ -371,6 +380,97 @@ incremental, sin apuro.
 
 ---
 
+## Sección 10 — Segundo pase (2026-07-18): split por servicio + por evento
+
+Carlos pidió explícitamente, después de ver el hardening inicial, dos
+cosas más — confirmadas con preguntas puntuales antes de tocar nada, no
+asumidas:
+
+1. Un archivo de workflow **por servicio**, no un matrix consolidado —
+   quiere ver cada microservicio como su propia entrada en el tab de
+   Actions, no un job adentro de un workflow compartido.
+2. Workflows nuevos **por tipo de evento**, mencionando como ejemplo un
+   proyecto anterior suyo con un archivo dedicado para "rama nueva" y
+   otro para "pull request".
+
+**`ci-pr.yml` (el matrix consolidado) — eliminado, reemplazado por 17
+archivos**: `_reusable-service-ci.yml` (reusable, `workflow_call`,
+contiene la lógica real una sola vez — checkout, JDK 25, `mvn` build+test,
+upload de resultados, métricas a Pushgateway) + 16 archivos finos
+`ci-<servicio>.yml` (uno por cada uno de los 15 servicios Spring Boot más
+`nexus-tracing-common`), cada uno con:
+- **Trigger nativo por path**, reemplazando lo que antes hacía
+  `dorny/paths-filter` + un paso de JavaScript para expandir — GitHub ya
+  filtra por `paths:` antes de correr el workflow en absoluto, no hace
+  falta un paso separado adentro del job para lograr lo mismo.
+- Path del propio servicio + `nexus-tracing-common/**` (la lib compartida
+  — un cambio ahí re-dispara los 15, igual que antes) + `pom.xml` raíz
+  (el BOM central — un bump de versión ahí puede romper cualquier
+  servicio, y el matrix viejo **nunca** lo cubría, esto es una mejora
+  real, no solo un refactor) + el propio archivo del workflow y el
+  reusable (si cambiás cómo se buildea, se re-testea a sí mismo).
+- `concurrency` + `permissions: contents: read` propios, no heredados
+  solo del reusable.
+
+**`audit-write-native` — workflow propio, no llama al reusable**: es
+Quarkus/GraalVM, fuera del reactor Maven raíz — el reusable asume
+`mvn -pl <servicio> --also-make` desde la raíz, que falla para este
+módulo (el mismo bug real de la Sección 5 original, ahora imposible de
+repetir por accidente porque este módulo ni siquiera comparte el archivo
+reusable). Build standalone (`cd audit-write-native && mvn package`),
+JDK 21 (no 25 — confirmado en su propio `pom.xml`), modo JVM únicamente
+(no `-Pnative` — un build GraalVM nativo real tarda varios minutos y
+pide más memoria de la que un runner default de GitHub garantiza de
+forma confiable para una app de este tamaño; queda anotado como posible
+workflow separado más lento, no inventado sin confirmar que hace falta).
+
+**Workflows nuevos por tipo de evento, uno por archivo**:
+
+- **`pr-title-lint.yml`** — extraído de adentro de `ci-develop.yml`
+  (antes era un job ahí, mezclado con el build). Corre en **cualquier**
+  PR, no solo hacia `develop` — el lint de Conventional Commits importa
+  para `release/*`/`hotfix/*` → `main` igual que para `feature/*` →
+  `develop`, ya que `release.yml` genera el changelog leyendo esos
+  títulos.
+- **`pr-metadata.yml`** — 3 jobs independientes, ninguno bloqueante
+  (labels/tamaño/descripción son higiene, no un quality gate):
+  auto-labeling por servicio tocado (`.github/labeler.yml`, un label por
+  cada uno de los 15 servicios + terraform/lambda/ci-cd/docs/shared-lib),
+  label de tamaño XS-XL por líneas cambiadas
+  (`codelytv/pr-size-labeler`, `fail_if_xl: false` — informativo, nunca
+  bloquea), y un warning (no bloqueo) si la descripción del PR está vacía.
+- **`on-branch-created.yml`** — el otro ejemplo puntual de Carlos. Usa el
+  evento `create` de GitHub (rama o tag — filtrado a solo ramas acá).
+  **Limitación real, explicada en el propio archivo**: para cuando este
+  evento dispara, la rama ya existe — no hay forma de "bloquear" la
+  creación de una rama desde un workflow, solo advertir. Válida contra la
+  convención de `CONTRIBUTING.md` (`main`/`develop`/`feature/*`/
+  `release/*`/`hotfix/*`, con `wip-*` reconocido explícitamente como
+  legacy). Enforcement real (que una rama con nombre inválido ni se
+  pueda crear) necesitaría un **ruleset** de GitHub (Settings → Rules →
+  Rulesets → Branch naming) — configuración del lado de GitHub que
+  Carlos tendría que hacer él mismo, no algo que un archivo de workflow
+  pueda lograr.
+
+**Lo que NO se dividió por servicio, a propósito**: `ci-develop.yml`
+(pirámide completa en PR hacia `develop`) y `cd-staging.yml` (build+push+
+deploy) se dejaron con su matrix consolidado — son eventos mucho menos
+frecuentes que un push cualquiera (PR hacia una rama específica, no cada
+push), y un solo check consolidado ahí es el patrón esperado para un gate
+de merge en la UI de PRs de GitHub. Dividir esos también en 15+ archivos
+cada uno hubiera significado 30+ archivos adicionales sin una razón de
+visibilidad tan clara como la de `ci-pr.yml` — no hecho sin que Carlos lo
+pida explícitamente.
+
+**Verificación**: los 28 archivos (25 workflows + 1 composite action +
+1 config de labeler) parsean como YAML válido
+(`yaml.safe_load` contra cada uno). No corrí ninguno en GitHub real
+todavía — eso depende de que el token tenga el scope `workflow`, pendiente
+del lado de Carlos (ver conversación — el push anterior fue rechazado
+por falta de ese scope).
+
+---
+
 ## Resumen ejecutivo
 
 **Qué se auditó y qué se creó**: los 6 workflows ya existentes (escritos
@@ -400,3 +500,12 @@ GitHub) para que Carlos decida con información completa, no implementado
 a ciegas. Configurar el Environment `production` con reviewer requerido
 es la única acción de la lista con urgencia real — bloquea antes de que
 cualquier cambio a `terraform/**` llegue a `main`.
+
+**Segundo pase (Sección 10)**: a pedido de Carlos, `ci-pr.yml` (matrix
+consolidado) se reemplazó por 17 archivos — 1 workflow reusable + 16
+finos, uno por servicio/módulo — más 3 workflows nuevos por tipo de
+evento (`pr-title-lint.yml`, `pr-metadata.yml`, `on-branch-created.yml`).
+Total: 25 workflows + 1 composite action + 1 config de labeler, los 28
+validados como YAML correcto. Nada de esto corrió todavía en GitHub real
+— el push sigue bloqueado del lado de Carlos por el scope `workflow`
+faltante en el token actual.

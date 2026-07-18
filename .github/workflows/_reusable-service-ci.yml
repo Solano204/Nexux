@@ -1,0 +1,74 @@
+name: _reusable — build + test one Spring Boot service
+
+# Called by ci-<service>.yml (one thin file per microservice, each its own
+# entry in the Actions tab) — this is where the actual logic lives, once,
+# so 15 callers don't each carry their own copy of "set up JDK 25, mvn
+# build, mvn test, upload results". A change to how the platform builds
+# (JDK version, a new mandatory step) is one edit here, not fifteen.
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: Maven module directory name, e.g. nexus-account-service
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build (skip tests) — needed for the reactor's own inter-module deps
+        run: mvn -B clean install -DskipTests -pl ${{ inputs.service }} --also-make
+
+      - name: Unit + slice tests
+        run: mvn -B test -pl ${{ inputs.service }}
+        # Deliberately NOT running integration/@SpringBootTest+Testcontainers
+        # tests here - those need Docker-in-Docker and belong in
+        # ci-develop.yml per master prompt 8.2's tiering (full pyramid only
+        # on PR into develop, not on every push to every branch).
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-results-${{ inputs.service }}
+          path: ${{ inputs.service }}/target/surefire-reports/
+          retention-days: 14
+
+      # Master prompt 8.5: pipeline observability, same Pushgateway added
+      # for Part 6's JMeter results. NEXUS_PUSHGATEWAY_URL needs to be a
+      # repo/org variable pointing at a publicly reachable Pushgateway -
+      # the one in docker-compose-prod.yml is only reachable on the local
+      # Docker network, not from a GitHub-hosted runner. Guarded on the
+      # variable being set so this doesn't attempt a pointless curl on
+      # every run until that Pushgateway actually exists publicly.
+      - name: Push build metrics to Pushgateway
+        if: ${{ always() && vars.NEXUS_PUSHGATEWAY_URL != '' }}
+        continue-on-error: true
+        run: |
+          TESTS=$(grep -oP '(?<=<testsuite )[^>]*' ${{ inputs.service }}/target/surefire-reports/*.xml 2>/dev/null | grep -oP '(?<=tests=")[0-9]+' | awk '{s+=$1} END {print s+0}')
+          FAILURES=$(grep -oP '(?<=<testsuite )[^>]*' ${{ inputs.service }}/target/surefire-reports/*.xml 2>/dev/null | grep -oP '(?<=failures=")[0-9]+' | awk '{s+=$1} END {print s+0}')
+          cat <<EOF | curl --data-binary @- "${NEXUS_PUSHGATEWAY_URL}/metrics/job/ci_pr/instance/${{ inputs.service }}" || true
+          # TYPE ci_build_tests_total gauge
+          ci_build_tests_total{service="${{ inputs.service }}"} ${TESTS:-0}
+          # TYPE ci_build_test_failures_total gauge
+          ci_build_test_failures_total{service="${{ inputs.service }}"} ${FAILURES:-0}
+          EOF
+        env:
+          NEXUS_PUSHGATEWAY_URL: ${{ vars.NEXUS_PUSHGATEWAY_URL }}

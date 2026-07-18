@@ -1,0 +1,43 @@
+name: Branch — naming convention check
+
+# The other example Carlos gave (2026-07-18): a workflow specifically for
+# "when a new branch is created". Uses GitHub's `create` event (fires for
+# both branches and tags — filtered to branches only below). This can only
+# warn, not block: by the time `create` fires, the branch already exists,
+# there's no equivalent of a PR's "required check" gate for branch
+# creation itself. Value here is visibility in the Actions tab + a
+# GitHub-native warning annotation, not enforcement — true enforcement of
+# branch naming needs a server-side ruleset (Settings → Rules →
+# Rulesets → Branch naming), which is a repo-admin action Carlos would
+# configure himself, not something a workflow file can do.
+
+on:
+  create:
+
+permissions:
+  contents: read
+
+jobs:
+  check-branch-name:
+    if: github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Validate against CONTRIBUTING.md's branching model
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          # Matches CONTRIBUTING.md: main, develop, feature/*, release/*,
+          # hotfix/*, plus the pre-existing wip-* convention it explicitly
+          # grandfathers in (existing wip-* branches don't need renaming,
+          # but new work is asked to use feature/* going forward — this
+          # only warns on genuinely new branches, so a fresh wip-* branch
+          # still gets flagged as "prefer feature/* now", correctly).
+          if [[ "$BRANCH" == "main" || "$BRANCH" == "develop" ]]; then
+            echo "OK: $BRANCH is a reserved branch name."
+          elif [[ "$BRANCH" == feature/* || "$BRANCH" == release/* || "$BRANCH" == hotfix/* ]]; then
+            echo "OK: $BRANCH matches CONTRIBUTING.md's branching model."
+          elif [[ "$BRANCH" == wip-* ]]; then
+            echo "::warning::Branch '$BRANCH' uses the old wip-* convention. CONTRIBUTING.md grandfathers existing wip-* branches but asks new work to use feature/* instead."
+          else
+            echo "::warning::Branch '$BRANCH' doesn't match CONTRIBUTING.md's naming convention (main, develop, feature/*, release/*, hotfix/*). Not blocked — this is a visibility warning, not enforcement."
+          fi

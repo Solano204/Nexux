@@ -1,0 +1,63 @@
+name: CI — audit-write-native (Quarkus)
+
+# Standalone, not calling _reusable-service-ci.yml: audit-write-native is
+# a Quarkus/GraalVM module outside the root pom.xml's Maven reactor (see
+# root pom.xml's own comment) — `mvn -pl audit-write-native --also-make`
+# from the reactor fails ("could not find the selected project in the
+# reactor"), which is exactly the bug found and fixed in the old
+# consolidated ci-pr.yml (CHANGES-BESTPRACTICES/16, Fase 5). This module
+# builds standalone: `cd audit-write-native && mvn package`, own JDK
+# target (21, not 25 — confirmed in this module's pom.xml).
+#
+# JVM-mode test run only, not `-Pnative` (real GraalVM native-image
+# compilation) — a native build takes several minutes and needs
+# significantly more runner memory than the default GitHub-hosted runner
+# reliably has for a Quarkus app this size. Worth a dedicated slower
+# workflow later if native-mode regressions become a real concern; not
+# invented here without confirming that's wanted.
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'audit-write-native/**'
+      - '.github/workflows/ci-audit-write-native.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-audit-write-native-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: audit-write-native
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+          cache-dependency-path: audit-write-native/pom.xml
+
+      - name: Build + test (JVM mode)
+        run: mvn -B clean package
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-results-audit-write-native
+          path: audit-write-native/target/surefire-reports/
+          retention-days: 14

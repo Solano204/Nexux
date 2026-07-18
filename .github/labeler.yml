@@ -1,0 +1,67 @@
+# Config for actions/labeler, driven by pr-metadata.yml.
+# One label per service touched, so a PR's label list alone tells you the
+# blast radius without opening the Files Changed tab.
+
+account-service:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-account-service/**'
+transaction-service:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-transaction-service/**'
+identity-service:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-identity-service/**'
+fraud-service:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-fraud-service/**'
+ledger-service:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-ledger-service/**'
+notification-service:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-notification-service/**'
+ai-assistant-service:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-ai-assistant-service/**'
+ai-kyc-service:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-ai-kyc-service/**'
+analytics-service:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-analytics-service/**'
+risk-scoring-service:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-risk-scoring-service/**'
+saga-orchestrator:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-saga-orchestrator/**'
+audit-query-jvm:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-audit-query-jvm/**'
+api-gateway:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-api-gateway/**'
+config-service:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-config-service/**'
+discovery-service:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-discovery-service/**'
+audit-write-native:
+  - changed-files:
+      - any-glob-to-any-file: 'audit-write-native/**'
+shared-lib:
+  - changed-files:
+      - any-glob-to-any-file: 'nexus-tracing-common/**'
+terraform:
+  - changed-files:
+      - any-glob-to-any-file: 'terraform/**'
+lambda:
+  - changed-files:
+      - any-glob-to-any-file: 'LAMBDA/**'
+ci-cd:
+  - changed-files:
+      - any-glob-to-any-file: '.github/**'
+docs:
+  - changed-files:
+      - any-glob-to-any-file: ['*.md', 'CHANGES-BESTPRACTICES/**', 'API-DOCUMENTATION/**', 'AWS-DOCKER-WORKFLOWS/**']

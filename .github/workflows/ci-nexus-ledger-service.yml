@@ -1,0 +1,35 @@
+name: CI — nexus-ledger-service
+
+# One file per service (per Carlos's request, 2026-07-18) so each
+# microservice has its own visible entry in the Actions tab instead of
+# being a job inside one shared matrix. Native path-based triggers below
+# replace what dorny/paths-filter + a JS expand step used to do in the old
+# consolidated ci-pr.yml (removed — this file plus its 14 siblings replace
+# it entirely) — GitHub only runs this workflow at all when a relevant
+# path changed, no separate filtering step needed inside the job.
+# All the actual build/test logic lives in _reusable-service-ci.yml, once,
+# not copied into each of these 16 files.
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'nexus-ledger-service/**'
+      - 'nexus-tracing-common/**'
+      - 'pom.xml'
+      - '.github/workflows/ci-nexus-ledger-service.yml'
+      - '.github/workflows/_reusable-service-ci.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-nexus-ledger-service-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    uses: ./.github/workflows/_reusable-service-ci.yml
+    with:
+      service: nexus-ledger-service

@@ -1,0 +1,27 @@
+name: PR — title lint (Conventional Commits)
+
+# Extracted out of ci-develop.yml (per Carlos's request, 2026-07-18) — a
+# one-thing-per-file split, and this genuinely doesn't belong bundled with
+# ci-develop's build/test job: title linting matters on EVERY PR
+# regardless of target branch (feature/* → develop, release/* → main,
+# hotfix/* → main), not just PRs into develop. CONTRIBUTING.md already
+# documents Conventional Commits as the de facto style — this enforces it
+# on the PR title specifically, since release.yml's changelog generation
+# reads from it.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read # only needs to read the PR title, never writes anything
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: amannn/action-semantic-pull-request@e32d7e603df1aa1ba07e981f2a23455dee596825 # v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

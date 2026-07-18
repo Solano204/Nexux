@@ -110,13 +110,6 @@ jobs:
           severity: 'CRITICAL'
           exit-code: '1'
 
-  pr-title-lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read # amannn/action-semantic-pull-request only needs to read the PR title, not write anything
-    steps:
-      - uses: amannn/action-semantic-pull-request@e32d7e603df1aa1ba07e981f2a23455dee596825 # v5
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # pr-title-lint moved to its own file, pr-title-lint.yml — it applies to
+  # every PR regardless of target branch, not just PRs into develop, so it
+  # doesn't belong scoped to this workflow's trigger.
