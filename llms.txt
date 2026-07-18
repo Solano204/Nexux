@@ -1,0 +1,21 @@
+# NEXUS Platform API
+
+> Fintech microservices platform (accounts, transfers/payments, ledger, fraud detection, KYC, AI financial advisor) built on Spring Boot 3 + Quarkus, fronted by a single API gateway. Most endpoints require a JWT obtained via /api/v1/auth/login; each service also exposes a live OpenAPI spec once springdoc is rolled out to it.
+
+## Getting Started
+
+- [Quickstart](API-DOCUMENTATION/01_QUICKSTART.md): Register, log in, and make your first authenticated call — copy-pasteable, under 5 minutes.
+- [Authentication](API-DOCUMENTATION/02_AUTHENTICATION.md): JWT via the gateway vs X-User-Id for direct-to-service testing, token lifecycle, auth error codes.
+
+## Reference
+
+- [Errors](API-DOCUMENTATION/03_ERRORS.md): RFC 9457 error format, full status-code semantics, and the real errorCode catalogs for account-service and identity-service.
+- Account Service OpenAPI spec: http://localhost:8085/v3/api-docs (Swagger UI at /swagger-ui.html) — balances, account events, AI advisor.
+- Transaction Service OpenAPI spec: http://localhost:8086/v3/api-docs (Swagger UI at /swagger-ui.html) — transfers, payments, transaction history/search.
+- Both spec URLs are runtime-generated, not static files — the service must be running locally to fetch them. No hosted docs site exists yet (no external API consumers as of this writing).
+
+## Architecture & Conventions
+
+- [Architecture Overview](AWS-DOCKER-WORKFLOWS/00_ARCHITECTURE_OVERVIEW.md): Service map, ports, data stores, and how the 16 services fit together.
+- [REST API Design Conventions](CHANGES-BESTPRACTICES/13_REST_API_DESIGN_CHANGES.md): The audited state of naming, HTTP semantics, idempotency, pagination, and security across every service — read this before assuming a pattern from one endpoint generalizes to another.
+- [API Documentation Rollout Status](CHANGES-BESTPRACTICES/14_API_DOCUMENTATION_CHANGES.md): What's documented via OpenAPI today (2 of 13 services), what's pending, and why.

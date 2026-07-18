@@ -1,5 +1,8 @@
 package com.nexus.gateway.resilience;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -27,13 +30,11 @@ import java.util.Map;
 @Slf4j
 @RestController
 @RequestMapping("/fallback")
+@Tag(name = "Circuit Breaker Fallbacks", description = "Never called directly by a client — these are the responses Spring Cloud Gateway's circuit breaker returns when a downstream service is down, one per service, worded for what a user should know/do next.")
 public class FallbackController {
 
-    /**
-     * Transaction Service fallback.
-     * Critical: explicitly state "account has not been charged"
-     * Users panic if they don't know if money was taken.
-     */
+    @Operation(summary = "Transaction service fallback", description = "Explicitly states the account was NOT charged — the one fallback where ambiguity would cause real user panic.")
+    @ApiResponse(responseCode = "503", description = "Transaction service unavailable")
     @RequestMapping("/transaction")
     public Mono<ResponseEntity<Map<String, Object>>> transactionFallback(
             ServerWebExchange exchange) {
@@ -53,9 +54,8 @@ public class FallbackController {
                 )));
     }
 
-    /**
-     * Account Service fallback.
-     */
+    @Operation(summary = "Account service fallback")
+    @ApiResponse(responseCode = "503", description = "Account service unavailable")
     @RequestMapping("/account")
     public Mono<ResponseEntity<Map<String, Object>>> accountFallback(
             ServerWebExchange exchange) {
@@ -72,10 +72,8 @@ public class FallbackController {
                 )));
     }
 
-    /**
-     * AI Assistant fallback — graceful degradation.
-     * AI is non-critical — users can still use standard banking.
-     */
+    @Operation(summary = "AI assistant fallback", description = "Graceful degradation — AI is non-critical, response points the client back to standard banking endpoints that still work.")
+    @ApiResponse(responseCode = "503", description = "AI assistant unavailable")
     @RequestMapping("/ai-assistant")
     public Mono<ResponseEntity<Map<String, Object>>> aiAssistantFallback(
             ServerWebExchange exchange) {
@@ -97,9 +95,8 @@ public class FallbackController {
                 )));
     }
 
-    /**
-     * Identity Service fallback.
-     */
+    @Operation(summary = "Identity service fallback", description = "States existing sessions remain valid — only new logins are affected.")
+    @ApiResponse(responseCode = "503", description = "Identity service unavailable")
     @RequestMapping("/identity")
     public Mono<ResponseEntity<Map<String, Object>>> identityFallback(
             ServerWebExchange exchange) {
@@ -115,9 +112,8 @@ public class FallbackController {
                 )));
     }
 
-    /**
-     * Ledger Service fallback.
-     */
+    @Operation(summary = "Ledger service fallback")
+    @ApiResponse(responseCode = "503", description = "Ledger service unavailable")
     @RequestMapping("/ledger")
     public Mono<ResponseEntity<Map<String, Object>>> ledgerFallback(
             ServerWebExchange exchange) {
@@ -133,9 +129,8 @@ public class FallbackController {
                 )));
     }
 
-    /**
-     * Analytics Service fallback.
-     */
+    @Operation(summary = "Analytics service fallback")
+    @ApiResponse(responseCode = "503", description = "Analytics service unavailable")
     @RequestMapping("/analytics")
     public Mono<ResponseEntity<Map<String, Object>>> analyticsFallback(
             ServerWebExchange exchange) {
@@ -151,9 +146,8 @@ public class FallbackController {
                 )));
     }
 
-    /**
-     * Fraud Service fallback.
-     */
+    @Operation(summary = "Fraud service fallback")
+    @ApiResponse(responseCode = "503", description = "Fraud service unavailable")
     @RequestMapping("/fraud")
     public Mono<ResponseEntity<Map<String, Object>>> fraudFallback(
             ServerWebExchange exchange) {
@@ -168,9 +162,8 @@ public class FallbackController {
                 )));
     }
 
-    /**
-     * Webhook fallback.
-     */
+    @Operation(summary = "Webhook processing fallback")
+    @ApiResponse(responseCode = "503", description = "Webhook handler unavailable")
     @PostMapping("/webhook")
     public Mono<ResponseEntity<Map<String, Object>>> webhookFallback(
             ServerWebExchange exchange) {
@@ -185,9 +178,8 @@ public class FallbackController {
                 )));
     }
 
-    /**
-     * Generic fallback for any unspecified service.
-     */
+    @Operation(summary = "Generic fallback", description = "Catch-all for any service without a dedicated fallback route.")
+    @ApiResponse(responseCode = "503", description = "Service unavailable")
     @RequestMapping("/generic")
     public Mono<ResponseEntity<Map<String, Object>>> genericFallback(
             ServerWebExchange exchange) {

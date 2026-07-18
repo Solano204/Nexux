@@ -8,6 +8,10 @@ import com.nexus.ledger.domain.model.enums.PostingType;
 import com.nexus.ledger.infrastructure.persistence.LedgerEntryRepository;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -40,6 +44,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/internal/v1/ledger")
 @RequiredArgsConstructor
+@Tag(name = "Ledger (Internal)", description = "Admin/ops tooling — manual postings, reversals, reconciliation. No application-layer identity check today (unlike fraud/risk-scoring/saga-orchestrator's X-Internal-Service filter) — only the gateway's RemoteAddr predicate and Docker network isolation. Same class of gap documented in 13_REST_API_DESIGN_CHANGES.md, not yet ported here.")
 public class InternalLedgerController {
 
     private final LedgerCommandService commandService;
@@ -48,12 +53,11 @@ public class InternalLedgerController {
     private final LedgerEntryRepository entryRepository;
     private final ObservationRegistry observationRegistry;
 
-    /**
-     * Authoritative ledger balance for an account.
-     * Used by reconciliation job and Account Service verification.
-     */
+    @Operation(summary = "Get authoritative ledger balance", description = "Used by the reconciliation job and account-service's own balance verification — the ground truth, computed from ledger entries.")
+    @ApiResponse(responseCode = "200", description = "Balance retrieved")
     @GetMapping("/accounts/{accountId}/balance")
     public ResponseEntity<Map<String, Object>> getLedgerBalance(
+            @Parameter(description = "Account UUID", required = true)
             @PathVariable UUID accountId) {
 
         BigDecimal balance = queryService.getCurrentBalance(accountId);
@@ -66,14 +70,18 @@ public class InternalLedgerController {
                 "queriedAt", Instant.now().toString()));
     }
 
-    /**
-     * Manual adjustment posting — ADMIN only.
-     * Creates a double-entry posting between user account and suspense.
-     * Requires reason code and approval reference.
-     */
+    @Operation(
+            summary = "Create a manual adjustment posting (ADMIN)",
+            description = "Double-entry posting between the given accounts — reason and " +
+                    "approvalReference are required and recorded in the posting description for " +
+                    "audit. operatorId (X-User-Id) is not role-checked at this endpoint today."
+    )
+    @ApiResponse(responseCode = "201", description = "Posting created")
+    @ApiResponse(responseCode = "422", description = "Posting failed (e.g. accounting imbalance)")
     @PostMapping("/postings/manual")
     public ResponseEntity<?> createManualPosting(
             @Valid @RequestBody ManualPostingRequest request,
+            @Parameter(description = "Operator ID for the audit trail")
             @RequestHeader(value = "X-User-Id", required = false)
             String operatorId) {
 
@@ -125,14 +133,15 @@ public class InternalLedgerController {
         }
     }
 
-    /**
-     * Reverse an existing posting.
-     * Creates new entries that exactly cancel the original entries.
-     */
+    @Operation(summary = "Reverse a posting", description = "Creates new entries that exactly cancel the original — the original posting is never mutated or deleted (ledger entries are append-only).")
+    @ApiResponse(responseCode = "200", description = "Reversal posted")
+    @ApiResponse(responseCode = "409", description = "Reversal failed (e.g. posting not found, already reversed)")
     @PostMapping("/postings/{postingId}/reverse")
     public ResponseEntity<?> reversePosting(
+            @Parameter(description = "Posting UUID to reverse", required = true)
             @PathVariable UUID postingId,
             @Valid @RequestBody ReversePostingRequest request,
+            @Parameter(description = "Operator ID for the audit trail")
             @RequestHeader(value = "X-User-Id", required = false)
             String operatorId) {
 
@@ -163,9 +172,8 @@ public class InternalLedgerController {
         }
     }
 
-    /**
-     * Reconciliation status — latest run results.
-     */
+    @Operation(summary = "Get reconciliation status", description = "Latest run results — the reconciliation job runs nightly at 1:00 AM America/Mexico_City.")
+    @ApiResponse(responseCode = "200", description = "Status retrieved")
     @GetMapping("/reconciliation/status")
     public ResponseEntity<Map<String, Object>> getReconciliationStatus() {
         return ResponseEntity.ok(Map.of(
@@ -175,13 +183,12 @@ public class InternalLedgerController {
                         "America/Mexico_City"));
     }
 
-    /**
-     * Force balance reconstruction from ledger entries.
-     * Used after reconciliation failures.
-     */
+    @Operation(summary = "Force balance reconstruction", description = "Recomputes an account's balance from its ledger entries — used after reconciliation flags a discrepancy. Despite POST, this is read-only (no write happens, see the @Transactional(readOnly=true) on this method).")
+    @ApiResponse(responseCode = "200", description = "Balance reconstructed")
     @PostMapping("/accounts/{accountId}/reconstruct")
     @Transactional(readOnly = true)
     public ResponseEntity<Map<String, Object>> reconstructBalance(
+            @Parameter(description = "Account UUID", required = true)
             @PathVariable UUID accountId) {
 
         BigDecimal reconstructed = entryRepository
@@ -198,9 +205,8 @@ public class InternalLedgerController {
                 "reconstructedAt", Instant.now().toString()));
     }
 
-    /**
-     * Trigger immediate checksum verification.
-     */
+    @Operation(summary = "Trigger immediate integrity verification", description = "Runs the same checksum + global-balance verification the scheduled job runs, synchronously, on demand.")
+    @ApiResponse(responseCode = "200", description = "Verification complete")
     @GetMapping("/integrity/verify")
     public ResponseEntity<Map<String, Object>> verifyIntegrity() {
         Observation obs = Observation.createNotStarted(

@@ -2,6 +2,10 @@ package com.nexus.assistant.web.controller;
 
 import com.nexus.assistant.application.DocumentAnalysisService;
 import com.nexus.assistant.domain.exception.UnauthorizedException;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.ByteArrayResource;
@@ -21,10 +25,15 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/ai/documents")
 @RequiredArgsConstructor
+@Tag(name = "Document Analysis", description = "Standalone document analysis endpoint — same underlying capability as AiAssistantController's /chat/analyze-document, exposed as its own resource.")
+@SecurityRequirement(name = "X-User-Id")
 public class DocumentAnalysisController {
 
     private final DocumentAnalysisService documentAnalysisService;
 
+    @Operation(summary = "Analyze an uploaded document (streaming)", description = "Same multimodal analysis as AiAssistantController's chat/analyze-document — vision model extracts financial data, primary model answers against it. SSE streaming.")
+    @ApiResponse(responseCode = "200", description = "text/event-stream of response chunks")
+    @ApiResponse(responseCode = "401", description = "X-User-Id header missing")
     @PostMapping(
             value = "/analyze",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE,

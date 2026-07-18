@@ -6,6 +6,11 @@ import com.nexus.identity.application.query.UserQueryService;
 import com.nexus.identity.web.dto.request.KycResultRequest;
 import com.nexus.identity.web.dto.response.*;
 import io.micrometer.tracing.Tracer;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -26,23 +31,40 @@ import java.util.UUID;
  */
 @RestController
 @RequiredArgsConstructor
+@Tag(name = "KYC", description = "Identity verification — document upload kicks off nexus-ai-kyc-service's async pipeline (Rekognition + LLM comparison), result arrives back via Kafka, not synchronously in this response.")
+@SecurityRequirement(name = "X-User-Id")
 public class KycController {
 
     private final UserCommandService commandService;
     private final UserQueryService queryService;
     private final Tracer tracer;
 
+    @Operation(
+            summary = "Submit a KYC document for verification",
+            description = "Returns 202 immediately — verification runs asynchronously in " +
+                    "nexus-ai-kyc-service. Poll getKycStatus for the outcome, don't expect it in " +
+                    "this response."
+    )
+    @ApiResponse(responseCode = "202", description = "Document accepted, verification started")
+    @ApiResponse(responseCode = "400", description = "Missing required field or unsupported document type")
     @PostMapping(
             value = "/api/v1/users/me/kyc/initiate",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE
     )
     public ResponseEntity<KycInitiationResponse> initiateKyc(
+            @Parameter(description = "Photo of the identity document", required = true)
             @RequestParam("document") MultipartFile document,
+            @Parameter(description = "e.g. PASSPORT, NATIONAL_ID, DRIVERS_LICENSE", required = true)
             @RequestParam("documentType") String documentType,
+            @Parameter(description = "Full legal name as it appears on the document", required = true)
             @RequestParam("fullName") String fullName,
+            @Parameter(description = "ISO date, e.g. 1990-01-01", required = true)
             @RequestParam("dateOfBirth") String dateOfBirth,
+            @Parameter(description = "Document number as printed", required = true)
             @RequestParam("documentNumber") String documentNumber,
+            @Parameter(description = "ISO country code, optional")
             @RequestParam(value = "nationality", required = false) String nationality,
+            @Parameter(description = "Language for user-facing rejection messages, defaults to es")
             @RequestParam(value = "language", required = false) String language,
             HttpServletRequest request) throws Exception {
 
@@ -58,6 +80,8 @@ public class KycController {
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
     }
 
+    @Operation(summary = "Get my KYC status", description = "Current verification status plus, when rejected, a user-facing reason and whether a retry is allowed.")
+    @ApiResponse(responseCode = "200", description = "Status retrieved")
     @GetMapping("/api/v1/users/me/kyc/status")
     public ResponseEntity<KycStatusResponse> getKycStatus(
             HttpServletRequest request) {

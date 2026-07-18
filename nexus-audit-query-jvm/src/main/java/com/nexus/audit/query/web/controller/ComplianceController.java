@@ -9,6 +9,11 @@ import com.nexus.audit.query.application.model.QueryType;
 import com.nexus.audit.query.domain.exception.ForbiddenException;
 import com.nexus.audit.query.domain.exception.UnauthorizedException;
 import com.nexus.audit.query.infrastructure.mongodb.ComplianceReportRepository;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -34,12 +39,24 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/audit")
 @RequiredArgsConstructor
+@Tag(name = "Compliance", description = "Natural-language audit investigation, active alerts, and compliance reports. COMPLIANCE_OFFICER or ADMIN role required on every endpoint — this is the exact gap closed in CHANGES-BESTPRACTICES/13_REST_API_DESIGN_CHANGES.md.")
+@SecurityRequirement(name = "X-User-Id")
+@SecurityRequirement(name = "X-User-Roles")
 public class ComplianceController {
 
     private final ComplianceQueryService queryService;
     private final AuditSearchService searchService;
     private final ComplianceReportRepository reportRepository;
 
+    @Operation(
+            summary = "Run a natural-language compliance query",
+            description = "AI-backed investigation against the audit trail, with citations — " +
+                    "targetUserId in the body scopes the search to one user (optional). auditorId " +
+                    "for the response's own audit trail comes from X-User-Id, not the request body."
+    )
+    @ApiResponse(responseCode = "200", description = "Query result with citations")
+    @ApiResponse(responseCode = "401", description = "X-User-Id missing")
+    @ApiResponse(responseCode = "403", description = "Caller lacks COMPLIANCE_OFFICER/ADMIN role")
     @PostMapping("/compliance/query")
     public ResponseEntity<ComplianceQueryResult> query(
             @RequestBody ComplianceQueryRequest request,
@@ -68,13 +85,18 @@ public class ComplianceController {
         return ResponseEntity.ok(result);
     }
 
+    @Operation(summary = "Get a user's chronological audit timeline", description = "Same underlying data as AuditController's getUserEvents — exposed here too as part of the compliance investigation workflow.")
+    @ApiResponse(responseCode = "200", description = "Timeline retrieved")
+    @ApiResponse(responseCode = "401", description = "X-User-Id missing")
+    @ApiResponse(responseCode = "403", description = "Caller lacks COMPLIANCE_OFFICER/ADMIN role")
     @GetMapping("/users/{userId}/timeline")
     public ResponseEntity<?> getUserTimeline(
+            @Parameter(description = "User UUID", required = true)
             @PathVariable String userId,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int size,
-            @RequestParam(required = false) String startDate,
-            @RequestParam(required = false) String endDate,
+            @Parameter(description = "Zero-based page number") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size") @RequestParam(defaultValue = "50") int size,
+            @Parameter(description = "ISO date, filter start") @RequestParam(required = false) String startDate,
+            @Parameter(description = "ISO date, filter end") @RequestParam(required = false) String endDate,
             HttpServletRequest httpRequest) {
         requireComplianceRole(httpRequest);
 
@@ -83,22 +105,30 @@ public class ComplianceController {
                         userId, page, size, startDate, endDate));
     }
 
+    @Operation(summary = "Get active compliance alerts", description = "The compliance officer's work queue — filterable by severity, paginated.")
+    @ApiResponse(responseCode = "200", description = "Alerts retrieved (empty page if none)")
+    @ApiResponse(responseCode = "401", description = "X-User-Id missing")
+    @ApiResponse(responseCode = "403", description = "Caller lacks COMPLIANCE_OFFICER/ADMIN role")
     @GetMapping("/compliance/alerts")
     public ResponseEntity<?> getAlerts(
-            @RequestParam(defaultValue = "WARNING,CRITICAL")
+            @Parameter(description = "Comma-separated severity levels") @RequestParam(defaultValue = "WARNING,CRITICAL")
             String severity,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size,
+            @Parameter(description = "Zero-based page number") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size") @RequestParam(defaultValue = "20") int size,
             HttpServletRequest httpRequest) {
         requireComplianceRole(httpRequest);
         return ResponseEntity.ok(
                 searchService.getActiveAlerts(severity, page, size));
     }
 
+    @Operation(summary = "List compliance reports", description = "Previously generated compliance reports, paginated.")
+    @ApiResponse(responseCode = "200", description = "Reports retrieved (empty page if none)")
+    @ApiResponse(responseCode = "401", description = "X-User-Id missing")
+    @ApiResponse(responseCode = "403", description = "Caller lacks COMPLIANCE_OFFICER/ADMIN role")
     @GetMapping("/compliance/reports")
     public ResponseEntity<?> getReports(
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size,
+            @Parameter(description = "Zero-based page number") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size") @RequestParam(defaultValue = "20") int size,
             HttpServletRequest httpRequest) {
         requireComplianceRole(httpRequest);
         return ResponseEntity.ok(

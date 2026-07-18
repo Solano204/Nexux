@@ -57,6 +57,12 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // Actuator: health + prometheus for monitoring
                         .requestMatchers("/actuator/**").permitAll()
+                        // OpenAPI/Swagger UI — dev-only surface, no business data
+                        .requestMatchers(
+                                "/v3/api-docs/**",
+                                "/swagger-ui/**",
+                                "/swagger-ui.html"
+                        ).permitAll()
                         // Internal endpoints: service-to-service only
                         .requestMatchers("/internal/**").permitAll()
                         .anyRequest().denyAll())

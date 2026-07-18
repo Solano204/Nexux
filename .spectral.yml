@@ -1,0 +1,95 @@
+extends:
+  - [spectral:oas, recommended]
+
+# NEXUS-specific rules — see CHANGES-BESTPRACTICES/14_API_DOCUMENTATION_CHANGES.md
+# for the reasoning behind each one. All of these check things doc 13
+# (13_REST_API_DESIGN_CHANGES.md) found real violations of or gaps in —
+# this ruleset exists so those don't quietly regress once someone else
+# touches a controller.
+rules:
+  # ── Fase 1: every param/operation needs a REAL description ──────────
+  nexus-operation-summary-required:
+    description: Every operation needs a summary — this is what shows in Swagger UI's collapsed list and what an AI agent reads first to decide if an endpoint is relevant.
+    message: "{{property}} is missing a summary"
+    given: "$.paths[*][*]"
+    severity: error
+    then:
+      field: summary
+      function: truthy
+
+  nexus-operation-description-required:
+    description: Every operation needs a description longer than the summary — explain the WHY (saga side-effects, caching behavior, idempotency), not just restate the summary.
+    message: "{{property}} is missing a description"
+    given: "$.paths[*][*]"
+    severity: error
+    then:
+      field: description
+      function: truthy
+
+  nexus-no-generic-descriptions:
+    description: Reject placeholder descriptions like "user data" or "the response" — these are worse than no description because they look documented in the sidebar without actually helping anyone.
+    message: "Description is too generic to be useful: {{value}}"
+    given: "$.paths[*][*].description"
+    severity: warn
+    then:
+      function: pattern
+      functionOptions:
+        notMatch: "^(user data|response|the response|data|success|ok|result)\\.?$"
+
+  nexus-param-description-required:
+    description: Every path/query parameter needs a description — see 13_REST_API_DESIGN_CHANGES.md, Fase 0 point 2.
+    message: "Parameter '{{value}}' is missing a description"
+    given: "$.paths[*][*].parameters[*]"
+    severity: error
+    then:
+      field: description
+      function: truthy
+
+  # ── Fase 1 point 3: examples must be realistic, not "string"/123 ────
+  nexus-no-placeholder-examples:
+    description: Schema examples must not be the OpenAPI-generator default placeholders — those defeat the entire point of an example (letting someone recognize a wrong response shape at a glance).
+    message: "Placeholder example value found: {{value}} — use a realistic domain value instead"
+    given: "$..[?(@property === 'example')]"
+    severity: warn
+    then:
+      function: pattern
+      functionOptions:
+        notMatch: "^(string|123|true|additionalProp1)$"
+
+  # ── Fase 5: every error response must be RFC 9457, not an ad-hoc shape ─
+  nexus-error-response-is-problem-detail:
+    description: "4xx/5xx responses must use application/problem+json (RFC 9457) — see 13_REST_API_DESIGN_CHANGES.md Sección 3. A service returning a bespoke {\"error\": \"...\"} shape for some endpoints and ProblemDetail for others is exactly the inconsistency that section documents."
+    message: "Error response {{property}} should use content type application/problem+json"
+    given: "$.paths[*][*].responses[?(@property >= '400' && @property < '600')]"
+    severity: warn
+    then:
+      field: content
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          properties:
+            application/problem+json:
+              type: object
+          required:
+            - application/problem+json
+
+  # ── Fase 1 point 1: naming conventions already established platform-wide ─
+  nexus-path-no-camelcase:
+    description: Path segments must be kebab-case, never camelCase — already the platform convention (confirmed across all 16 services in the Fase 0 audit), this rule just stops a regression.
+    message: "Path {{value}} contains a camelCase segment"
+    given: "$.paths[*]~"
+    severity: error
+    then:
+      function: pattern
+      functionOptions:
+        notMatch: "[a-z][A-Z]"
+
+  nexus-response-schema-required:
+    description: Every 2xx response needs a schema, not just a bare description — an endpoint documented with only "200 OK" and no shape is undocumented in every way that matters for code generation.
+    message: "{{property}} — 2xx response has no schema"
+    given: "$.paths[*][*].responses[?(@property >= '200' && @property < '300')].content['application/json']"
+    severity: warn
+    then:
+      field: schema
+      function: truthy

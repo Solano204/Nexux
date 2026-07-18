@@ -64,6 +64,18 @@ spring:
 server:
   port: 8097
 
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operationsSorter: method
+    tagsSorter: alpha
+    doc-expansion: none
+    display-request-duration: true
+
 eureka:
   client:
     service-url:

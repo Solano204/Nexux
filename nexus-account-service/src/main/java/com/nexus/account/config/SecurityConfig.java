@@ -59,6 +59,12 @@ public class SecurityConfig {
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         // Actuator metrics/prometheus require internal service auth
                         .requestMatchers("/actuator/**").permitAll()
+                        // OpenAPI/Swagger UI — dev-only surface, no business data
+                        .requestMatchers(
+                                "/v3/api-docs/**",
+                                "/swagger-ui/**",
+                                "/swagger-ui.html"
+                        ).permitAll()
                         // Internal service-to-service endpoints
                         .requestMatchers("/internal/api/v1/**").permitAll()
                         // User-facing endpoints

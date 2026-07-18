@@ -5,6 +5,10 @@ import com.nexus.kyc.infrastructure.jpa.KycAuditEntryJPA;
 import com.nexus.kyc.infrastructure.jpa.KycAuditRepository;
 import com.nexus.kyc.infrastructure.mongodb.KycDocumentMongoDB;
 import com.nexus.kyc.infrastructure.mongodb.KycDocumentRepository;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -33,6 +37,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/internal/v1/kyc")
 @RequiredArgsConstructor
+@Tag(name = "KYC (Internal)", description = "Service-to-service only, not routed through nexus-api-gateway — verification records, retry eligibility, and compliance review actions.")
 public class InternalKycController {
 
     private final KycDocumentRepository kycDocumentRepository;
@@ -40,36 +45,35 @@ public class InternalKycController {
 
     // ── Verification Status ────────────────────────────────
 
-    /**
-     * GET /internal/v1/kyc/verifications/{verificationId}
-     * Full verification record. Used by Identity Service and compliance.
-     */
+    @Operation(summary = "Get full verification record", description = "Used by identity-service (to check KYC status before issuing tokens) and compliance — includes internal fields the user-facing KycController deliberately omits (confidence scores, AI reasoning).")
+    @ApiResponse(responseCode = "200", description = "Verification record retrieved")
+    @ApiResponse(responseCode = "404", description = "No verification with this ID")
     @GetMapping("/verifications/{verificationId}")
     public ResponseEntity<KycDocumentMongoDB> getVerification(
+            @Parameter(description = "Verification ID", required = true)
             @PathVariable String verificationId) {
         return kycDocumentRepository.findById(verificationId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    /**
-     * GET /internal/v1/kyc/verifications/user/{userId}
-     * All verification attempts for a user. Compliance dashboard.
-     */
+    @Operation(summary = "List a user's verification attempts", description = "Full history, not just the latest — used by the compliance dashboard.")
+    @ApiResponse(responseCode = "200", description = "Verifications retrieved (empty list if none)")
     @GetMapping("/verifications/user/{userId}")
     public ResponseEntity<List<KycDocumentMongoDB>>
-    getUserVerifications(@PathVariable String userId) {
+    getUserVerifications(
+            @Parameter(description = "User UUID", required = true)
+            @PathVariable String userId) {
         return ResponseEntity.ok(
                 kycDocumentRepository
                         .findByUserIdOrderBySubmittedAtDesc(userId));
     }
 
-    /**
-     * GET /internal/v1/kyc/verifications/{verificationId}/audit
-     * Full PostgreSQL audit trail for one verification.
-     */
+    @Operation(summary = "Get the audit trail for a verification", description = "Full PostgreSQL audit trail — every state transition, chronological.")
+    @ApiResponse(responseCode = "200", description = "Audit trail retrieved (empty list if none)")
     @GetMapping("/verifications/{verificationId}/audit")
     public ResponseEntity<List<KycAuditEntryJPA>> getAuditTrail(
+            @Parameter(description = "Verification ID", required = true)
             @PathVariable String verificationId) {
         return ResponseEntity.ok(
                 kycAuditRepository
@@ -79,13 +83,11 @@ public class InternalKycController {
 
     // ── Retry Eligibility ──────────────────────────────────
 
-    /**
-     * GET /internal/v1/kyc/retry-eligibility/{userId}
-     * Check if user can retry KYC. 3 attempts max per 30 days.
-     * Infrastructure failures do NOT consume retry slots.
-     */
+    @Operation(summary = "Check KYC retry eligibility", description = "3 rejections max per rolling 30-day window — infrastructure failures don't count against this, only REJECTED outcomes do.")
+    @ApiResponse(responseCode = "200", description = "Eligibility computed")
     @GetMapping("/retry-eligibility/{userId}")
     public ResponseEntity<Map<String, Object>> checkRetryEligibility(
+            @Parameter(description = "User UUID", required = true)
             @PathVariable String userId) {
 
         Instant thirtyDaysAgo = Instant.now()
@@ -115,12 +117,13 @@ public class InternalKycController {
 
     // ── Compliance Officer Review ──────────────────────────
 
-    /**
-     * POST /internal/v1/kyc/review/{verificationId}/outcome
-     * Compliance officer submits manual review decision.
-     */
+    @Operation(summary = "Submit a manual review outcome", description = "reviewOutcome must be APPROVED or REJECTED; reviewedBy and reviewOutcome are required, reviewNotes is optional.")
+    @ApiResponse(responseCode = "200", description = "Outcome recorded")
+    @ApiResponse(responseCode = "400", description = "Missing reviewOutcome or reviewedBy")
+    @ApiResponse(responseCode = "404", description = "No verification with this ID")
     @PostMapping("/review/{verificationId}/outcome")
     public ResponseEntity<Map<String, Object>> submitReviewOutcome(
+            @Parameter(description = "Verification ID", required = true)
             @PathVariable String verificationId,
             @RequestBody Map<String, String> body) {
 
@@ -160,12 +163,11 @@ public class InternalKycController {
 
     // ── SAR Filing ─────────────────────────────────────────
 
-    /**
-     * POST /internal/v1/kyc/verifications/{verificationId}/sar
-     * Record Suspicious Activity Report filing.
-     */
+    @Operation(summary = "Record a SAR filing", description = "Regulatory compliance requirement — records that a Suspicious Activity Report was filed for this verification.")
+    @ApiResponse(responseCode = "200", description = "SAR recorded")
     @PostMapping("/verifications/{verificationId}/sar")
     public ResponseEntity<Map<String, String>> recordSarFiling(
+            @Parameter(description = "Verification ID", required = true)
             @PathVariable String verificationId,
             @RequestBody Map<String, String> body) {
 
@@ -184,10 +186,8 @@ public class InternalKycController {
 
     // ── Metrics ────────────────────────────────────────────
 
-    /**
-     * GET /internal/v1/kyc/metrics/daily
-     * Daily KYC processing metrics for compliance dashboard.
-     */
+    @Operation(summary = "Get daily KYC metrics", description = "Total/pending verification counts for the compliance dashboard.")
+    @ApiResponse(responseCode = "200", description = "Metrics retrieved")
     @GetMapping("/metrics/daily")
     public ResponseEntity<Map<String, Object>> getDailyMetrics() {
         Instant dayStart = Instant.now()
@@ -208,12 +208,11 @@ public class InternalKycController {
 
     // ── Re-verification Trigger ────────────────────────────
 
-    /**
-     * POST /internal/v1/kyc/re-verify/{userId}
-     * Trigger manual re-verification (compliance request or 90-day review).
-     */
+    @Operation(summary = "Trigger manual re-verification", description = "Compliance request or the 90-day periodic review — queues re-verification, doesn't run it synchronously (returns 202).")
+    @ApiResponse(responseCode = "202", description = "Re-verification queued")
     @PostMapping("/re-verify/{userId}")
     public ResponseEntity<Map<String, String>> triggerReVerification(
+            @Parameter(description = "User UUID", required = true)
             @PathVariable String userId,
             @RequestBody Map<String, String> body) {
 

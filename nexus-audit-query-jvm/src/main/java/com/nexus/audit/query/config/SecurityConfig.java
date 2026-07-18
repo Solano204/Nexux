@@ -30,6 +30,11 @@ public class SecurityConfig {
                                 SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/**").permitAll()
+                        .requestMatchers(
+                                "/v3/api-docs/**",
+                                "/swagger-ui/**",
+                                "/swagger-ui.html"
+                        ).permitAll()
                         .requestMatchers("/internal/**").permitAll()
                         .requestMatchers("/api/v1/audit/**").permitAll()
                         .anyRequest().denyAll())

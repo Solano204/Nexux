@@ -7,6 +7,11 @@ import com.nexus.kyc.domain.model.enums.KycStatus;
 import com.nexus.kyc.infrastructure.mongodb.KycDocumentMongoDB;
 import com.nexus.kyc.infrastructure.mongodb.KycDocumentRepository;
 import com.nexus.kyc.web.controller.dto.response.StatusResponse;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,6 +42,8 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/kyc")
 @RequiredArgsConstructor
+@Tag(name = "KYC", description = "Identity document verification for the caller's own user — AWS Rekognition + LLM comparison pipeline.")
+@SecurityRequirement(name = "X-User-Id")
 public class KycController {
 
     private final KycVerificationService verificationService;
@@ -44,20 +51,38 @@ public class KycController {
 
     // ── POST /api/v1/kyc/verify ───────────────────────────────
 
+    @Operation(
+            summary = "Submit a document for KYC verification",
+            description = "Deliberately returns only user-actionable fields (userFacingMessage, " +
+                    "canRetry) — confidence scores, AI reasoning, and which specific fields failed " +
+                    "comparison never leave this response, by design. On any internal failure this " +
+                    "still returns 200 with a REJECTED-shaped error body rather than a 5xx — check " +
+                    "requiresAction/status, not just HTTP status, to detect failure here."
+    )
+    @ApiResponse(responseCode = "200", description = "Verification processed (check status field — this includes rejections and internal failures, not just success)")
+    @ApiResponse(responseCode = "400", description = "Invalid documentType value")
     @PostMapping(
             value = "/verify",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE
     )
     public ResponseEntity<KycVerificationResult> verify(
+            @Parameter(description = "Photo of the identity document", required = true)
             @RequestPart("document") MultipartFile documentFile,
+            @Parameter(description = "Full legal name as on the document", required = true)
             @RequestPart("fullName") @NotBlank String fullName,
+            @Parameter(description = "ISO date, e.g. 1990-01-01", required = true)
             @RequestPart("dateOfBirth") @NotBlank String dateOfBirth,
+            @Parameter(description = "Document number as printed", required = true)
             @RequestPart("documentNumber") @NotBlank String documentNumber,
+            @Parameter(description = "e.g. PASSPORT, NATIONAL_ID, DRIVERS_LICENSE", required = true)
             @RequestPart("documentType") String documentType,
+            @Parameter(description = "ISO country code, optional")
             @RequestPart(value = "nationality", required = false)
             String nationality,
+            @Parameter(description = "Language for user-facing messages, defaults to es")
             @RequestPart(value = "language", required = false)
             String language,
+            @Parameter(description = "Set by the gateway, not sent by the client directly in production", required = true)
             @RequestHeader("X-User-Id") String userId) {
 
         try {
@@ -97,9 +122,14 @@ public class KycController {
 
     // ── GET /api/v1/kyc/status/{verificationId} ───────────────
 
+    @Operation(summary = "Get my verification status", description = "Composite-key lookup (verificationId + userId) — a verification belonging to another user 404s rather than leaking that it exists.")
+    @ApiResponse(responseCode = "200", description = "Status retrieved")
+    @ApiResponse(responseCode = "404", description = "No verification with this ID for this user")
     @GetMapping("/status/{verificationId}")
     public ResponseEntity<StatusResponse> getStatus(
+            @Parameter(description = "Verification ID, from the verify response", required = true)
             @PathVariable String verificationId,
+            @Parameter(description = "Set by the gateway, not sent by the client directly in production", required = true)
             @RequestHeader("X-User-Id") String userId) {
 
         return kycDocumentRepository

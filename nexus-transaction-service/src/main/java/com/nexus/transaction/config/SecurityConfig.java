@@ -34,6 +34,12 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         .requestMatchers("/actuator/**").permitAll()
+                        // OpenAPI/Swagger UI — dev-only surface, no business data
+                        .requestMatchers(
+                                "/v3/api-docs/**",
+                                "/swagger-ui/**",
+                                "/swagger-ui.html"
+                        ).permitAll()
                         .requestMatchers("/internal/v1/**").permitAll()
                         .requestMatchers("/api/v1/**").permitAll()
                         .anyRequest().denyAll())

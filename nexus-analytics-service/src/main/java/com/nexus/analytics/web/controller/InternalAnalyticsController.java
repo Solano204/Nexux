@@ -2,6 +2,10 @@ package com.nexus.analytics.web.controller;
 
 import com.nexus.analytics.streams.aggregate.CategorySpendingAggregate;
 import com.nexus.analytics.streams.AnalyticsTopology;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.streams.*;
@@ -29,6 +33,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/internal/v1/streams")
 @RequiredArgsConstructor
+@Tag(name = "Analytics (Internal)", description = "Interactive Kafka Streams state-store queries — read by fraud-service (velocity), account-service (advisor spending patterns), and risk-scoring-service (volatility).")
 public class InternalAnalyticsController {
 
     // ANTES: private final KafkaStreams kafkaStreams;
@@ -41,11 +46,14 @@ public class InternalAnalyticsController {
         return ks;
     }
 
+    @Operation(summary = "Query category spending for a user/day", description = "Reads directly from the Kafka Streams state store — 503 with Retry-After if the store is rebalancing or not yet ready, not a transient error to treat as a failure.")
+    @ApiResponse(responseCode = "200", description = "Spending aggregate for the category/day (zero-value aggregate if no data)")
+    @ApiResponse(responseCode = "503", description = "Streams not ready — retry after the given delay")
     @GetMapping("/category-spending")
     public ResponseEntity<?> getCategorySpending(
-            @RequestParam("userId") String userId,
-            @RequestParam("category") String category,
-            @RequestParam(value = "date", required = false) String date) {
+            @Parameter(description = "User UUID", required = true) @RequestParam("userId") String userId,
+            @Parameter(description = "Spending category", required = true) @RequestParam("category") String category,
+            @Parameter(description = "ISO date, defaults to today") @RequestParam(value = "date", required = false) String date) {
 
         KafkaStreams ks = streamsBuilderFactoryBean.getKafkaStreams();
         if (ks == null || ks.state() != KafkaStreams.State.RUNNING) {
@@ -79,6 +87,9 @@ public class InternalAnalyticsController {
         }
     }
 
+    @Operation(summary = "Get Kafka Streams state", description = "Quick health check for the streams pipeline itself — RUNNING, REBALANCING, etc.")
+    @ApiResponse(responseCode = "200", description = "State retrieved")
+    @ApiResponse(responseCode = "503", description = "Streams not initialized or errored")
     @GetMapping("/health/lag")
     public ResponseEntity<?> getStreamLag() {
         try {

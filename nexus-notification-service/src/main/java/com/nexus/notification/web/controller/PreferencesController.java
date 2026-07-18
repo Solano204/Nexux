@@ -4,6 +4,11 @@ import com.nexus.notification.domain.exception.UnauthorizedException;
 import com.nexus.notification.domain.model.UserNotificationPreferences;
 import com.nexus.notification.infrastructure.mongodb.PreferencesRepository;
 import com.nexus.notification.infrastructure.redis.NotificationRedisRepository;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -29,14 +34,15 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/notifications/preferences")
 @RequiredArgsConstructor
+@Tag(name = "Notification Preferences", description = "Channel config (email/SMS/push/in-app) and registered push devices for the caller's own user.")
+@SecurityRequirement(name = "X-User-Id")
 public class PreferencesController {
 
     private final PreferencesRepository preferencesRepository;
     private final NotificationRedisRepository redisRepository;
 
-    /**
-     * Get user's notification preferences.
-     */
+    @Operation(summary = "Get my notification preferences", description = "Creates and returns platform defaults on first call for a new user — never 404s.")
+    @ApiResponse(responseCode = "200", description = "Preferences retrieved (created with defaults if this is the first call)")
     @GetMapping
     public ResponseEntity<UserNotificationPreferences> getPreferences(
             HttpServletRequest request) {
@@ -53,11 +59,16 @@ public class PreferencesController {
                 });
     }
 
-    /**
-     * Update notification preferences.
-     * Validates critical channels cannot be disabled.
-     * Invalidates Redis cache immediately.
-     */
+    @Operation(
+            summary = "Update my notification preferences",
+            description = "Full replace, not a partial patch — send the complete preferences object. " +
+                    "The userId field is overwritten server-side with the caller's own X-User-Id " +
+                    "regardless of what's in the body, so a client can't set another user's " +
+                    "preferences by editing the payload. FRAUD_ALERT cannot be disabled — " +
+                    "regulatory requirement, enforced here, not just in the UI."
+    )
+    @ApiResponse(responseCode = "200", description = "Preferences updated")
+    @ApiResponse(responseCode = "400", description = "Attempted to disable FRAUD_ALERT")
     @PutMapping
     public ResponseEntity<?> updatePreferences(
             @Valid @RequestBody UserNotificationPreferences updated,
@@ -89,9 +100,13 @@ public class PreferencesController {
         return ResponseEntity.ok(updated);
     }
 
-    /**
-     * Register a push notification device (APNs/FCM token).
-     */
+    @Operation(
+            summary = "Register a push notification device",
+            description = "APNs/FCM token — simulated ARN generation today (real implementation " +
+                    "would call AWS SNS to create the platform endpoint, see the method body)."
+    )
+    @ApiResponse(responseCode = "200", description = "Device registered")
+    @ApiResponse(responseCode = "400", description = "Missing deviceToken")
     @PostMapping("/device")
     public ResponseEntity<Map<String, Object>> registerDevice(
             @RequestBody Map<String, String> body,
@@ -139,11 +154,11 @@ public class PreferencesController {
                 "registeredAt", Instant.now().toString()));
     }
 
-    /**
-     * Unregister a push device (user logged out).
-     */
+    @Operation(summary = "Unregister a push device", description = "Call this on logout — idempotent, no-op if the device wasn't registered.")
+    @ApiResponse(responseCode = "200", description = "Device unregistered (or wasn't registered)")
     @DeleteMapping("/device/{deviceToken}")
     public ResponseEntity<Void> unregisterDevice(
+            @Parameter(description = "Device push token", required = true)
             @PathVariable String deviceToken,
             HttpServletRequest request) {
 

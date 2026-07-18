@@ -7,6 +7,11 @@ import com.nexus.fraud.infrastructure.redis.FraudRedisRepository;
 import com.nexus.fraud.web.dto.FraudAnalysisRequest;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -38,17 +43,19 @@ import java.util.UUID;
  *   GET    /decisions/{transactionId}         — Get decision by txnId
  *   GET    /decisions/user/{userId}           — User's fraud decisions (paginated)
  *   GET    /decisions/pending-reviews         — Pending REVIEW queue
- *   GET    /rules                             — List active fraud rules
  *   POST   /merchants/blacklist/{merchantId}  — Blacklist a merchant
  *   DELETE /merchants/blacklist/{merchantId}  — Remove from blacklist
  *   POST   /review/{decisionId}/outcome       — Record review outcome
  *   POST   /review/{decisionId}/sar           — Record SAR filing
  *   GET    /metrics                           — Real-time fraud stats
+ *   GET    /policies/search                   — RAG policy search
  */
 @Slf4j
 @RestController
 @RequestMapping("/internal/v1/fraud")
 @RequiredArgsConstructor
+@Tag(name = "Fraud (Internal)", description = "Fraud analysis, decision review, and merchant blacklist management — called by other NEXUS services, never by an end user.")
+@SecurityRequirement(name = "X-Internal-Service")
 public class InternalFraudController {
 
     private final FraudAnalysisService fraudAnalysisService;
@@ -60,10 +67,14 @@ public class InternalFraudController {
     // DIRECT ANALYSIS (non-Kafka trigger for testing / compliance)
     // ══════════════════════════════════════════════════════════
 
-    /**
-     * Direct fraud analysis — bypasses Kafka for emergency cases,
-     * compliance dashboard "what if" analysis, and integration testing.
-     */
+    @Operation(
+            summary = "Run fraud analysis directly (bypasses Kafka)",
+            description = "Production traffic goes through FraudCommandConsumer (Kafka), not this " +
+                    "endpoint — this exists for emergency cases, compliance \"what if\" analysis, and " +
+                    "integration testing where you need a synchronous result."
+    )
+    @ApiResponse(responseCode = "200", description = "Decision computed")
+    @ApiResponse(responseCode = "500", description = "Analysis failed (LLM/tool error, etc.)")
     @PostMapping("/analyze")
     public ResponseEntity<?> analyzeTransaction(
             @Valid @RequestBody FraudAnalysisRequest request) {
@@ -103,17 +114,17 @@ public class InternalFraudController {
     // DECISION RETRIEVAL
     // ══════════════════════════════════════════════════════════
 
-    /**
-     * Retrieve a specific fraud decision by transaction ID.
-     * Used by: Compliance dashboard, AI Assistant (explaining
-     * rejections to users), Audit Service.
-     */
-    /**
-     * Retrieve a specific fraud decision by transaction ID.
-     * Used by: Compliance dashboard, AI Assistant, Audit Service.
-     */
+    @Operation(
+            summary = "Get the fraud decision for a transaction",
+            description = "Used by the compliance dashboard, the AI assistant (explaining a rejection " +
+                    "to a user), and the audit service."
+    )
+    @ApiResponse(responseCode = "200", description = "Decision found")
+    @ApiResponse(responseCode = "404", description = "No fraud decision exists for this transaction")
     @GetMapping("/decisions/{transactionId}")
-    public ResponseEntity<?> getDecision(@PathVariable UUID transactionId) {
+    public ResponseEntity<?> getDecision(
+            @Parameter(description = "Transaction UUID", required = true)
+            @PathVariable UUID transactionId) {
 
         var entityOpt = decisionRepository.findByTransactionId(transactionId);
 
@@ -128,12 +139,11 @@ public class InternalFraudController {
 
         return ResponseEntity.ok(toResponse(entityOpt.get()));
     }
-    /**
-     * All fraud decisions for a user. Paginated, newest first.
-     * Used by: Compliance officers reviewing a user's account.
-     */
+    @Operation(summary = "List a user's fraud decisions", description = "Paginated, newest first — used by compliance officers reviewing a user's account.")
+    @ApiResponse(responseCode = "200", description = "Decisions retrieved (empty page if none)")
     @GetMapping("/decisions/user/{userId}")
     public ResponseEntity<Page<FraudDecisionResponse>> getUserDecisions(
+            @Parameter(description = "User UUID", required = true)
             @PathVariable UUID userId, Pageable pageable) {
 
         Page<FraudDecisionResponse> decisions = decisionRepository
@@ -143,10 +153,8 @@ public class InternalFraudController {
         return ResponseEntity.ok(decisions);
     }
 
-    /**
-     * Pending REVIEW decisions awaiting compliance officer action.
-     * Sorted by priority (HIGH first) then by age (oldest first).
-     */
+    @Operation(summary = "List decisions pending manual review", description = "Sorted by priority (HIGH first) then age (oldest first) — the compliance officer's work queue.")
+    @ApiResponse(responseCode = "200", description = "Pending reviews retrieved (empty list if none)")
     @GetMapping("/decisions/pending-reviews")
     public ResponseEntity<List<FraudDecisionResponse>> getPendingReviews() {
 
@@ -162,13 +170,19 @@ public class InternalFraudController {
     // MERCHANT BLACKLIST MANAGEMENT
     // ══════════════════════════════════════════════════════════
 
-    /**
-     * Add a merchant to the Redis blacklist.
-     * Immediate effect — next transaction to this merchant is blocked.
-     */
+    @Operation(
+            summary = "Blacklist a merchant",
+            description = "Immediate effect — the next transaction to this merchant is blocked. " +
+                    "operatorId is optional and only used for the audit log (\"blacklistedBy\") — " +
+                    "not validated against any role, see 13_REST_API_DESIGN_CHANGES.md Sección 10 " +
+                    "for the caveat on this."
+    )
+    @ApiResponse(responseCode = "200", description = "Merchant blacklisted")
     @PostMapping("/merchants/blacklist/{merchantId}")
     public ResponseEntity<Map<String, Object>> blacklistMerchant(
+            @Parameter(description = "Merchant identifier", required = true)
             @PathVariable String merchantId,
+            @Parameter(description = "Operator ID for the audit log — optional, not validated")
             @RequestHeader(value = "X-User-Id", required = false)
             String operatorId) {
 
@@ -187,13 +201,13 @@ public class InternalFraudController {
                         ? operatorId : "SYSTEM"));
     }
 
-    /**
-     * Remove a merchant from the blacklist.
-     * Used if a merchant was incorrectly blacklisted.
-     */
+    @Operation(summary = "Remove a merchant from the blacklist", description = "Used if a merchant was incorrectly blacklisted.")
+    @ApiResponse(responseCode = "200", description = "Merchant removed from blacklist")
     @DeleteMapping("/merchants/blacklist/{merchantId}")
     public ResponseEntity<Map<String, Object>> unblacklistMerchant(
+            @Parameter(description = "Merchant identifier", required = true)
             @PathVariable String merchantId,
+            @Parameter(description = "Operator ID for the audit log — optional, not validated")
             @RequestHeader(value = "X-User-Id", required = false)
             String operatorId) {
 
@@ -224,9 +238,17 @@ public class InternalFraudController {
      *   CLEARED         — SAGA proceeds with transaction
      *   ESCALATED       — Further investigation needed
      */
+    @Operation(
+            summary = "Record a manual review outcome",
+            description = "outcome must be CONFIRMED_FRAUD (saga compensates, source account flagged), " +
+                    "CLEARED (saga proceeds), or ESCALATED (further investigation)."
+    )
+    @ApiResponse(responseCode = "200", description = "Outcome recorded")
+    @ApiResponse(responseCode = "409", description = "Decision not found, or already reviewed")
     @PostMapping("/review/{decisionId}/outcome")
     @Transactional
     public ResponseEntity<?> recordReviewOutcome(
+            @Parameter(description = "Fraud decision UUID", required = true)
             @PathVariable UUID decisionId,
             @Valid @RequestBody ReviewOutcomeRequest request) {
 
@@ -269,13 +291,13 @@ public class InternalFraudController {
                 "reviewedAt", Instant.now().toString()));
     }
 
-    /**
-     * Records that a Suspicious Activity Report (SAR) was filed
-     * for this transaction. Regulatory compliance requirement.
-     */
+    @Operation(summary = "Record a SAR filing", description = "Regulatory compliance requirement — records that a Suspicious Activity Report was filed for this decision.")
+    @ApiResponse(responseCode = "200", description = "SAR recorded")
+    @ApiResponse(responseCode = "404", description = "Decision not found")
     @PostMapping("/review/{decisionId}/sar")
     @Transactional
     public ResponseEntity<?> recordSarFiling(
+            @Parameter(description = "Fraud decision UUID", required = true)
             @PathVariable UUID decisionId,
             @Valid @RequestBody SarFilingRequest request) {
 
@@ -307,10 +329,8 @@ public class InternalFraudController {
     // REAL-TIME METRICS
     // ══════════════════════════════════════════════════════════
 
-    /**
-     * Real-time fraud processing statistics.
-     * Used by the Grafana dashboard backend.
-     */
+    @Operation(summary = "Get real-time fraud metrics", description = "Last-hour approve/reject/review counts, rejection rate, pending review count, and 24h SAR count — feeds the Grafana dashboard.")
+    @ApiResponse(responseCode = "200", description = "Metrics retrieved")
     @GetMapping("/metrics")
     public ResponseEntity<Map<String, Object>> getFraudMetrics() {
 
@@ -359,10 +379,14 @@ public class InternalFraudController {
     // POLICY SEARCH (compliance officer RAG query interface)
     // ══════════════════════════════════════════════════════════
 
-    /**
-     * Compliance officer direct query to the fraud policy RAG store.
-     * Returns policy fragments relevant to a natural language query.
-     */
+    @Operation(
+            summary = "Search the fraud policy RAG store",
+            description = "Natural-language query against the same policy store the fraud agent uses " +
+                    "internally — as implemented today this returns guidance pointing at POST /analyze " +
+                    "rather than the policy fragments directly (see the method body), that's a real " +
+                    "gap, not a documentation error."
+    )
+    @ApiResponse(responseCode = "200", description = "Guidance/results returned")
     @GetMapping("/policies/search")
     public ResponseEntity<Map<String, Object>> searchPolicies(
             @RequestParam String query) {

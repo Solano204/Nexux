@@ -3,6 +3,10 @@ package com.nexus.identity.web.controller;
 import com.nexus.identity.application.command.UnauthorizedException;
 import com.nexus.identity.application.query.UserQueryService;
 import com.nexus.identity.web.dto.response.IdentitySummaryResponse;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -41,6 +45,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/internal/v1")
 @RequiredArgsConstructor
+@Tag(name = "Internal", description = "Service-to-service only — not reachable through nexus-api-gateway's public routes. Trust model varies by endpoint, see each operation's description.")
 public class InternalController {
 
     private final UserQueryService queryService;
@@ -51,13 +56,20 @@ public class InternalController {
     @Value("${nexus.plane-bridge-secret:}")
     private String planeBridgeSecret;
 
-    /**
-     * Returns identity summary without PII (no password hash, no full profile).
-     * Used by account-service and fraud-service to verify user identity.
-     */
+    @Operation(
+            summary = "Get identity summary (no PII)",
+            description = "Used by account-service and fraud-service to verify a user exists and its " +
+                    "current status, without exposing password hash or full profile. Protected by " +
+                    "the gateway's RemoteAddr predicate only (Docker-network callers) — see the " +
+                    "class-level note in InternalController.java for why this one doesn't also " +
+                    "validate X-Plane-Bridge-Secret like getKycStatus does."
+    )
+    @ApiResponse(responseCode = "200", description = "Identity summary retrieved")
     @GetMapping("/users/{userId}/identity")
     public ResponseEntity<IdentitySummaryResponse> getIdentitySummary(
+            @Parameter(description = "User UUID", required = true)
             @PathVariable UUID userId,
+            @Parameter(description = "Caller's service name, logged for audit only — not validated")
             @RequestHeader(value = "X-Calling-Service",
                     required = false) String callingService) {
 
@@ -70,14 +82,20 @@ public class InternalController {
         return ResponseEntity.ok(response);
     }
 
-    /**
-     * Returns KYC status for the given user.
-     * Used by nexus-auth-lambda in the AWS plane to check KYC
-     * state before issuing Cognito tokens.
-     */
+    @Operation(
+            summary = "Get KYC status (Lambda bridge)",
+            description = "Used by nexus-auth-lambda (AWS, outside the Docker network) to check KYC " +
+                    "state before issuing Cognito tokens. Requires X-Plane-Bridge-Secret — the " +
+                    "gateway's RemoteAddr predicate alone isn't a real boundary for a caller outside " +
+                    "the Docker network, this is the actual check for this one."
+    )
+    @ApiResponse(responseCode = "200", description = "Status retrieved")
+    @ApiResponse(responseCode = "401", description = "Missing or invalid X-Plane-Bridge-Secret")
     @GetMapping("/users/{userId}/kyc/status")
     public ResponseEntity<Map<String, Object>> getKycStatus(
+            @Parameter(description = "User UUID", required = true)
             @PathVariable UUID userId,
+            @Parameter(description = "Shared secret Terraform provisions and nexus-auth-lambda sends", required = true)
             @RequestHeader(value = "X-Plane-Bridge-Secret", required = false)
             String bridgeSecret) {
 
@@ -98,10 +116,8 @@ public class InternalController {
         ));
     }
 
-    /**
-     * Health check for internal service-to-service calls.
-     * More detailed than /actuator/health — includes DB + Redis status.
-     */
+    @Operation(summary = "Detailed health check", description = "More detailed than /actuator/health for internal service-to-service calls.")
+    @ApiResponse(responseCode = "200", description = "Service is up")
     @GetMapping("/health/detailed")
     public ResponseEntity<Map<String, Object>> detailedHealth() {
         return ResponseEntity.ok(Map.of(
