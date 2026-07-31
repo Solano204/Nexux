@@ -1,0 +1,22 @@
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: platform-webhook
+    group_by: ["alertname", "service"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      # AllServicesDownAnomaly matches the master prompt's "page
+      # immediately" ask - no group_wait delay for this one specifically,
+      # everything else keeps the default 30s above.
+      - receiver: platform-webhook
+        matchers:
+          - alertname = AllServicesDownAnomaly
+        group_wait: 0s
+        repeat_interval: 15m
+      - receiver: platform-webhook
+        matchers:
+          - severity = critical
+        repeat_interval: 1h

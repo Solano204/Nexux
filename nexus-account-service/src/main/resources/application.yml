@@ -16,15 +16,30 @@ spring:
 
   threads:
     virtual:
-      enabled: true
+      # disabled: Brave's ThreadLocal trace context doesn't survive virtual
+      # thread mount/unmount - controller-dispatched spans were silently
+      # never exported to Zipkin (actuator/internal spans traced fine).
+      enabled: false
 
   datasource:
     url: ${DATASOURCE_URL:jdbc:postgresql://localhost:5433/nexus_accounts}
     username: ${POSTGRES_USER:nexus}
     password: ${POSTGRES_PASSWORD:nexus_dev_password}
     hikari:
-      maximum-pool-size: 10
-      minimum-idle: 2
+      # Fase 8 (resiliencia guide): was 10 against a Tomcat threads.max of
+      # 150 (Fase 6) with no connection-timeout override — up to 150
+      # concurrent requests could queue for only 10 connections, each
+      # waiting HikariCP's 30s default before failing, 6x past the 5s HTTP
+      # timeout ceiling from Fase 1. A client would already have given up
+      # and possibly retried (Fase 2) long before Hikari itself gave up.
+      # Bumped modestly, not to 1:1 with Tomcat threads — this host has a
+      # documented history of running out of memory with too many
+      # concurrent containers/connections open at once, and HikariCP's own
+      # sizing guidance is that pools smaller than thread-count are often
+      # correct for fast queries, not a bug by themselves.
+      maximum-pool-size: 15
+      minimum-idle: 3
+      connection-timeout: 3000
       pool-name: nexus-account-pool
       data-source-properties:
         lock_timeout: 10000
@@ -83,6 +98,10 @@ spring:
 
 server:
   port: 8085
+  tomcat:
+    threads:
+      max: 150
+    accept-count: 75
 
 springdoc:
   api-docs:
@@ -95,6 +114,10 @@ springdoc:
     tagsSorter: alpha
     doc-expansion: none
     display-request-duration: true
+
+nexus:
+  load-shedding:
+    max-in-flight: 120
 
 eureka:
   client:

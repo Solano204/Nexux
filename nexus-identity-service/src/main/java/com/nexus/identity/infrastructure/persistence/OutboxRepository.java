@@ -6,7 +6,6 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -17,38 +16,23 @@ import java.util.UUID;
  *
  * Writes happen in the SAME transaction as domain changes.
  * Debezium reads the PostgreSQL WAL (not this table directly)
- * and publishes to Kafka.
+ * and publishes to Kafka - it never updates any column here to mark a
+ * row delivered.
  *
- * The cleanup job uses findUnprocessedBefore() to delete
- * old entries after Debezium has confirmed delivery.
+ * findUnprocessedBefore()/markAsProcessed() used to back this file's
+ * "cleanup job uses findUnprocessedBefore()" doc comment above, but
+ * grepping the whole codebase found no caller of markAsProcessed()
+ * anywhere - dead code from a poll-and-mark-as-processed relay design
+ * that predates the move to Debezium CDC. Same finding as the other 5
+ * outbox tables on the platform. See
+ * CHANGES-BESTPRACTICES/08_EVENT_DESIGN_CHANGES.md Section 3.
  */
 @Repository
 public interface OutboxRepository extends JpaRepository<OutboxEntry, UUID> {
 
-    /**
-     * Find entries not yet cleaned up.
-     * Used by the scheduled cleanup job — Debezium delivers independently.
-     */
-    @Query("""
-        SELECT o FROM OutboxEntry o
-        WHERE o.processedAt IS NULL
-        AND o.createdAt < :before
-        ORDER BY o.createdAt ASC
-        """)
-    List<OutboxEntry> findUnprocessedBefore(@Param("before") Instant before);
-
-    /**
-     * Mark entries as processed (outbox relay + cleanup job).
-     */
     @Modifying
-    @Transactional
-    @Query("""
-        UPDATE OutboxEntry o
-        SET o.processedAt = :now
-        WHERE o.outboxId IN :ids
-        """)
-    int markAsProcessed(@Param("ids") List<UUID> ids,
-                        @Param("now") Instant now);
+    @Query("DELETE FROM OutboxEntry o WHERE o.createdAt < :before")
+    int deleteEntriesOlderThan(@Param("before") Instant before);
 
     /**
      * Find by aggregate for idempotency checks (rare).

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.kyc.domain.model.*;
 import com.nexus.kyc.domain.model.enums.KycStatus;
 import com.nexus.kyc.domain.model.enums.RejectionReason;
+import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.Observation;
@@ -11,9 +12,11 @@ import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Stage 2 — Data Comparison.
@@ -42,17 +45,27 @@ public class Stage2DataComparison {
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
     private final Timer comparisonTimer;
+    private final RateLimiter openAiRateLimiter;
+
+    // Testing-only bypass for when there's no working OpenAI key: skips the
+    // real comparison call entirely and always approves, so the KYC
+    // pipeline can be exercised end-to-end without AI. Set
+    // nexus.ai.mock-mode=true (nexus-platform-config) to enable.
+    @Value("${nexus.ai.mock-mode:false}")
+    private boolean mockMode;
 
     public Stage2DataComparison(
             @Qualifier("kycStage2ComparisonClient")
             ChatClient comparisonClient,
             ObjectMapper objectMapper,
             ObservationRegistry observationRegistry,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            RateLimiter openAiRateLimiter) {
 
         this.comparisonClient = comparisonClient;
         this.objectMapper = objectMapper;
         this.observationRegistry = observationRegistry;
+        this.openAiRateLimiter = openAiRateLimiter;
         this.comparisonTimer = Timer.builder(
                         "kyc.stage2.comparison.duration")
                 .publishPercentiles(0.5, 0.9, 0.95, 0.99)
@@ -85,11 +98,13 @@ public class Stage2DataComparison {
                     submitted.fullName(), submitted.dateOfBirth());
 
             // Section 3: structured output
-            KycVerificationDecision decision =
-                    comparisonClient.prompt()
-                            .user(comparisonPrompt)
-                            .call()
-                            .entity(KycVerificationDecision.class);
+            KycVerificationDecision decision = mockMode
+                    ? buildMockApprovedDecision(submitted)
+                    : RateLimiter.decorateSupplier(openAiRateLimiter, () ->
+                            comparisonClient.prompt()
+                                    .user(comparisonPrompt)
+                                    .call()
+                                    .entity(KycVerificationDecision.class)).get();
 
             if (decision == null) {
                 return buildFailureDecision(
@@ -195,6 +210,25 @@ public class Stage2DataComparison {
                 extracted.imageQualityIssues() != null
                         ? extracted.imageQualityIssues() : "none"
         );
+    }
+
+    private KycVerificationDecision buildMockApprovedDecision(
+            KycVerificationRequest submitted) {
+        return new KycVerificationDecision(
+                KycStatus.APPROVED,
+                0.99,
+                Map.of(),
+                List.of(),
+                null,
+                true,
+                0,
+                submitted.fullName(),
+                submitted.dateOfBirth(),
+                submitted.documentNumber(),
+                submitted.nationality(),
+                "nexus.ai.mock-mode=true - synthetic approval, no comparison call was made.",
+                false,
+                null);
     }
 
     private KycVerificationDecision buildFailureDecision(

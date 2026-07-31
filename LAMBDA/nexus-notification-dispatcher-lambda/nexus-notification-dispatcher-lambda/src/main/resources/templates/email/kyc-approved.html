@@ -8,19 +8,19 @@
     <p style="font-size:20px;font-weight:700;color:#16a34a;">
         ✅ Tu identidad ha sido verificada
     </p>
-    <p th:text="'Hola ' + ${userName ?: 'usuario'} + ', tu verificación de identidad fue aprobada exitosamente.'">
+    <p th:text="'Hola ' + ${userName != null ? userName : 'usuario'} + ', tu verificación de identidad fue aprobada exitosamente.'">
         Tu verificación fue aprobada.
     </p>
     <table style="width:100%;border-collapse:collapse;margin:16px 0;">
         <tr>
             <td style="color:#6b7280;padding:8px 0;">Nivel de verificación</td>
             <td style="font-weight:700;text-align:right;"
-                th:text="${kycTier ?: 'ESTÁNDAR'}">ESTÁNDAR</td>
+                th:text="${kycTier != null ? kycTier : 'ESTÁNDAR'}">ESTÁNDAR</td>
         </tr>
         <tr>
             <td style="color:#6b7280;padding:8px 0;">Verificado el</td>
             <td style="text-align:right;"
-                th:text="${verifiedAt ?: '---'}">---</td>
+                th:text="${verifiedAt != null ? verifiedAt : '---'}">---</td>
         </tr>
     </table>
     <p>Ahora puedes realizar transferencias, pagos y utilizar todas las funciones de tu cuenta sin restricciones.</p>

@@ -18,7 +18,7 @@ from typing import NamedTuple
 
 import boto3
 
-from utils.logging_config import log
+from src.utils.logging_config import log
 
 s3_client = boto3.client("s3")
 

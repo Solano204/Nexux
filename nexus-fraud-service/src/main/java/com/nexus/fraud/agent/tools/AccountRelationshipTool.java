@@ -1,6 +1,7 @@
 package com.nexus.fraud.agent.tools;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nexus.fraud.infrastructure.http.TransactionServiceClient;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
@@ -9,7 +10,6 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestTemplate;
 
 /**
  * Account Relationship Tool — Analyzes source→target account history.
@@ -28,7 +28,7 @@ import org.springframework.web.client.RestTemplate;
 public class AccountRelationshipTool {
 
     private final StringRedisTemplate redisTemplate;
-    private final RestTemplate transactionServiceClient;
+    private final TransactionServiceClient transactionServiceClient;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
 
@@ -66,15 +66,9 @@ public class AccountRelationshipTool {
             String relationshipType = "UNKNOWN";
 
             try {
-                String url = "http://nexus-transaction-service:8086" +
-                        "/internal/v1/accounts/relationship" +
-                        "?source=" + sourceAccountId +
-                        "&target=" + targetAccountId;
-
                 com.fasterxml.jackson.databind.JsonNode response =
-                        transactionServiceClient.getForObject(
-                                url,
-                                com.fasterxml.jackson.databind.JsonNode.class);
+                        transactionServiceClient.getAccountRelationship(
+                                sourceAccountId, targetAccountId);
 
                 if (response != null) {
                     priorTransferCount = response

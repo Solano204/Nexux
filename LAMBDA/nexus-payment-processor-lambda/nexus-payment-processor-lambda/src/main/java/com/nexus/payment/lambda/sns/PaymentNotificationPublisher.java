@@ -1,7 +1,6 @@
 package com.nexus.payment.lambda.sns;
 
 import com.amazonaws.services.lambda.runtime.events.SQSEvent;
-import com.amazonaws.xray.AWSXRay;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.payment.lambda.model.NormalizedPaymentEvent;
 import org.slf4j.Logger;
@@ -49,7 +48,6 @@ public class PaymentNotificationPublisher {
      * Publishes to SNS. Returns messageId on success, null on failure.
      */
     public String publish(NormalizedPaymentEvent event) {
-        var segment = AWSXRay.beginSubsegment("SNSPublish");
         try {
             String message = mapper.writeValueAsString(event);
 
@@ -80,12 +78,9 @@ public class PaymentNotificationPublisher {
             return response.messageId();
 
         } catch (Exception e) {
-            segment.addException(e);
             log.warn("SNS publish failed (non-fatal): eventId={} {}",
                     event.eventId(), e.getMessage());
             return null;
-        } finally {
-            AWSXRay.endSubsegment();
         }
     }
 

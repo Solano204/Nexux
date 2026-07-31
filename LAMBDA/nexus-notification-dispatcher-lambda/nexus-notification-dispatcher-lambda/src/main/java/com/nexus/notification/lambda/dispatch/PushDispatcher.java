@@ -1,6 +1,5 @@
 package com.nexus.notification.lambda.dispatch;
 
-import com.amazonaws.xray.AWSXRay;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.notification.lambda.model.*;
@@ -54,7 +53,6 @@ public class PushDispatcher {
 
     public DeliveryResult dispatch(DispatchRequest request) {
         long startMs = System.currentTimeMillis();
-        var segment = AWSXRay.beginSubsegment("SNS.SendPush");
 
         try {
             String endpointArn = request.deviceEndpointArn();
@@ -86,7 +84,6 @@ public class PushDispatcher {
                     sns.publish(publishRequest);
 
             long durationMs = System.currentTimeMillis() - startMs;
-            segment.putMetadata("messageId", response.messageId());
 
             log.info("Push delivered: notificationId={} " +
                             "snsMessageId={} platform={} durationMs={}",
@@ -100,7 +97,6 @@ public class PushDispatcher {
 
         } catch (EndpointDisabledException e) {
             // User uninstalled app — permanent failure, clean up ARN
-            segment.addException(e);
             DeliveryException ex = new DeliveryException("PUSH",
                     "Push endpoint disabled: " + request.deviceEndpointArn(),
                     false);
@@ -110,19 +106,14 @@ public class PushDispatcher {
 
         } catch (InvalidParameterException e) {
             // Malformed ARN
-            segment.addException(e);
             throw new DeliveryException("PUSH",
                     "Invalid endpoint ARN: " + e.getMessage(), false);
 
         } catch (SnsException e) {
-            segment.addException(e);
             boolean transient_ = e.statusCode() >= 500;
             throw new DeliveryException("PUSH",
                     "SNS push error " + e.statusCode() + ": " +
                             e.getMessage(), transient_);
-
-        } finally {
-            AWSXRay.endSubsegment();
         }
     }
 

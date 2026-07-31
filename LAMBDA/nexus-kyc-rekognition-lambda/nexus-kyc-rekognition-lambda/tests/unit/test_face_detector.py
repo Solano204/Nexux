@@ -13,29 +13,29 @@ class TestFaceDetector:
         with open(fixture_path) as f:
             return json.load(f)
 
-    @patch("rekognition.face_detector.rekognition_client")
+    @patch("src.rekognition.face_detector.rekognition_client")
     def test_parse_face_response_detects_one_face(self, mock_client):
         fixture = self._load_fixture()
-        from rekognition.face_detector import parse_face_result
+        from src.rekognition.face_detector import _parse_response as parse_face_result
 
         result = parse_face_result(fixture)
         assert result["faceCount"] == 1
         assert result["primaryFace"] is not None
         assert result["hasAcceptableQuality"] is True
 
-    @patch("rekognition.face_detector.rekognition_client")
+    @patch("src.rekognition.face_detector.rekognition_client")
     def test_no_faces_returns_zero(self, mock_client):
-        from rekognition.face_detector import parse_face_result
+        from src.rekognition.face_detector import _parse_response as parse_face_result
 
         result = parse_face_result({"FaceDetails": []})
         assert result["faceCount"] == 0
         assert result["primaryFace"] is None
         assert result["hasAcceptableQuality"] is False
 
-    @patch("rekognition.face_detector.rekognition_client")
+    @patch("src.rekognition.face_detector.rekognition_client")
     def test_high_quality_face_passes(self, mock_client):
         fixture = self._load_fixture()
-        from rekognition.face_detector import parse_face_result
+        from src.rekognition.face_detector import _parse_response as parse_face_result
 
         result = parse_face_result(fixture)
         quality = result["primaryFace"]["quality"]
@@ -43,10 +43,10 @@ class TestFaceDetector:
         assert quality["sharpness"] > 40
         assert result["primaryFace"]["isFrontalFacing"] is True
 
-    @patch("rekognition.face_detector.rekognition_client")
+    @patch("src.rekognition.face_detector.rekognition_client")
     def test_face_area_calculated(self, mock_client):
         fixture = self._load_fixture()
-        from rekognition.face_detector import parse_face_result
+        from src.rekognition.face_detector import _parse_response as parse_face_result
 
         result = parse_face_result(fixture)
         assert result["primaryFace"]["faceAreaPercent"] > 0

@@ -1,0 +1,301 @@
+{
+  "id": null,
+  "uid": "nexus-platform-overview",
+  "title": "Nexus Platform - Overview",
+  "description": "Health of all 16 Nexus services on one screen, grouped by business profile (core/auth/txn/ai/support/gateway).",
+  "tags": ["nexus", "overview"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "editable": true,
+  "graphTooltip": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "group",
+        "label": "Group",
+        "type": "custom",
+        "query": "core,auth,txn,ai,support,gateway",
+        "current": { "text": "All", "value": "$__all" },
+        "includeAll": true,
+        "multi": true,
+        "sort": 1
+      },
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+        "query": { "query": "label_values(up{group=~\"$group\"}, service)", "refId": "StandardVariableQuery" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Platform status — group: $group",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Services UP",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "count(up{group=~\"$group\", service=~\"$service\"} == 1)", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Services DOWN",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "count(up{group=~\"$group\", service=~\"$service\"} == 0)", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Platform-wide HTTP request rate (req/s)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_seconds_count{group=~\"$group\", service=~\"$service\"}[5m]))", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Platform-wide 5xx rate (req/s)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_seconds_count{group=~\"$group\", service=~\"$service\", status=~\"5..\"}[5m]))", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.05 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 6,
+      "type": "alertlist",
+      "title": "Currently firing alerts",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 5 },
+      "options": {
+        "showOptions": "current",
+        "maxItems": 20,
+        "sortOrder": 1,
+        "dashboardAlerts": false,
+        "alertName": "",
+        "stateFilter": { "firing": true, "pending": true, "noData": false, "normal": false, "error": true }
+      }
+    },
+    {
+      "id": 7,
+      "type": "state-timeline",
+      "title": "Down-service count by group (which subsystem, not just how many)",
+      "description": "Restart-count per service was requested here too, but there's no cAdvisor/container-level exporter scraped by Prometheus today (only each service's own /actuator/prometheus) - no metric exists for it yet. Flagging rather than inventing one.",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "count(up{group=~\"$group\", service=~\"$service\"} == 0) by (group)", "refId": "A", "legendFormat": "{{group}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 2 }] }
+        },
+        "overrides": []
+      },
+      "options": { "mergeValues": true, "showValue": "always", "rowHeight": 0.9, "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "$service",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 11 },
+      "collapsed": false,
+      "repeat": "service",
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Status",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "up{service=\"$service\"}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "background" }
+    },
+    {
+      "id": 12,
+      "type": "gauge",
+      "title": "CPU usage",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "process_cpu_usage{service=\"$service\"} * 100", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] }
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 13,
+      "type": "gauge",
+      "title": "Heap usage",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "jvm_memory_used_bytes{area=\"heap\", service=\"$service\"} / jvm_memory_max_bytes{area=\"heap\", service=\"$service\"} * 100", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 85 }] }
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "HTTP request rate",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_seconds_count{service=\"$service\"}[5m])) by (status)", "refId": "A", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 22,
+      "type": "row",
+      "title": "Platform logs (ERROR only)",
+      "description": "Loki datasource's derivedFields (monitoring/grafana/provisioning/datasources/datasources.yml) already turn a traceId in any log line into a clickable link straight to that trace in Zipkin - this panel is the other half: a live view of what's actually failing, not just a count.",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 23,
+      "type": "logs",
+      "title": "Error logs across all services",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 17 },
+      "datasource": { "type": "loki", "uid": "nexus-loki" },
+      "targets": [
+        { "expr": "{service=~\"$service\", level=\"ERROR\"}", "refId": "A" }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 24,
+      "type": "row",
+      "title": "CI health",
+      "description": "Master prompt 8.5 - pipeline health as observable as service health, not buried in the GitHub Actions tab only. Metrics pushed by .github/workflows/ci-pr.yml's 'Push build metrics to Pushgateway' step - see that workflow for the NEXUS_PUSHGATEWAY_URL secret this depends on (needs a publicly reachable Pushgateway, not the local-network-only one added for Part 6's JMeter results).",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 25,
+      "type": "stat",
+      "title": "CI build success rate (last 50 pushes to Pushgateway)",
+      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(ci_build_test_failures_total{job=\"nexus-pushgateway\"} == 0) / count(ci_build_tests_total{job=\"nexus-pushgateway\"}) * 100", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 80 }, { "color": "green", "value": 95 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 26,
+      "type": "table",
+      "title": "Test failures by service (current)",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "ci_build_test_failures_total{job=\"nexus-pushgateway\"}", "refId": "A", "format": "table", "instant": true }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {}
+    }
+  ]
+}

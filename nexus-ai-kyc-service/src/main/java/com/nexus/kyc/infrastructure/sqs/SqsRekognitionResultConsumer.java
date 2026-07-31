@@ -5,22 +5,20 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.kyc.application.KycVerificationService;
 import com.nexus.kyc.domain.model.KycVerificationRequest;
 import com.nexus.kyc.domain.model.enums.DocumentType;
-import com.nexus.kyc.domain.model.enums.KycStatus;
-import com.nexus.kyc.infrastructure.mongodb.KycDocumentMongoDB;
+import com.nexus.kyc.infrastructure.kafka.KycResultOutboxPublisher;
 import com.nexus.kyc.infrastructure.storage.DocumentStorageService;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestTemplate;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.*;
 
-import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -29,7 +27,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * Polls nexus-kyc-rekognition-results SQS queue produced by the KYC Rekognition Lambda.
  * Message body is a JSON Rekognition result; this consumer maps it back to a KYC decision
- * and calls identity-service with the result.
+ * and publishes it to identity-service via KycResultOutboxPublisher.
  */
 @Slf4j
 @Component
@@ -39,14 +37,19 @@ public class SqsRekognitionResultConsumer {
     private final SqsClient sqsClient;
     private final KycVerificationService verificationService;
     private final DocumentStorageService documentStorageService;
+    private final KycResultOutboxPublisher resultPublisher;
     private final ObjectMapper objectMapper;
-    private final RestTemplate restTemplate;
+    private final Tracer tracer;
+    private final Propagator propagator;
+
+    private static final Propagator.Getter<Map<String, MessageAttributeValue>> ATTRIBUTE_GETTER =
+            (carrier, key) -> {
+                MessageAttributeValue value = carrier.get(key);
+                return value != null ? value.stringValue() : null;
+            };
 
     @Value("${nexus.aws.kyc-rekognition-results-queue-url:}")
     private String queueUrl;
-
-    @Value("${nexus.identity.internal-url:http://localhost:8083}")
-    private String identityServiceUrl;
 
     private ScheduledExecutorService scheduler;
 
@@ -83,15 +86,26 @@ public class SqsRekognitionResultConsumer {
                             .build());
 
             for (Message message : response.messages()) {
-                try {
+                // SQS doesn't auto-propagate trace context like Kafka/HTTP do, so
+                // the identity-service publisher injects it into message attributes
+                // by hand (see SqsKycPublisher) and it's extracted back out here -
+                // without this, every message starts a brand-new, disconnected trace.
+                Span span = propagator.extract(message.messageAttributes(), ATTRIBUTE_GETTER)
+                        .name("sqs.process.kyc-rekognition-result")
+                        .kind(Span.Kind.CONSUMER)
+                        .start();
+                try (Tracer.SpanInScope ignored = tracer.withSpan(span)) {
                     processMessage(message);
                     sqsClient.deleteMessage(DeleteMessageRequest.builder()
                             .queueUrl(queueUrl)
                             .receiptHandle(message.receiptHandle())
                             .build());
                 } catch (Exception e) {
+                    span.error(e);
                     log.error("Failed to process rekognition result message={}: {}",
                             message.messageId(), e.getMessage(), e);
+                } finally {
+                    span.end();
                 }
             }
         } catch (Exception e) {
@@ -115,7 +129,11 @@ public class SqsRekognitionResultConsumer {
         }
 
         if (!"QUALITY_PASSED".equals(processingStatus)) {
-            callbackWithFailure(userId, verificationId,
+            // Rekognition itself failed before any AI verification ran -
+            // no KycDocumentMongoDB to persist, so this bypasses
+            // KycVerificationService entirely and publishes the failure
+            // signal directly. See KycResultOutboxPublisher.publishFailure.
+            resultPublisher.publishFailure(userId, verificationId,
                     "Rekognition processing failed: " + processingStatus);
             return;
         }
@@ -135,66 +153,18 @@ public class SqsRekognitionResultConsumer {
                 DocumentType.valueOf(documentType.toUpperCase().replace("-", "_")),
                 null, "es");
 
-        KycDocumentMongoDB result = verificationService.verify(
-                request, imageBytes, mimeType, verificationId);
-
-        callbackIdentityService(userId, verificationId, result);
-    }
-
-    private void callbackIdentityService(String userId, String verificationId,
-                                         KycDocumentMongoDB doc) {
-        try {
-            String url = identityServiceUrl + "/internal/v1/users/" + userId + "/kyc/result";
-
-            Map<String, Object> extractedData = new HashMap<>();
-            if (doc.getExtractedData() != null) {
-                extractedData = objectMapper.convertValue(doc.getExtractedData(), Map.class);
-            }
-
-            Map<String, Object> decisionMap = new HashMap<>();
-            if (doc.getDecision() != null) {
-                decisionMap.put("status", doc.getDecision().status().name());
-                decisionMap.put("confidenceScore", doc.getDecision().confidenceScore());
-                decisionMap.put("userFacingMessage", doc.getDecision().userFacingRejectionMessage());
-            }
-
-            List<String> failureReasons = List.of();
-            if (doc.getDecision() != null && doc.getDecision().rejectionReasons() != null) {
-                failureReasons = doc.getDecision().rejectionReasons()
-                        .stream().map(Enum::name).toList();
-            }
-
-            Map<String, Object> body = new HashMap<>();
-            body.put("verificationId", verificationId);
-            body.put("approved", doc.getStatus() == KycStatus.APPROVED);
-            body.put("extractedData", extractedData);
-            body.put("verificationDecision", decisionMap);
-            body.put("failureReasons", failureReasons);
-
-            ResponseEntity<Void> resp = restTemplate.postForEntity(url, body, Void.class);
-            log.info("KYC result (from Rekognition) sent to identity: userId={} status={} http={}",
-                    userId, doc.getStatus(), resp.getStatusCode());
-
-        } catch (Exception e) {
-            log.error("Failed to callback identity service (Rekognition path): userId={} error={}",
-                    userId, e.getMessage());
-        }
-    }
-
-    private void callbackWithFailure(String userId, String verificationId, String reason) {
-        try {
-            String url = identityServiceUrl + "/internal/v1/users/" + userId + "/kyc/result";
-            Map<String, Object> body = Map.of(
-                    "verificationId", verificationId,
-                    "approved", false,
-                    "failureReasons", List.of("REKOGNITION_PROCESSING_FAILED"),
-                    "verificationDecision", Map.of("status", "REJECTED", "userFacingMessage", reason)
-            );
-            restTemplate.postForEntity(url, body, Void.class);
-        } catch (Exception e) {
-            log.error("Failed to send failure callback to identity: userId={} error={}",
-                    userId, e.getMessage());
-        }
+        // verificationService.verify() -> persistAndPublish() already
+        // publishes the result to identity-service reliably (Outbox +
+        // Debezium, topic identity.kyc.result) - see
+        // KycResultOutboxPublisher. This used to also call a
+        // callbackIdentityService() HTTP POST here with no retry (its own
+        // separate copy of the same logic KycInitiationConsumer had);
+        // removed as part of CHANGES-BESTPRACTICES/
+        // 08_EVENT_DESIGN_CHANGES.md Section 6.
+        // verificationId must be used as-is (not just as sagaId) so this
+        // result correlates back to the verification identity-service
+        // originally requested - see KycInitiationConsumer for the same fix.
+        verificationService.verify(request, imageBytes, mimeType, verificationId, verificationId);
     }
 
     private String getAttr(Message message, String key, String fallback) {

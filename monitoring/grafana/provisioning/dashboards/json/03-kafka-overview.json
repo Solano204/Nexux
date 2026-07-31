@@ -1,0 +1,148 @@
+{
+  "id": null,
+  "uid": "nexus-kafka-overview",
+  "title": "Nexus Platform - Kafka Overview",
+  "description": "Kafka producer/consumer throughput and lag per service/topic, from each service's Micrometer Kafka client binder (KafkaMetricsAutoConfiguration). Equivalent in spirit to public dashboard ID 7589 (which targets kafka_exporter on the broker; this repo does not run kafka_exporter, so this is built from client-side metrics instead). Metric names come from the Kafka client's JMX-to-Micrometer binder and can shift across kafka-clients versions - verify against a live /actuator/prometheus scrape and adjust label names if a panel shows no data.",
+  "tags": ["nexus", "kafka"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "editable": true,
+  "graphTooltip": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+        "query": { "query": "label_values(up{group=~\"txn|ai|support\"}, service)", "refId": "StandardVariableQuery" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" },
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Producer throughput",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Messages produced/sec by topic",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(kafka_producer_record_send_total{service=~\"$service\"}[5m])) by (service, topic)", "refId": "A", "legendFormat": "{{service}} - {{topic}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Producer error rate",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(kafka_producer_record_error_total{service=~\"$service\"}[5m])) by (service)", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.01 }] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 4,
+      "type": "row",
+      "title": "Consumer throughput & lag",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Messages consumed/sec by topic",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(kafka_consumer_fetch_manager_records_consumed_total{service=~\"$service\"}[5m])) by (service, topic)", "refId": "A", "legendFormat": "{{service}} - {{topic}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Consumer lag (max records) by topic",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "max(kafka_consumer_fetch_manager_records_lag_max{service=~\"$service\"}) by (service, topic)", "refId": "A", "legendFormat": "{{service}} - {{topic}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1000 }, { "color": "red", "value": 10000 }] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Consumer fetch rate (bytes/sec)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(kafka_consumer_fetch_manager_bytes_consumed_total{service=~\"$service\"}[5m])) by (service)", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Consumer group health",
+      "description": "Consumer group MEMBER COUNT per group/topic was requested here too, but that's fundamentally broker-side information (Kafka's DescribeConsumerGroups) - this platform runs no kafka_exporter or broker JMX exporter (same limitation the dashboard description above already calls out), so there's no Prometheus series for it. Rebalance rate below comes from the client-side coordinator metric instead, which every consumer already exposes.",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Consumer group rebalance rate",
+      "description": "NEEDS LIVE VERIFICATION: kafka_consumer_coordinator_rebalance_total is the standard Micrometer KafkaClientMetrics binder name for this, same binder family as kafka_producer_record_send_total and kafka_consumer_fetch_manager_records_lag_max above (both confirmed live) - but this specific series hasn't been checked against a real scrape yet.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(kafka_consumer_coordinator_rebalance_total{service=~\"$service\"}[10m])) by (service)", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.05 }] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    }
+  ]
+}

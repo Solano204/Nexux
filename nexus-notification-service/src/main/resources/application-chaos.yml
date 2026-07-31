@@ -1,0 +1,44 @@
+# Chaos Monkey for Spring Boot (resiliencia guide, Fase 9)
+#
+# Activate ONLY with: SPRING_PROFILES_ACTIVE=prod,chaos (or dev,chaos).
+# Never active by default — chaos-monkey.enabled defaults to false even
+# with this profile loaded, so a second explicit flip (Actuator endpoint
+# or env var) is required to actually start injecting failures. Two
+# deliberate steps to turn on, one to turn off — matches the "controlled
+# experiment, not an accident" spirit of the whole exercise.
+#
+# nexus-notification-service is the pilot: Nivel 4 (Fase 5 SLO — lowest
+# criticality), nothing inside the platform calls it synchronously
+# (Kafka-consumer-driven from saga.commands), and it already has every
+# layer built in this guide (Fases 1-8) to form real hypotheses against.
+
+chaos:
+  monkey:
+    enabled: false  # flip via POST /actuator/chaosmonkey/enable when ready
+    watcher:
+      controller: true
+      restController: true
+      service: true
+      repository: false
+      component: false
+    assaults:
+      level: 3
+      latencyActive: false        # toggle per experiment, see Fase 9 catalog
+      latencyRangeStart: 2000
+      latencyRangeEnd: 8000
+      exceptionsActive: false
+      killApplicationActive: false
+      # Deliberately conservative: watchers scoped to controller/service/
+      # restController only (not every Spring bean) so the blast radius
+      # stays inside this one pilot service's own request-handling path,
+      # not its infrastructure clients (Mongo, Kafka, SNS) — those get
+      # their own targeted experiments once this pilot is validated.
+
+management:
+  endpoint:
+    chaosmonkey:
+      enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,chaosmonkey

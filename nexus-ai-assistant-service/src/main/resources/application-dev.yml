@@ -5,7 +5,8 @@ spring:
 
   threads:
     virtual:
-      enabled: true
+      # disabled: breaks Brave trace-context propagation - see application.yml
+      enabled: false
 
   datasource:
     url: jdbc:postgresql://localhost:5433/nexus_ai_assistant

@@ -3,7 +3,9 @@ package com.nexus.kyc.application.pipeline;
 import com.nexus.kyc.domain.exception.DocumentQualityException;
 import com.nexus.kyc.domain.exception.KycProcessingException;
 import com.nexus.kyc.domain.model.KycExtractedData;
+import com.nexus.kyc.domain.model.enums.DocumentType;
 import com.nexus.kyc.domain.model.enums.RejectionReason;
+import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.retry.annotation.Retry;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -12,6 +14,7 @@ import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeType;
@@ -44,15 +47,25 @@ public class Stage1DocumentExtraction {
     private final ChatClient extractionClient;
     private final ObservationRegistry observationRegistry;
     private final Timer extractionTimer;
+    private final RateLimiter openAiRateLimiter;
+
+    // Testing-only bypass for when there's no working OpenAI key: skips the
+    // real vision call entirely and returns a synthetic high-confidence
+    // extraction, so the KYC pipeline can be exercised end-to-end without
+    // AI. Set nexus.ai.mock-mode=true (nexus-platform-config) to enable.
+    @Value("${nexus.ai.mock-mode:false}")
+    private boolean mockMode;
 
     public Stage1DocumentExtraction(
             @Qualifier("kycStage1ExtractionClient")
             ChatClient extractionClient,
             ObservationRegistry observationRegistry,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            RateLimiter openAiRateLimiter) {
 
         this.extractionClient  = extractionClient;
         this.observationRegistry = observationRegistry;
+        this.openAiRateLimiter = openAiRateLimiter;
         this.extractionTimer = Timer.builder("kyc.stage1.extraction.duration")
                 .description("Time taken for Stage 1 document extraction")
                 .publishPercentiles(0.5, 0.9, 0.95, 0.99)
@@ -89,19 +102,22 @@ public class Stage1DocumentExtraction {
             // Section 8: multimodal image-to-text call.
             // .entity(KycExtractedData.class) instructs Spring AI to
             // parse the model's JSON response into the record (Section 3).
-            KycExtractedData extracted = extractionClient.prompt()
-                    .user(u -> {
-                        u.text("""
-                                Extract all identity information from this
-                                %s document image.
-                                Be thorough and accurate.
-                                Report exactly what you see, not what you
-                                think it should say.
-                                """.formatted(documentType));
-                        u.media(MimeType.valueOf(mimeType), documentImage);
-                    })
-                    .call()
-                    .entity(KycExtractedData.class);
+            KycExtractedData extracted = mockMode
+                    ? buildMockExtractedData(documentType)
+                    : RateLimiter.decorateSupplier(openAiRateLimiter, () ->
+                            extractionClient.prompt()
+                                    .user(u -> {
+                                        u.text("""
+                                                Extract all identity information from this
+                                                %s document image.
+                                                Be thorough and accurate.
+                                                Report exactly what you see, not what you
+                                                think it should say.
+                                                """.formatted(documentType));
+                                        u.media(MimeType.valueOf(mimeType), documentImage);
+                                    })
+                                    .call()
+                                    .entity(KycExtractedData.class)).get();
 
             if (extracted == null) {
                 throw new KycProcessingException(
@@ -140,6 +156,24 @@ public class Stage1DocumentExtraction {
             sample.stop(extractionTimer);
             obs.stop();
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Mock mode (nexus.ai.mock-mode=true) — no real vision call
+    // ─────────────────────────────────────────────────────────────────────
+
+    private KycExtractedData buildMockExtractedData(String documentType) {
+        return new KycExtractedData(
+                DocumentType.valueOf(documentType),
+                "MX", "MOCK-DOC-0000",
+                "MOCK USER", "MOCK", "USER",
+                "01/01/1990", "01/01/2030",
+                "MX", "X", null,
+                null, null, false, true,
+                0.99, 0.99, 0.99, List.of(),
+                false, false, null,
+                List.of(),
+                "nexus.ai.mock-mode=true - synthetic extraction, no vision call was made.");
     }
 
     // ─────────────────────────────────────────────────────────────────────

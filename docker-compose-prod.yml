@@ -84,10 +84,12 @@ networks:
   # Everything that needs Eureka/config-server/Zipkin/Prometheus or
   # outbound internet (OpenAI, AWS) lives here.
   nexus-backend:
+    # No hardcoded subnet — 172.20.0.0/16 (carried over from the old single
+    # nexus-network) collided with another network already on the host
+    # (leftover from a prior run, another Compose project, a VPN, etc).
+    # Nothing here talks to fixed IPs (service name DNS only), so letting
+    # Docker auto-pick a free pool is strictly safer than pinning one.
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
   # nexus-data: internal:true — Postgres/MongoDB/Redis/Kafka/Elasticsearch
   # and their admin UIs/exporters only. No route to the internet gateway,
   # so a compromised DB container can't be used to exfiltrate data
@@ -150,6 +152,16 @@ secrets:
     file: ./secrets/mongo_password.txt
   redis_password:
     file: ./secrets/redis_password.txt
+  # redis_exporter's REDIS_PASSWORD_FILE is NOT plain text like every other
+  # *_FILE secret in this file — it's a JSON object keyed by the exact
+  # redis:// address being scraped: {"redis://nexus-redis:6379": "<pw>"}.
+  # Confirmed against a real working example in the exporter's own GitHub
+  # issue tracker after the plain-text version failed at container start
+  # with "invalid character looking for beginning of value". Same
+  # underlying password as redis_password, different file/format because
+  # this one consumer needs it.
+  redis_exporter_password:
+    file: ./secrets/redis_exporter_password.json
   jwt_keystore_password:
     file: ./secrets/jwt_keystore_password.txt
   openai_api_key:
@@ -506,15 +518,16 @@ services:
       REDIS_ADDR: "redis://nexus-redis:6379"
       # redis_exporter's own binary resolves this natively (confirmed in
       # its docs/PRs, not guessed) — mutually exclusive with REDIS_PASSWORD,
-      # so that plain var is intentionally not also set here.
-      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      # so that plain var is intentionally not also set here. JSON format,
+      # not plain text — see redis_exporter_password's comment above.
+      REDIS_PASSWORD_FILE: /run/secrets/redis_exporter_password
     ports:
       - "9121:9121"
     networks:
       - nexus-backend
       - nexus-data
     secrets:
-      - redis_password
+      - redis_exporter_password
     depends_on:
       nexus-redis:
         condition: service_healthy
@@ -557,7 +570,13 @@ services:
       - "--es.uri=http://nexus-elasticsearch:9200"
       - "--es.all"
       - "--es.indices"
-      - "--es.cluster_settings"
+      # v1.7.0 moved this one collector to the newer registerCollector()
+      # system (confirmed in the exporter's own source, collector.go:
+      # flag name is built as fmt.Sprintf("collector.%s", name), and
+      # cluster_settings.go registers itself as "clustersettings") — the
+      # old --es.cluster_settings flag from the README is stale for this
+      # version. --es.uri/--es.all/--es.indices are untouched, still valid.
+      - "--collector.clustersettings"
     ports:
       - "9114:9114"
     networks:
@@ -663,10 +682,17 @@ services:
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       # Consumed via $__env{ALERT_WEBHOOK_URL} in
-      # monitoring/grafana/provisioning/alerting/contactpoints.yaml - unset
-      # is fine, the contact point just won't deliver anything until it's
-      # added to .env.
-      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      # monitoring/grafana/provisioning/alerting/contactpoints.yaml.
+      # NOT actually safe to leave truly empty, despite what the original
+      # comment here assumed: Grafana validates the webhook contact
+      # point's url field at STARTUP (provisioning load), not just at
+      # delivery time - an empty string fails validation and the whole
+      # container refuses to start, confirmed live via docker logs
+      # ("required field 'url' is not specified"). Defaulting to a
+      # syntactically-valid, inert placeholder keeps Grafana bootable
+      # with zero config while still being fully replaced by a real
+      # webhook the moment ALERT_WEBHOOK_URL is set in .env.
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-http://localhost:1/alert-webhook-not-configured}
     volumes:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro

@@ -28,6 +28,10 @@ nexus:
   gateway:
     jwt:
       jwks-uri: ${JWT_JWKS_URI:http://nexus-identity-service:8083/api/v1/auth/.well-known/jwks.json}
+      cognito:
+        user-pool-id: ${COGNITO_USER_POOL_ID:}
+        region: ${COGNITO_REGION:us-east-1}
+        client-id: ${COGNITO_CLIENT_ID:}
     global-rate-limit:
       enabled: true
       requests-per-second: 5000
@@ -38,8 +42,6 @@ nexus:
 management:
   tracing:
     enabled: true
-    sampling:
-      probability: ${TRACING_SAMPLE_RATE:0.05}
   zipkin:
     tracing:
       endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}

@@ -16,7 +16,10 @@ spring:
 
   threads:
     virtual:
-      enabled: true
+      # disabled: Brave's ThreadLocal trace context doesn't survive virtual
+      # thread mount/unmount - controller-dispatched spans were silently
+      # never exported to Zipkin (actuator/internal spans traced fine).
+      enabled: false
 
   datasource:
     url: ${DATASOURCE_URL:jdbc:postgresql://localhost:5433/nexus_kyc}
@@ -71,6 +74,10 @@ spring:
 
 server:
   port: 8091
+  tomcat:
+    threads:
+      max: 50
+    accept-count: 25
 
 springdoc:
   api-docs:
@@ -96,13 +103,25 @@ eureka:
     lease-expiration-duration-in-seconds: 90
 
 nexus:
+  load-shedding:
+    max-in-flight: 40
   identity:
-    internal-url: ${IDENTITY_SERVICE_URL:http://localhost:8010}
+    # Fase 1 resiliencia: era :8010, sin coincidir con ningún puerto real de
+    # identity-service (siempre 8083 en el resto de la plataforma) ni con el
+    # default correcto ya presente en KycInitiationConsumer's @Value — este
+    # YAML pisaba ese default correcto con uno equivocado.
+    internal-url: ${IDENTITY_SERVICE_URL:http://localhost:8083}
   aws:
     region: ${AWS_REGION:us-east-1}
     endpoint-override: ${AWS_ENDPOINT:}
     access-key-id: ${AWS_ACCESS_KEY_ID:}
     secret-access-key: ${AWS_SECRET_ACCESS_KEY:}
+    # SqsRekognitionResultConsumer reads nexus.aws.kyc-rekognition-results-queue-url -
+    # this key was missing here even though the rest of the nexus.aws block
+    # is bound correctly, so the consumer always logged "...not set - SQS
+    # consumer disabled" at startup regardless of
+    # KYC_REKOGNITION_RESULTS_QUEUE_URL being set in .env.
+    kyc-rekognition-results-queue-url: ${KYC_REKOGNITION_RESULTS_QUEUE_URL:}
 
   kyc:
     s3:
@@ -128,11 +147,25 @@ resilience4j:
         retry-exceptions:
           - com.nexus.kyc.domain.exception.KycProcessingException
 
+  thread-pool-bulkhead:
+    instances:
+      kyc-verification:
+        # Sizing (resiliencia guide, Fase 4): estimado, no medido — Stage1
+        # (vision, gpt-4o) + Stage2 (comparación, gpt-4o-mini) juntos rondan
+        # 5-12s por verificación. Proyecto solo/portfolio, no banca real: no
+        # se espera sostener más de un puñado de verificaciones KYC a la vez.
+        # core=5/max=10 asume hasta 10 verificaciones simultáneas en un pico
+        # antes de empezar a encolar; ajustar con datos reales bajo carga.
+        core-thread-pool-size: 5
+        max-thread-pool-size: 10
+        queue-capacity: 5
+        keep-alive-duration: 20s
+
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics
+        include: health,info,prometheus,metrics,circuitbreakers,retries,threadpoolbulkheads
   metrics:
     distribution:
       percentiles-histogram:

@@ -19,6 +19,14 @@ spring:
             allowed-origins: "*"
             allowed-methods: "*"
             allowed-headers: "*"
+            # application.yml's base config sets allow-credentials: true,
+            # which is invalid combined with a wildcard allowed-origins
+            # (Spring's CorsConfiguration.validateAllowCredentials() throws
+            # IllegalArgumentException at request time - not at startup -
+            # for any request carrying an Origin header). Tests don't need
+            # credentialed CORS, so turn it off here instead of pinning
+            # test requests to specific origins.
+            allow-credentials: false
 
   data:
     redis:
@@ -78,6 +86,14 @@ management:
     web:
       exposure:
         include: health,info,prometheus,gateway
+  health:
+    # The Spring Cloud Stream Kafka binder's health indicator actively
+    # checks broker connectivity (up to 60s per LEADER_NOT_AVAILABLE /
+    # metadata timeout) and is included in the aggregate /actuator/health
+    # status - no test here provisions a real Kafka broker, so any test
+    # that actually calls /actuator/health hangs waiting on it.
+    binders:
+      enabled: false
 
 logging:
   level:

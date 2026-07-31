@@ -22,7 +22,7 @@ from typing import Optional
 
 import boto3
 
-from utils.logging_config import log
+from src.utils.logging_config import log
 
 _cw = boto3.client("cloudwatch",
                    region_name=os.environ.get("AWS_REGION_NAME",

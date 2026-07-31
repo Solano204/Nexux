@@ -5,10 +5,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.nexus.notification.application.NotificationProcessingService;
 import com.nexus.notification.domain.model.enums.NotificationEventType;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.header.Headers;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -20,6 +27,7 @@ import software.amazon.awssdk.services.sns.model.PublishRequest;
 
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
 
@@ -44,6 +52,8 @@ public class SagaCommandConsumer {
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
     private final SnsClient snsClient;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     @Value("${nexus.aws.notification-dispatch-topic-arn:}")
     private String notificationDispatchTopicArn;
@@ -53,7 +63,20 @@ public class SagaCommandConsumer {
             groupId = "notification-service-saga",
             containerFactory = "kafkaListenerContainerFactory"
     )
-    public void consumeSagaCommand(String message, Acknowledgment ack) {
+    public void consumeSagaCommand(ConsumerRecord<String, String> record,
+                                   Acknowledgment ack) {
+        String message = record.value();
+        Headers headers = record.headers();
+        Span span = KafkaTracePropagation.extractAndStartSpan(
+                tracer, propagator, record, "notification-service-saga", "saga.commands receive");
+        try (Tracer.SpanInScope ignored = tracer.withSpan(span)) {
+            consumeSagaCommandTraced(message, ack);
+        } finally {
+            span.end();
+        }
+    }
+
+    private void consumeSagaCommandTraced(String message, Acknowledgment ack) {
 
         Observation obs = Observation.createNotStarted(
                         "kafka.message.processed", observationRegistry)
@@ -123,7 +146,11 @@ public class SagaCommandConsumer {
             obs.error(e);
             log.error("Failed to process SAGA command: {}",
                     e.getMessage(), e);
-            // Do NOT ack — Kafka redelivers
+            // Rethrow so KafkaConfig's DefaultErrorHandler(deadLetterRecoverer,
+            // FixedBackOff) actually sees this failure and applies the bounded
+            // 3-retry-then-DLT policy, instead of an unbounded wait for a
+            // restart/rebalance to redeliver.
+            throw new RuntimeException("Failed to process SAGA command", e);
         } finally {
             obs.stop();
         }
@@ -142,8 +169,10 @@ public class SagaCommandConsumer {
                     "traceId", traceId
             );
 
-            kafkaTemplate.send("saga.replies", sagaId,
-                    objectMapper.writeValueAsString(reply));
+            ProducerRecord<String, String> replyRecord = new ProducerRecord<>(
+                    "saga.replies", sagaId, objectMapper.writeValueAsString(reply));
+            KafkaTracePropagation.injectTraceHeaders(tracer, propagator, replyRecord);
+            kafkaTemplate.send(replyRecord);
 
         } catch (Exception e) {
             log.error("Failed to publish SAGA reply for sagaId={}: {}",
@@ -174,6 +203,19 @@ public class SagaCommandConsumer {
                     .put("pushBody", payload.path("pushBody").asText(payload.path("message").asText("")))
                     .put("deviceEndpointArn", payload.path("deviceEndpointArn").asText(""))
                     .put("language", payload.path("language").asText("es"));
+
+            // Forward every saga payload field (amount, currency, targetName, ...)
+            // as template metadata — the Lambda's Thymeleaf templates read these
+            // via ${amount}, ${currency}, etc. Without this, fields referenced
+            // unconditionally in a template (e.g. transaction-completed.html's
+            // ${currency + ' ' + amount}) evaluate to null and throw.
+            ObjectNode metadata = objectMapper.createObjectNode();
+            Iterator<Map.Entry<String, JsonNode>> fields = payload.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> entry = fields.next();
+                metadata.put(entry.getKey(), entry.getValue().asText());
+            }
+            dispatch.set("metadata", metadata);
 
             snsClient.publish(PublishRequest.builder()
                     .topicArn(notificationDispatchTopicArn)

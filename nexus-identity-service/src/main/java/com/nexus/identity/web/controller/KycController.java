@@ -3,7 +3,6 @@ package com.nexus.identity.web.controller;
 import com.nexus.identity.application.command.UnauthorizedException;
 import com.nexus.identity.application.command.UserCommandService;
 import com.nexus.identity.application.query.UserQueryService;
-import com.nexus.identity.web.dto.request.KycResultRequest;
 import com.nexus.identity.web.dto.response.*;
 import io.micrometer.tracing.Tracer;
 import io.swagger.v3.oas.annotations.Operation;
@@ -27,7 +26,12 @@ import java.util.UUID;
  *
  * POST /api/v1/users/me/kyc/initiate  — Upload document
  * GET  /api/v1/users/me/kyc/status    — Check status
- * POST /internal/v1/users/{userId}/kyc/result — AI KYC service callback
+ *
+ * The AI KYC service result used to arrive here via a POST
+ * /internal/v1/users/{userId}/kyc/result callback — replaced by
+ * KycResultConsumer (topic identity.kyc.result, Outbox+Debezium from
+ * ai-kyc-service) — see CHANGES-BESTPRACTICES/08_EVENT_DESIGN_CHANGES.md
+ * Section 6.
  */
 @RestController
 @RequiredArgsConstructor
@@ -88,25 +92,6 @@ public class KycController {
 
         UUID userId = extractUserId(request);
         return ResponseEntity.ok(queryService.getCurrentKycStatus(userId));
-    }
-
-    /**
-     * Internal callback from nexus-ai-kyc-service.
-     * Delivers verification decision after AI analysis.
-     * IP-restricted at gateway level to Docker network only.
-     */
-    @PostMapping("/internal/v1/users/{userId}/kyc/result")
-    public ResponseEntity<Void> receiveKycResult(
-            @PathVariable UUID userId,
-            @RequestBody KycResultRequest result,
-            HttpServletRequest request) {
-
-        String traceId = getTraceId();
-        commandService.processKycResult(
-                userId, UUID.fromString(result.verificationId()),
-                result, traceId);
-
-        return ResponseEntity.ok().build();
     }
 
     private UUID extractUserId(HttpServletRequest request) {

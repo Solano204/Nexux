@@ -3,10 +3,19 @@ package com.nexus.risk.agent.model;
 import   com.nexus.risk.agent.model.UserContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.risk.domain.exception.RiskScoringException;
+import com.nexus.risk.domain.model.BehavioralRiskScore;
+import com.nexus.risk.domain.model.ComplianceRiskScore;
+import com.nexus.risk.domain.model.CreditRiskScore;
 import com.nexus.risk.domain.model.RiskProfile;
+import com.nexus.risk.domain.model.UserBehavioralProfile;
+import com.nexus.risk.domain.model.VelocityRiskProfile;
+import com.nexus.risk.domain.model.enums.CreditGrade;
+import com.nexus.risk.domain.model.enums.RiskTier;
 import com.nexus.risk.infrastructure.jpa.RiskProfileJpaEntity;
 import com.nexus.risk.infrastructure.jpa.RiskProfileRepository;
+import com.nexus.risk.infrastructure.kafka.RiskEventProducer;
 import com.nexus.risk.infrastructure.redis.RiskProfileCacheService;
+import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -23,11 +32,16 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 /**
  * Risk Scoring Agent — Plan-then-Act implementation.
@@ -60,13 +74,23 @@ public class RiskScoringAgent {
     private final ToolCallingManager toolCallingManager;
     private final RiskProfileRepository profileRepository;
     private final RiskProfileCacheService cacheService;
+    private final RiskEventProducer riskEventProducer;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
     private final Tracer tracer;
+    private final RateLimiter openAiRateLimiter;
 
     private final Timer   computationTimer;
     private final Counter successCounter;
     private final Counter failureCounter;
+
+    // Testing-only bypass for when there's no working OpenAI key: skips
+    // plan/execute/synthesize entirely and returns a synthetic VERY_LOW
+    // profile (still persisted + cached normally), so downstream consumers
+    // (fraud cache, nightly job) see a real profile. Set
+    // nexus.ai.mock-mode=true (nexus-platform-config) to enable.
+    @Value("${nexus.ai.mock-mode:false}")
+    private boolean mockMode;
 
     // ──────────────────────────────────────────────────────────
     // Constructor
@@ -78,9 +102,11 @@ public class RiskScoringAgent {
             ToolCallingManager toolCallingManager,
             RiskProfileRepository profileRepository,
             RiskProfileCacheService cacheService,
+            RiskEventProducer riskEventProducer,
             ObjectMapper objectMapper,
             ObservationRegistry observationRegistry,
             Tracer tracer,
+            RateLimiter openAiRateLimiter,
             MeterRegistry meterRegistry) {
 
         this.planningClient      = planningClient;
@@ -88,9 +114,11 @@ public class RiskScoringAgent {
         this.toolCallingManager  = toolCallingManager;
         this.profileRepository   = profileRepository;
         this.cacheService        = cacheService;
+        this.riskEventProducer   = riskEventProducer;
         this.objectMapper        = objectMapper;
         this.observationRegistry = observationRegistry;
         this.tracer              = tracer;
+        this.openAiRateLimiter   = openAiRateLimiter;
 
         this.computationTimer =
                 Timer.builder("risk.profile.computation.duration.seconds")
@@ -120,6 +148,28 @@ public class RiskScoringAgent {
      * @return            persisted RiskProfile
      */
     public RiskProfile computeRiskProfile(String userId, String triggeredBy) {
+
+        if (mockMode) {
+            log.info("MOCK MODE: skipping risk scoring, returning VERY_LOW " +
+                    "profile for userId={}", userId);
+            // previousTier read before persisting the new mock profile below,
+            // same lookup loadUserContext() does for the real path.
+            String previousTier = profileRepository.findLatestByUserId(userId)
+                    .map(RiskProfileJpaEntity::getRiskTier)
+                    .orElse(null);
+            RiskProfile profile = buildMockProfile(
+                    userId, getNextVersion(userId), triggeredBy);
+            persistProfile(profile, Instant.now(), 0L);
+            cacheService.cacheProfile(profile);
+            // Mock mode is meant to look like a real computation to
+            // downstream consumers (see mockMode field Javadoc) - was
+            // previously not publishing at all, so risk.profile.updated
+            // silently never fired while nexus.ai.mock-mode=true (which is
+            // the active mode until OPENAI_API_KEY is a real key).
+            riskEventProducer.publishProfileUpdated(profile, previousTier);
+            successCounter.increment();
+            return profile;
+        }
 
         Observation obs = Observation.createNotStarted(
                         "risk.agent.compute", observationRegistry)
@@ -154,6 +204,13 @@ public class RiskScoringAgent {
             persistProfile(profile, startedAt,
                     System.currentTimeMillis() - startedAt.toEpochMilli());
             cacheService.cacheProfile(profile);
+            // RiskEventProducer had no caller anywhere in the codebase
+            // before this - risk.profile.updated never fired despite the
+            // topic existing and Fraud/Audit/Analytics services already
+            // consuming it. context.previousRiskTier() was already
+            // computed in loadUserContext() (Phase 1) purely for the AI
+            // prompt - reused here instead of a second repository query.
+            riskEventProducer.publishProfileUpdated(profile, context.previousRiskTier());
 
             successCounter.increment();
             obs.event(Observation.Event.of("risk.computation.success"));
@@ -253,10 +310,10 @@ public class RiskScoringAgent {
                     context.recentFraudFlags(),
                     context.significantBehavioralChange());
 
-            return planningClient.prompt()
+            return rateLimited(() -> planningClient.prompt()
                     .user(prompt)
                     .call()
-                    .entity(RiskScoringPlan.class);
+                    .entity(RiskScoringPlan.class));
 
         } finally {
             obs.stop();
@@ -289,11 +346,11 @@ public class RiskScoringAgent {
         org.springframework.ai.chat.prompt.Prompt prompt =
                 new org.springframework.ai.chat.prompt.Prompt(messages, toolOptions);
 
-        ChatResponse response = executionClient.prompt()
+        ChatResponse response = rateLimited(() -> executionClient.prompt()
                 .messages(messages)
                 .options(toolOptions)
                 .call()
-                .chatResponse();
+                .chatResponse());
 
         int steps = 0;
 
@@ -314,11 +371,17 @@ public class RiskScoringAgent {
                 messages.clear();
                 messages.addAll(result.conversationHistory());
 
-                response = executionClient.prompt()
-                        .messages(prompt.getInstructions())
+                // prompt is reassigned each loop iteration, so it isn't
+                // effectively final - can't be captured directly by the
+                // rateLimited() lambda. Snapshot it into a final local
+                // instead; a fresh one is created each iteration, so this
+                // is safe.
+                final var stepPrompt = prompt;
+                response = rateLimited(() -> executionClient.prompt()
+                        .messages(stepPrompt.getInstructions())
                         .options(toolOptions)
                         .call()
-                        .chatResponse();
+                        .chatResponse());
 
                 stepObs.event(Observation.Event.of("tool.step.complete"));
                 steps++;
@@ -371,19 +434,74 @@ public class RiskScoringAgent {
             List<Message> synthMessages = new ArrayList<>(finalPrompt.getInstructions());
             synthMessages.add(new UserMessage(synthesisPrompt));
 
-            return executionClient.prompt()
+            return rateLimited(() -> executionClient.prompt()
                     .messages(synthMessages)
                     .call()
-                    .entity(RiskProfile.class);
+                    .entity(RiskProfile.class));
 
         } finally {
             obs.stop();
         }
     }
 
+    /**
+     * Gates every OpenAI call behind the local rate limiter (see
+     * ObservabilityConfig.openAiRateLimiter) - a single computeRiskProfile()
+     * run can make up to ~15 calls (1 plan + up to MAX_RISK_AGENT_STEPS
+     * execution steps + 1 synthesis), so each call site needs its own
+     * permit, not just one permit per profile computation.
+     */
+    private <T> T rateLimited(java.util.function.Supplier<T> call) {
+        return RateLimiter.decorateSupplier(openAiRateLimiter, call).get();
+    }
+
     // ══════════════════════════════════════════════════════════
     // HELPERS
     // ══════════════════════════════════════════════════════════
+
+    private RiskProfile buildMockProfile(String userId, int version, String triggeredBy) {
+        Instant now = Instant.now();
+        // credit_risk/behavioral_risk/compliance_risk/velocity_profile/
+        // behavioral_profile are all `JSONB NOT NULL` columns (see
+        // V1__create_risk_profiles.sql) - leaving these null was a real
+        // bug, not a placeholder: the INSERT batch aborted outright with
+        // "null value in column credit_risk violates not-null constraint",
+        // silently dropping every mock-mode risk computation (confirmed
+        // live via docker logs). Every value below is a neutral/low-risk
+        // placeholder consistent with the VERY_LOW tier this method
+        // already returns - not a real assessment, same as the rest of
+        // this synthetic profile.
+        return new RiskProfile(
+                UUID.randomUUID().toString(),
+                userId,
+                now,
+                now.plus(Duration.ofDays(30)),
+                version,
+                10,
+                RiskTier.VERY_LOW,
+                0.99,
+                new CreditRiskScore(
+                        700, CreditGrade.B, 0.05, 0.8, 0.2,
+                        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                        0, List.of(), List.of()),
+                new BehavioralRiskScore(
+                        10, 0.0, 1.0, 0.0, 0.0, false, 0, List.of()),
+                new ComplianceRiskScore(
+                        0, false, false, List.of(), false, false, "LOW"),
+                new VelocityRiskProfile(
+                        0.0, 0.0, Map.of(), Map.of(), List.of(), List.of(),
+                        "UNKNOWN", 0.0),
+                new UserBehavioralProfile(
+                        BigDecimal.ZERO, BigDecimal.ZERO, "UNKNOWN",
+                        BigDecimal.ZERO, BigDecimal.ZERO, Map.of(), List.of(),
+                        List.of(), List.of(), List.of(), "UNKNOWN", false, false),
+                "mock",
+                "nexus.ai.mock-mode=true - synthetic profile (trigger=" + triggeredBy + "), no AI computation was performed.",
+                List.of(),
+                List.of(),
+                List.of(),
+                "LOW_RISK");
+    }
 
     private void persistProfile(RiskProfile profile, Instant startedAt, long durationMs) {
         var entity = RiskProfileJpaEntity.from(profile, startedAt, durationMs);

@@ -5,20 +5,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.kyc.application.KycVerificationService;
 import com.nexus.kyc.domain.model.KycVerificationRequest;
 import com.nexus.kyc.domain.model.enums.DocumentType;
-import com.nexus.kyc.domain.model.enums.KycStatus;
-import com.nexus.kyc.infrastructure.mongodb.KycDocumentMongoDB;
 import com.nexus.kyc.infrastructure.storage.DocumentStorageService;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.ResponseEntity;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Headers;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestTemplate;
-
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
 @Slf4j
 @Component
@@ -28,13 +26,39 @@ public class KycInitiationConsumer {
     private final KycVerificationService verificationService;
     private final DocumentStorageService documentStorageService;
     private final ObjectMapper objectMapper;
-    private final RestTemplate restTemplate;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
-    @Value("${nexus.identity.internal-url:http://localhost:8083}")
-    private String identityServiceUrl;
-
+    // The platform-wide default ack-mode (nexus-platform-config:
+    // spring.kafka.listener.ack-mode=manual) requires the listener to
+    // accept an Acknowledgment and call it explicitly - this method
+    // previously didn't, so this consumer's offsets were never committed,
+    // even on success. Every restart/rebalance replayed from the last
+    // (very old) committed offset, including messages whose S3 objects may
+    // have since been cleaned up - the most likely explanation for a
+    // NoSuchKeyException on what was, at publish time, a confirmed-good
+    // key (upload is synchronous S3Client.putObject(), confirmed complete
+    // before the Kafka message is published - see S3DocumentUploader /
+    // StructuredTaskScope.Joiner.awaitAllSuccessfulOrThrow() in
+    // UserCommandService.initiateKyc()). Bucket/key naming was compared
+    // between S3DocumentUploader and DocumentStorageService and both
+    // resolve from the same KYC_S3_BUCKET env var with the same key
+    // unmodified, so that is not the mismatch.
     @KafkaListener(topics = "identity.kyc", groupId = "nexus-ai-kyc-service")
-    public void onKycInitiated(String message) {
+    public void onKycInitiated(ConsumerRecord<String, String> record,
+                               Acknowledgment ack) {
+        String message = record.value();
+        Headers headers = record.headers();
+        Span span = KafkaTracePropagation.extractAndStartSpan(
+                tracer, propagator, record, "nexus-ai-kyc-service", "identity.kyc receive");
+        try (Tracer.SpanInScope ignoredScope = tracer.withSpan(span)) {
+            onKycInitiatedTraced(message, ack);
+        } finally {
+            span.end();
+        }
+    }
+
+    private void onKycInitiatedTraced(String message, Acknowledgment ack) {
         String userId = null;
         try {
             JsonNode event = objectMapper.readTree(message);
@@ -60,52 +84,30 @@ public class KycInitiationConsumer {
                     nationality, language
             );
 
-            KycDocumentMongoDB result = verificationService.verify(
-                    request, imageBytes, mimeType, verificationId);
+            // verificationService.verify() -> persistAndPublish() already
+            // publishes the result to identity-service reliably (Outbox +
+            // Debezium, topic identity.kyc.result) - see
+            // KycResultOutboxPublisher. This used to also call a
+            // callbackIdentityService() HTTP POST here with no retry;
+            // removed as part of CHANGES-BESTPRACTICES/
+            // 08_EVENT_DESIGN_CHANGES.md Section 6, since it duplicated
+            // (unreliably) what the outbox publish already does atomically.
+            // verificationId is the durable ID identity-service tracks this
+            // verification under - must be used as-is (not just as sagaId)
+            // so the eventual result can be correlated back to it. Was
+            // previously only passed as sagaId, which doVerify() never used
+            // for the persisted document's own verificationId - it minted a
+            // fresh random one instead, silently breaking that correlation.
+            verificationService.verify(request, imageBytes, mimeType, verificationId, verificationId);
 
-            callbackIdentityService(userId, verificationId, result);
+            ack.acknowledge();
 
         } catch (Exception e) {
             log.error("KYC initiation consumer failed: userId={} error={}", userId, e.getMessage(), e);
+            // Rethrown (not acked) so the container's error handler applies
+            // its bounded backoff, then routes to the DLQ once exhausted -
+            // see KafkaConfig.kafkaListenerContainerFactory(). Do not ack() here.
             throw new RuntimeException("KYC initiation processing failed", e);
-        }
-    }
-
-    private void callbackIdentityService(String userId, String verificationId, KycDocumentMongoDB doc) {
-        try {
-            String url = identityServiceUrl + "/internal/v1/users/" + userId + "/kyc/result";
-
-            Map<String, Object> extractedData = new HashMap<>();
-            if (doc.getExtractedData() != null) {
-                extractedData = objectMapper.convertValue(doc.getExtractedData(), Map.class);
-            }
-
-            Map<String, Object> decisionMap = new HashMap<>();
-            if (doc.getDecision() != null) {
-                decisionMap.put("status", doc.getDecision().status().name());
-                decisionMap.put("confidenceScore", doc.getDecision().confidenceScore());
-                decisionMap.put("userFacingMessage", doc.getDecision().userFacingRejectionMessage());
-            }
-
-            List<String> failureReasons = List.of();
-            if (doc.getDecision() != null && doc.getDecision().rejectionReasons() != null) {
-                failureReasons = doc.getDecision().rejectionReasons()
-                        .stream().map(Enum::name).toList();
-            }
-
-            Map<String, Object> body = new HashMap<>();
-            body.put("verificationId",     verificationId);
-            body.put("approved",           doc.getStatus() == KycStatus.APPROVED);
-            body.put("extractedData",      extractedData);
-            body.put("verificationDecision", decisionMap);
-            body.put("failureReasons",     failureReasons);
-
-            ResponseEntity<Void> response = restTemplate.postForEntity(url, body, Void.class);
-            log.info("KYC result sent to identity service: userId={} status={} http={}",
-                    userId, doc.getStatus(), response.getStatusCode());
-
-        } catch (Exception e) {
-            log.error("Failed to callback identity service: userId={} error={}", userId, e.getMessage());
         }
     }
 }

@@ -18,7 +18,7 @@ import os
 
 import boto3
 
-from utils.logging_config import log
+from src.utils.logging_config import log
 
 sqs_client = boto3.client("sqs")
 QUEUE_URL = os.environ["RESULTS_QUEUE_URL"]

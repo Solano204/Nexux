@@ -74,6 +74,13 @@ resource "aws_sqs_queue" "fraud_alert_dlq" {
 resource "aws_kms_key" "fraud_alerts" {
   description         = "KMS key for nexus-fraud-alerts DynamoDB table"
   enable_key_rotation = true
+
+  lifecycle {
+    # A destroyed KMS key makes everything encrypted with it permanently
+    # unreadable, even after AWS's waiting period - the whole fraud_alerts
+    # table would become inaccessible, not just this key.
+    prevent_destroy = true
+  }
 }
 
 # ── DynamoDB Tables ───────────────────────────────────────────────────────────
@@ -149,6 +156,12 @@ resource "aws_dynamodb_table" "fraud_alerts" {
     attribute_name = "ttl"
     enabled        = true
   }
+
+  lifecycle {
+    # Fraud alert history - evidence for SAR (Suspicious Activity Report)
+    # filings, auditable by regulators.
+    prevent_destroy = true
+  }
 }
 
 resource "aws_dynamodb_table" "sar_considerations" {
@@ -169,6 +182,12 @@ resource "aws_dynamodb_table" "sar_considerations" {
   ttl {
     attribute_name = "ttl"
     enabled        = true
+  }
+
+  lifecycle {
+    # Literally the record of what was considered for a Suspicious
+    # Activity Report - regulatory evidence.
+    prevent_destroy = true
   }
 }
 

@@ -50,6 +50,14 @@
             <artifactId>aws-lambda-java-log4j2</artifactId>
             <version>1.6.0</version>
         </dependency>
+        <!-- Bridges org.slf4j.Logger calls (used throughout this codebase)
+             into log4j2. Without this, SLF4J finds no binding and all
+             log.info/warn/error calls are silently dropped. -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j-impl</artifactId>
+            <version>2.17.1</version>
+        </dependency>
 
         <!-- ══════════════════════════════════════════════════
              AWS SDK v2 — SQS, SNS, DynamoDB, Secrets Manager
@@ -82,23 +90,18 @@
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
-             X-RAY TRACING
-             ══════════════════════════════════════════════════ -->
-        <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-xray-recorder-sdk-core</artifactId>
-            <version>2.14.0</version>
-        </dependency>
-        <!-- aws-xray-recorder-sdk-aws-sdk-v2-instrumentor intentionally omitted:
-             its TracingInterceptor (auto-registered via AWS SDK v2's classpath
-             SPI scan, not called directly by app code) references
+             X-RAY TRACING: not a dependency here.
+             aws-xray-recorder-sdk-core itself (not just the
+             -aws-sdk-v2-instrumentor add-on) crashes at cold-start
+             init with NoSuchFieldError: its LocalizedSamplingStrategy
+             static initializer references
              PropertyNamingStrategy.CAMEL_CASE_TO_LOWER_CASE_WITH_UNDERSCORES,
-             a field jackson-databind no longer has — crashes the Lambda at
-             cold-start init (NoSuchFieldError) if present. AWSXRay (used
-             directly by this code) lives in -core, unaffected by removing
-             this. Lambda's platform-level Tracing=Active still traces the
-             invocation itself; this only drops automatic per-AWS-SDK-call
-             subsegments. -->
+             a field removed by jackson-databind ${jackson.version}.
+             Confirmed via a real AWS invoke (Runtime.exit crash inside
+             AWSXRay.<clinit> -> AWSXRayRecorderBuilder.defaultRecorder()).
+             Lambda's platform-level Tracing=Active (terraform
+             tracing_config) still traces the invocation itself without
+             any SDK code — this just means no custom subsegments. -->
 
         <!-- ══════════════════════════════════════════════════
              KAFKA CLIENT — for MSK direct bridge path
@@ -168,6 +171,18 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
                 <version>3.5.2</version>
+                <dependencies>
+                    <!-- Without this, shading multiple log4j2 jars (log4j-core +
+                         aws-lambda-java-log4j2) silently drops one jar's
+                         META-INF/.../Log4j2Plugins.dat instead of merging them,
+                         breaking log4j2's plugin discovery (e.g. PatternLayout)
+                         at runtime with no build-time error. -->
+                    <dependency>
+                        <groupId>com.github.edwgiz</groupId>
+                        <artifactId>maven-shade-plugin.log4j2-cachefile-transformer</artifactId>
+                        <version>2.15</version>
+                    </dependency>
+                </dependencies>
                 <executions>
                     <execution>
                         <phase>package</phase>
@@ -184,6 +199,9 @@
                                     </excludes>
                                 </filter>
                             </filters>
+                            <transformers>
+                                <transformer implementation="com.github.edwgiz.maven_shade_plugin.log4j2_cache_transformer.PluginsCacheFileTransformer"/>
+                            </transformers>
                         </configuration>
                     </execution>
                 </executions>

@@ -2,6 +2,7 @@ package com.nexus.ledger.infrastructure.mongodb;
 
 import lombok.*;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.math.BigDecimal;
@@ -22,6 +23,9 @@ public class PostingDocument {
     @Id
     private String postingId;
 
+    // PostingDocumentRepository.findByTransactionId() is a real, active
+    // query - without this, every call was a full collection scan.
+    @Indexed
     private String transactionId;
     private String postingType;
     private String description;

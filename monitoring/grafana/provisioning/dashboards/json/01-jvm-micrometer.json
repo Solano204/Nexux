@@ -1,0 +1,166 @@
+{
+  "id": null,
+  "uid": "nexus-jvm-micrometer",
+  "title": "Nexus Platform - JVM (Micrometer)",
+  "description": "JVM heap/non-heap, GC pauses, thread counts and class loading per service. Equivalent to public dashboard ID 4701, adapted for the Nexus label set.",
+  "tags": ["nexus", "jvm", "micrometer"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "editable": true,
+  "graphTooltip": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+        "query": { "query": "label_values(jvm_memory_used_bytes, service)", "refId": "StandardVariableQuery" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" },
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Memory",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Heap used",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(jvm_memory_used_bytes{area=\"heap\", service=~\"$service\"}) by (service)", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Non-heap used",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(jvm_memory_used_bytes{area=\"nonheap\", service=~\"$service\"}) by (service)", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Heap used vs max (%)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(jvm_memory_used_bytes{area=\"heap\", service=~\"$service\"}) by (service) / sum(jvm_memory_max_bytes{area=\"heap\", service=~\"$service\"}) by (service) * 100", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Memory pool breakdown",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(jvm_memory_used_bytes{service=~\"$service\"}) by (service, id)", "refId": "A", "legendFormat": "{{service}} - {{id}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Garbage Collection",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "GC pause rate + duration (correlated)",
+      "description": "Combined onto one panel with dual axes (rate on the left, avg duration on the right) so a spike in one against the other is visible at a glance instead of split across two separate charts read side by side.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(jvm_gc_pause_seconds_count{service=~\"$service\"}[5m])) by (service)", "refId": "A", "legendFormat": "{{service}} - pause rate" },
+        { "expr": "sum(rate(jvm_gc_pause_seconds_sum{service=~\"$service\"}[5m])) by (service) / sum(rate(jvm_gc_pause_seconds_count{service=~\"$service\"}[5m])) by (service)", "refId": "B", "legendFormat": "{{service}} - avg duration" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "axisPlacement": "left" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byFrameRefID", "options": "B" },
+            "properties": [
+              { "id": "unit", "value": "s" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 13,
+      "type": "row",
+      "title": "Threads & classes",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Live threads",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(jvm_threads_live_threads{service=~\"$service\"}) by (service)", "refId": "A", "legendFormat": "{{service}} live" },
+        { "expr": "sum(jvm_threads_daemon_threads{service=~\"$service\"}) by (service)", "refId": "B", "legendFormat": "{{service}} daemon" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Peak thread count",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(jvm_threads_peak_threads{service=~\"$service\"}) by (service)", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Classes loaded",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(jvm_classes_loaded_classes{service=~\"$service\"}) by (service)", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    }
+  ]
+}

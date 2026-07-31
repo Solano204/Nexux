@@ -16,7 +16,10 @@ spring:
 
   threads:
     virtual:
-      enabled: true
+      # disabled: Brave's ThreadLocal trace context doesn't survive virtual
+      # thread mount/unmount - controller-dispatched spans were silently
+      # never exported to Zipkin (actuator/internal spans traced fine).
+      enabled: false
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
@@ -92,6 +95,9 @@ management:
     web:
       exposure:
         include: health,info,prometheus,metrics
+  metrics:
+    tags:
+      application: ${spring.application.name}
   tracing:
     enabled: true
     sampling:

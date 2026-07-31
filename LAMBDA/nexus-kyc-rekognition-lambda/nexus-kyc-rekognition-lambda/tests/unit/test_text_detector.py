@@ -13,11 +13,11 @@ class TestTextDetector:
         with open(fixture_path) as f:
             return json.load(f)
 
-    @patch("rekognition.text_detector.rekognition_client")
+    @patch("src.rekognition.text_detector.rekognition_client")
     def test_parse_text_response_extracts_lines(self, mock_client):
         """Should extract LINE-type detections with confidence >= threshold."""
         fixture = self._load_fixture()
-        from rekognition.text_detector import parse_text_result
+        from src.rekognition.text_detector import _parse_response as parse_text_result
 
         result = parse_text_result(fixture)
         assert result["lineCount"] >= 5
@@ -25,19 +25,19 @@ class TestTextDetector:
         assert result["hasMexicoIdKeywords"] is True
         assert result["detectedDocumentTypeHint"] == "MEXICO_NATIONAL_ID"
 
-    @patch("rekognition.text_detector.rekognition_client")
+    @patch("src.rekognition.text_detector.rekognition_client")
     def test_empty_response_returns_zero_counts(self, mock_client):
-        from rekognition.text_detector import parse_text_result
+        from src.rekognition.text_detector import _parse_response as parse_text_result
 
         result = parse_text_result({"TextDetections": []})
         assert result["lineCount"] == 0
         assert result["wordCount"] == 0
         assert result["consolidatedText"] == ""
 
-    @patch("rekognition.text_detector.rekognition_client")
+    @patch("src.rekognition.text_detector.rekognition_client")
     def test_curp_detected_as_id_number(self, mock_client):
         fixture = self._load_fixture()
-        from rekognition.text_detector import parse_text_result
+        from src.rekognition.text_detector import _parse_response as parse_text_result
 
         result = parse_text_result(fixture)
         assert any("GALJ900315" in pid for pid in result.get("potentialIdNumbers", []))

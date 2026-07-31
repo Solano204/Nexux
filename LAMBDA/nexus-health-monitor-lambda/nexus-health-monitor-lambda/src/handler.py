@@ -35,26 +35,26 @@ import os
 import time
 from datetime import datetime, timezone
 
-from analysis.alert_decider import (
+from src.analysis.alert_decider import (
     get_consecutive_failures,
     should_alert,
 )
-from analysis.scenario_analyzer import analyze as analyze_scenarios
-from alerting.message_builder import build_alert, build_recovery
-from alerting.sns_alerter import send_alert
-from checks.health_checker import run_checks_parallel, run_checks_sequential
-from cloudwatch.alarm_manager import update_alarm, set_alarm_ok
-from cloudwatch.dashboard_manager import ensure_dashboard
-from cloudwatch.metrics_publisher import (
+from src.analysis.scenario_analyzer import analyze as analyze_scenarios
+from src.alerting.message_builder import build_alert, build_recovery
+from src.alerting.sns_alerter import send_alert
+from src.checks.health_checker import run_checks_parallel, run_checks_sequential
+from src.cloudwatch.alarm_manager import update_alarm, set_alarm_ok
+from src.cloudwatch.dashboard_manager import ensure_dashboard
+from src.cloudwatch.metrics_publisher import (
     publish_all,
     record_failure_count,
     reset_failure_count,
 )
-from registry.service_registry import (
+from src.registry.service_registry import (
     SERVICES,
     ALERT_TOPIC_BY_CRITICALITY,
 )
-from utils.logging_config import log
+from src.utils.logging_config import log
 
 USE_PARALLEL = os.environ.get(
     "PARALLEL_CHECKS", "true").lower() == "true"

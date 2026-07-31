@@ -7,16 +7,27 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.audit.write.model.AuditEvent;
 import com.nexus.audit.write.normalizer.AuditEventNormalizer;
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.propagation.TextMapGetter;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.reactive.messaging.kafka.KafkaRecord;
 import io.smallrye.reactive.messaging.kafka.api.IncomingKafkaRecordMetadata;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.apache.kafka.common.header.Header;
+import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.eclipse.microprofile.reactive.messaging.*;
 import org.jboss.logging.Logger;
 
+import java.nio.charset.StandardCharsets;
 import java.time.*;
+import java.util.ArrayList;
+import java.util.List;
 
 @ApplicationScoped
 @RegisterForReflection
@@ -126,6 +137,24 @@ public class AuditEventConsumer {
         return processEvent(record, "identity.rejected");
     }
 
+    /**
+     * identity.events carries LoginSuccessful, PasswordResetRequested,
+     * PasswordResetCompleted, etc. — every other identity.* topic
+     * (users.registered, identity.verified, identity.rejected) is already
+     * wired here, but this one was never bound to a channel, so none of
+     * these choreographed flows exist in the central audit trail today.
+     * This is the read side of the CQRS view for the password-reset
+     * choreography: query nexus-audit-* by userId to see
+     * PasswordResetRequested / PasswordResetCompleted for a given user,
+     * with zero involvement in the actual request/confirm business logic.
+     */
+    @Incoming("identity-events")
+    @Acknowledgment(Acknowledgment.Strategy.MANUAL)
+    public Uni<Void> onIdentityEvent(
+            KafkaRecord<String, String> record) {
+        return processEvent(record, "identity.events");
+    }
+
     @Incoming("accounts-created")
     @Acknowledgment(Acknowledgment.Strategy.MANUAL)
     public Uni<Void> onAccountCreated(
@@ -177,6 +206,7 @@ public class AuditEventConsumer {
      */
     private Uni<Void> processEvent(KafkaRecord<String, String> record,
                                    String topic) {
+        Span span = startReceiveSpan(record, topic);
         return Uni.createFrom()
                 .item(() -> parseAndNormalize(
                         record.getPayload(), topic, extractOffset(record)))
@@ -185,8 +215,10 @@ public class AuditEventConsumer {
                     if (t != null) {
                         log.errorf("Failed to audit event from %s: %s",
                                 topic, t.getMessage());
+                        span.recordException(t);
                     }
                     record.ack();
+                    span.end();
                 })
                 .onFailure().recoverWithNull();
     }
@@ -198,6 +230,7 @@ public class AuditEventConsumer {
      */
     private Uni<Void> processEventWithRules(
             KafkaRecord<String, String> record, String topic) {
+        Span span = startReceiveSpan(record, topic);
         return Uni.createFrom()
                 .item(() -> parseAndNormalize(
                         record.getPayload(), topic, extractOffset(record)))
@@ -208,11 +241,69 @@ public class AuditEventConsumer {
                     if (t != null) {
                         log.errorf("Failed to audit+evaluate from %s: %s",
                                 topic, t.getMessage());
+                        span.recordException(t);
                     }
                     record.ack();
+                    span.end();
                 })
                 .onFailure().recoverWithNull();
     }
+
+    /**
+     * Manual trace propagation - counterpart to Spring's Micrometer
+     * Tracer/Propagator on the JVM services. Extracts whatever trace
+     * context arrived on this record's Kafka headers (B3 single-header
+     * "b3", written either by Brave directly or promoted from a Postgres
+     * outbox column via the Debezium EventRouter SMT - see
+     * debezium/register.sh) and starts this consumer's span as its child,
+     * so it shows up in the same Zipkin trace instead of a new one.
+     *
+     * Not wrapped in Context.makeCurrent(): the Uni pipeline this feeds
+     * into hops threads (Vert.x event loop / worker), and an OTel Scope
+     * must be closed on the same thread that opened it - crossing that
+     * boundary here would risk mismatched open/close pairs. The span
+     * itself (start/end) has no such constraint, so that's all this does;
+     * child spans from Elasticsearch calls nesting under it correctly is
+     * not required for one-trace-per-flow visibility in Zipkin.
+     */
+    private Span startReceiveSpan(KafkaRecord<String, String> record, String topic) {
+        Headers headers = record.getMetadata(IncomingKafkaRecordMetadata.class)
+                .map(IncomingKafkaRecordMetadata::getHeaders)
+                .orElse(new RecordHeaders());
+
+        Context extracted = GlobalOpenTelemetry.getPropagators()
+                .getTextMapPropagator()
+                .extract(Context.current(), headers, KAFKA_HEADER_GETTER);
+
+        return GlobalOpenTelemetry.getTracer("nexus-audit-write-native")
+                .spanBuilder(topic + " receive")
+                .setParent(extracted)
+                .setSpanKind(SpanKind.CONSUMER)
+                .startSpan();
+    }
+
+    private static final TextMapGetter<Headers> KAFKA_HEADER_GETTER = new TextMapGetter<>() {
+        @Override
+        public Iterable<String> keys(Headers carrier) {
+            List<String> keys = new ArrayList<>();
+            carrier.forEach(h -> keys.add(h.key()));
+            return keys;
+        }
+
+        @Override
+        public String get(Headers carrier, String key) {
+            if (carrier == null) return null;
+            Header header = carrier.lastHeader(key);
+            // header.value() is null (not just header itself) whenever the
+            // source outbox column was SQL NULL and Debezium's EventRouter
+            // SMT promoted it verbatim into the "b3" header - NULL, not
+            // "header absent". OutboxEntry.attachTraceContext is a
+            // documented no-op when there's no active span at write time,
+            // so this is common, not an edge case.
+            if (header == null || header.value() == null) return null;
+            return new String(header.value(), StandardCharsets.UTF_8);
+        }
+    };
 
     private AuditEvent parseAndNormalize(String payload,
                                          String topic,
@@ -255,15 +346,36 @@ public class AuditEventConsumer {
                 .completionStage(
                         elasticsearchClient.index(request))
                 .replaceWithVoid()
-                .onFailure(co.elastic.clients.elasticsearch
-                        ._types.ElasticsearchException.class)
+                // Matched on Throwable, not the narrower ElasticsearchException
+                // type: the async client can wrap the real error (e.g. in a
+                // CompletionException/TransportException), which would fail
+                // an exact-type onFailure(ElasticsearchException.class) match
+                // and let a 409 fall through as an unhandled failure -
+                // exactly what was showing up as "hundreds of
+                // version_conflict_engine_exception errors" instead of the
+                // idempotent-skip this was meant to produce. Walking the
+                // cause chain for the conflict signature is robust to
+                // whatever wrapper type is actually thrown.
+                .onFailure(Throwable.class)
                 .recoverWithUni(e -> {
-                    if (e.getMessage().contains("409") ||
-                            e.getMessage().contains("version_conflict")) {
-                        log.debugf("Idempotent replay: %s", event.eventId());
+                    if (isVersionConflict(e)) {
+                        log.debugf("Idempotent replay (version conflict, " +
+                                "already indexed): %s", event.eventId());
                         return Uni.createFrom().voidItem();
                     }
                     return Uni.createFrom().failure(e);
                 });
+    }
+
+    private boolean isVersionConflict(Throwable t) {
+        for (Throwable cur = t; cur != null; cur = cur.getCause()) {
+            String msg = cur.getMessage();
+            if (msg != null && (msg.contains("version_conflict")
+                    || msg.contains("409"))) {
+                return true;
+            }
+            if (cur.getCause() == cur) break; // guard against self-referencing cause
+        }
+        return false;
     }
 }

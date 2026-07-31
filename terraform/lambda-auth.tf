@@ -98,6 +98,13 @@ resource "aws_dynamodb_table" "revoked_tokens" {
     attribute_name = "ttl"
     enabled        = true
   }
+
+  lifecycle {
+    # If this table is destroyed, every previously-revoked token becomes
+    # valid again until it naturally expires - a real security window, not
+    # just a data-loss concern.
+    prevent_destroy = true
+  }
 }
 
 # ── Cognito User Pool ─────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
     {
       "messageId": "visa-test-msg-001",
       "receiptHandle": "test-receipt-handle",
-      "body": "{\"externalPaymentId\":\"visa-event-12345\",\"paymentNetwork\":\"VISA\",\"eventType\":\"PAYMENT_COMPLETED\",\"networkTransactionId\":\"visa-txn-67890\",\"amount\":\"1250.00\",\"currency\":\"MXN\",\"cardLast4\":\"4567\",\"cardToken\":\"tok_visa_test_001\",\"merchantId\":\"MERCHANT-ABC123\",\"merchantName\":\"Walmart Supercenter\",\"merchantCategoryCode\":\"5411\",\"authorizationCode\":\"AUTH789\",\"responseCode\":\"00\",\"terminalId\":\"TERM001\",\"posEntryMode\":\"CHIP\",\"cardholderPresent\":true,\"isContactless\":false,\"timestamp\":\"2025-05-07T14:30:00Z\",\"targetAccountId\":\"nexus-account-uuid-001\"}",
+      "body": "{\"externalPaymentId\":\"visa-event-12345\",\"network\":\"VISA\",\"eventType\":\"CAPTURE\",\"networkTransactionId\":\"visa-txn-67890\",\"amount\":\"1250.00\",\"currency\":\"MXN\",\"cardLast4\":\"4567\",\"cardToken\":\"tok_visa_test_001\",\"merchantId\":\"MERCHANT-ABC123\",\"merchantName\":\"Walmart Supercenter\",\"merchantCategoryCode\":\"5411\",\"authorizationCode\":\"AUTH789\",\"responseCode\":\"00\",\"terminalId\":\"TERM001\",\"posEntryMode\":\"CHIP\",\"cardholderPresent\":true,\"isContactless\":false,\"timestamp\":\"2025-05-07T14:30:00Z\",\"targetAccountId\":\"nexus-account-uuid-001\"}",
       "attributes": {
         "ApproximateReceiveCount": "1",
         "SentTimestamp": "1715091000000",

@@ -21,6 +21,21 @@
 
     <dependencies>
         <dependency>
+            <groupId>com.nexus</groupId>
+            <artifactId>nexus-tracing-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <!-- NO hardcoded version — parent BOM manages it -->
+        </dependency>
+        <dependency>
+            <groupId>com.github.loki4j</groupId>
+            <artifactId>loki-logback-appender</artifactId>
+            <version>1.5.2</version>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-gateway</artifactId>
         </dependency>
@@ -102,6 +117,15 @@
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-tracing-bridge-brave</artifactId>
+        </dependency>
+        <!-- Required for Reactor to auto-propagate trace context (MDC/span)
+             across operator chains via Hooks.enableAutomaticContextPropagation().
+             Spring Boot 3.4 only wires that hook when this is explicitly on
+             the classpath - it is not pulled in transitively by
+             spring-cloud-starter-gateway or reactor-core alone. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>context-propagation</artifactId>
         </dependency>
         <dependency>
             <groupId>io.zipkin.reporter2</groupId>

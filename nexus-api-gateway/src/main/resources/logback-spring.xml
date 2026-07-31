@@ -2,17 +2,81 @@
 <configuration>
 
     <springProperty name="appName" source="spring.application.name" defaultValue="nexus-api-gateway"/>
+    <springProperty name="lokiUrl" source="loki.url" defaultValue="http://nexus-loki:3100/loki/api/v1/push"/>
 
-    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} traceId=%X{traceId:-} - %msg%n</pattern>
-        </encoder>
-    </appender>
+    <!-- ================================================================
+         LOCAL DEV PROFILE (no docker, no production)
+         Plain text console only — no Loki connection attempted
+         ================================================================ -->
+    <springProfile name="!docker,!production,!prod">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} traceId=%X{traceId:-} - %msg%n</pattern>
+            </encoder>
+        </appender>
 
-    <springProfile name="dev">
-        <logger name="com.nexus.gateway" level="DEBUG"/>
-        <logger name="org.springframework.cloud.gateway" level="DEBUG"/>
-        <logger name="org.springframework.security" level="DEBUG"/>
+        <springProfile name="dev">
+            <logger name="com.nexus.gateway" level="DEBUG"/>
+            <logger name="org.springframework.cloud.gateway" level="DEBUG"/>
+            <logger name="org.springframework.security" level="DEBUG"/>
+        </springProfile>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <!-- ================================================================
+         DOCKER / PRODUCTION PROFILES
+         JSON console (LogstashEncoder) + async Loki4j appender.
+         api-gateway previously had NEITHER dependency nor any Loki wiring
+         at all (unlike 13 of the other 14 Spring Boot services) - this is
+         the platform's single entry point for all traffic, so its logs
+         were the least visible in Loki/Grafana despite being the most
+         useful ones to search when something's failing at the edge.
+         ================================================================ -->
+    <springProfile name="docker,production,prod">
+
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdcKeyName>traceId</includeMdcKeyName>
+                <includeMdcKeyName>spanId</includeMdcKeyName>
+                <customFields>{"service":"${appName}"}</customFields>
+            </encoder>
+        </appender>
+
+        <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+            <http>
+                <url>${lokiUrl}</url>
+            </http>
+            <format>
+                <label>
+                    <pattern>
+                        service=${appName},level=%level
+                    </pattern>
+                </label>
+                <message class="com.github.loki4j.logback.JsonLayout">
+                    <pattern>
+                        %d{yyyy-MM-dd HH:mm:ss.SSS}
+                        traceId=%X{traceId:-no-trace}
+                        spanId=%X{spanId:-no-span}
+                        [%thread] %-5level %logger{36} - %msg%n
+                    </pattern>
+                </message>
+            </format>
+        </appender>
+
+        <appender name="ASYNC_LOKI" class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="LOKI"/>
+            <queueSize>10000</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </root>
+
     </springProfile>
 
     <logger name="io.netty" level="WARN"/>
@@ -20,9 +84,5 @@
     <logger name="io.lettuce" level="WARN"/>
     <logger name="com.netflix.eureka" level="WARN"/>
     <logger name="com.netflix.discovery" level="WARN"/>
-
-    <root level="INFO">
-        <appender-ref ref="CONSOLE"/>
-    </root>
 
 </configuration>

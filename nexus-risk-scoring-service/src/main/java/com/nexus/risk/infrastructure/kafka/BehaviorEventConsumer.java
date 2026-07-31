@@ -3,8 +3,14 @@ package com.nexus.risk.infrastructure.kafka;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.risk.agent.model.RiskScoringAgent;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Headers;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -35,6 +41,8 @@ public class BehaviorEventConsumer {
 
     private final RiskScoringAgent riskScoringAgent;
     private final ObjectMapper objectMapper;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     private final Executor asyncExecutor =
             Executors.newVirtualThreadPerTaskExecutor();
@@ -44,8 +52,13 @@ public class BehaviorEventConsumer {
             groupId = "risk-scoring-behavior-events",
             containerFactory = "kafkaListenerContainerFactory"
     )
-    public void consumeBehaviorAggregated(String message,
+    public void consumeBehaviorAggregated(ConsumerRecord<String, String> record,
                                           Acknowledgment ack) {
+        String message = record.value();
+        Headers headers = record.headers();
+        Span span = KafkaTracePropagation.extractAndStartSpan(
+                tracer, propagator, record, "risk-scoring-behavior-events", "user.behavior.aggregated receive");
+        try (Tracer.SpanInScope ignoredScope = tracer.withSpan(span)) {
         try {
             JsonNode event = objectMapper.readTree(message);
             String userId = event.path("userId").asText();
@@ -55,14 +68,31 @@ public class BehaviorEventConsumer {
                 log.info("Event-triggered recomputation: " +
                         "userId={} trigger={}", userId, trigger);
 
+                // The computation runs on a separate thread after this
+                // method returns, so the "receive" span above (which ends
+                // in this method's finally block, right after dispatch)
+                // can't cover it. Span objects are plain trace-context
+                // data - safe to hand to another thread - so a dedicated
+                // child span is built here, explicitly parented to the
+                // receive span's context via setParent(), with its own
+                // scope opened and closed entirely inside the async
+                // lambda (never handing a Scope itself across threads).
+                Span computeSpan = tracer.spanBuilder()
+                        .setParent(span.context())
+                        .name("risk.compute.event-triggered")
+                        .start();
+
                 // Async — don't block Kafka consumer thread
                 CompletableFuture.runAsync(() -> {
-                    try {
+                    try (Tracer.SpanInScope computeScope = tracer.withSpan(computeSpan)) {
                         riskScoringAgent.computeRiskProfile(
                                 userId, "EVENT_TRIGGERED");
                     } catch (Exception e) {
+                        computeSpan.error(e);
                         log.error("Event-triggered scoring failed: " +
                                 "userId={} {}", userId, e.getMessage());
+                    } finally {
+                        computeSpan.end();
                     }
                 }, asyncExecutor);
             }
@@ -72,6 +102,9 @@ public class BehaviorEventConsumer {
         } catch (Exception e) {
             log.error("Failed to process behavior event: {}",
                     e.getMessage(), e);
+        }
+        } finally {
+            span.end();
         }
     }
 

@@ -17,8 +17,8 @@ from decimal import Decimal
 
 import boto3
 
-from utils.decimal_utils import negate
-from utils.logging_config import log
+from src.utils.decimal_utils import negate
+from src.utils.logging_config import log
 
 _dynamo = boto3.resource("dynamodb")
 _table = _dynamo.Table(os.environ["USER_SUMMARY_TABLE"])

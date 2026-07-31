@@ -16,7 +16,10 @@ spring:
 
   threads:
     virtual:
-      enabled: true
+      # disabled: Brave's ThreadLocal trace context doesn't survive virtual
+      # thread mount/unmount - controller-dispatched spans were silently
+      # never exported to Zipkin (actuator/internal spans traced fine).
+      enabled: false
 
   data:
     mongodb:
@@ -49,6 +52,10 @@ spring:
 
 server:
   port: 8089
+  tomcat:
+    threads:
+      max: 50
+    accept-count: 25
 
 springdoc:
   api-docs:
@@ -72,6 +79,21 @@ eureka:
     prefer-ip-address: true
     lease-renewal-interval-in-seconds: 30
     lease-expiration-duration-in-seconds: 90
+
+nexus:
+  load-shedding:
+    max-in-flight: 40
+  aws:
+    region: ${AWS_REGION:us-east-1}
+    endpoint-override: ${AWS_ENDPOINT:}
+    access-key-id: ${AWS_ACCESS_KEY_ID:}
+    secret-access-key: ${AWS_SECRET_ACCESS_KEY:}
+    # SagaCommandConsumer / FraudEventConsumer / IdentityEventsConsumer all
+    # read nexus.aws.notification-dispatch-topic-arn - this was never bound
+    # to any env var, so it was always empty and every SNS publish call was
+    # silently skipped regardless of SNS_NOTIFICATION_DISPATCH_TOPIC_ARN
+    # being set in .env/docker-compose-prod.yml.
+    notification-dispatch-topic-arn: ${SNS_NOTIFICATION_DISPATCH_TOPIC_ARN:}
 
 resilience4j:
   retry:

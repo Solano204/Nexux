@@ -1,27 +1,83 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
 
-    <springProfile name="docker">
-        <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
-                <includeMdcKeyName>traceId</includeMdcKeyName>
-                <includeMdcKeyName>spanId</includeMdcKeyName>
-                <customFields>{"service":"nexus-analytics-service"}</customFields>
-            </encoder>
-        </appender>
-    </springProfile>
+    <springProperty name="appName"
+                    source="spring.application.name"
+                    defaultValue="nexus-analytics-service"/>
 
-    <springProfile name="!docker">
+    <springProperty name="lokiUrl"
+                    source="loki.url"
+                    defaultValue="http://nexus-loki:3100/loki/api/v1/push"/>
+
+    <!-- ================================================================
+         LOCAL DEV PROFILE (no docker, no production)
+         Plain text console only — no Loki connection attempted
+         ================================================================ -->
+    <springProfile name="!docker,!production,!prod">
         <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
             <encoder>
                 <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level traceId=%X{traceId} %logger{36} - %msg%n</pattern>
             </encoder>
         </appender>
+
+        <root level="INFO">
+            <appender-ref ref="STDOUT"/>
+        </root>
     </springProfile>
 
-    <root level="INFO">
-        <appender-ref ref="STDOUT"/>
-    </root>
+    <!-- ================================================================
+         DOCKER / PRODUCTION PROFILES
+         JSON console (LogstashEncoder) + async Loki4j appender
+         active profile here is "prod" (docker-compose-prod.yml sets
+         SPRING_PROFILES_ACTIVE=prod, not "docker") - matched name="docker"
+         alone before this fix, which never activated in production; the
+         "!docker" block below activated instead, so this service never
+         emitted JSON logs or reached Loki despite the datasource/dashboard
+         work already assuming it would.
+         ================================================================ -->
+    <springProfile name="docker,production,prod">
+
+        <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdcKeyName>traceId</includeMdcKeyName>
+                <includeMdcKeyName>spanId</includeMdcKeyName>
+                <customFields>{"service":"${appName}"}</customFields>
+            </encoder>
+        </appender>
+
+        <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+            <http>
+                <url>${lokiUrl}</url>
+            </http>
+            <format>
+                <label>
+                    <pattern>
+                        service=${appName},level=%level
+                    </pattern>
+                </label>
+                <message class="com.github.loki4j.logback.JsonLayout">
+                    <pattern>
+                        %d{yyyy-MM-dd HH:mm:ss.SSS}
+                        traceId=%X{traceId:-no-trace}
+                        spanId=%X{spanId:-no-span}
+                        [%thread] %-5level %logger{36} - %msg%n
+                    </pattern>
+                </message>
+            </format>
+        </appender>
+
+        <appender name="ASYNC_LOKI" class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="LOKI"/>
+            <queueSize>10000</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="STDOUT"/>
+            <appender-ref ref="ASYNC_LOKI"/>
+        </root>
+
+    </springProfile>
 
     <logger name="com.nexus.analytics" level="INFO"/>
     <logger name="org.apache.kafka.streams" level="WARN"/>

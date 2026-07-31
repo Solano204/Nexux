@@ -1,0 +1,227 @@
+{
+  "id": null,
+  "uid": "nexus-spring-boot-statistics",
+  "title": "Nexus Platform - Spring Boot Statistics",
+  "description": "HTTP request rate, latency percentiles, error rate and datasource connection pools per service. Equivalent to public dashboard ID 12900, adapted for the Nexus label set.",
+  "tags": ["nexus", "spring-boot", "http"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "editable": true,
+  "graphTooltip": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+        "query": { "query": "label_values(http_server_requests_seconds_count, service)", "refId": "StandardVariableQuery" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" },
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "HTTP traffic",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Request rate by service",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_seconds_count{service=~\"$service\"}[5m])) by (service)", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Error rate (%)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_seconds_count{service=~\"$service\", status=~\"5..\"}[5m])) by (service) / sum(rate(http_server_requests_seconds_count{service=~\"$service\"}[5m])) by (service) * 100", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 4,
+      "type": "row",
+      "title": "Latency",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "p50 latency",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(http_server_requests_seconds_bucket{service=~\"$service\"}[5m])) by (service, le))", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "p95 latency",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{service=~\"$service\"}[5m])) by (service, le))", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "p99 latency",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{service=~\"$service\"}[5m])) by (service, le))", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 17,
+      "type": "row",
+      "title": "Per-endpoint breakdown",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 18,
+      "type": "table",
+      "title": "Request rate, error rate and p99 by URI",
+      "description": "Per-endpoint breakdown across all services - not per-service alone. High-cardinality by design (service x uri); use the $service filter above to narrow it down on a busy platform.",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_seconds_count{service=~\"$service\"}[5m])) by (service, uri)", "refId": "A", "format": "table", "instant": true },
+        { "expr": "sum(rate(http_server_requests_seconds_count{service=~\"$service\", status=~\"5..\"}[5m])) by (service, uri) / sum(rate(http_server_requests_seconds_count{service=~\"$service\"}[5m])) by (service, uri) * 100", "refId": "B", "format": "table", "instant": true },
+        { "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{service=~\"$service\"}[5m])) by (service, uri, le))", "refId": "C", "format": "table", "instant": true }
+      ],
+      "transformations": [
+        { "id": "merge", "options": {} },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": { "Value #A": "req/s", "Value #B": "error % ", "Value #C": "p99 (s)" }
+          }
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {}
+    },
+    {
+      "id": 19,
+      "type": "row",
+      "title": "Circuit breakers (api-gateway only)",
+      "description": "Resilience4j circuit breakers also exist in fraud-service (FraudLlmGateway, TransactionServiceClient via @CircuitBreaker), but only api-gateway binds TaggedCircuitBreakerMetrics to Micrometer (see ResilienceConfig.circuitBreakerMetrics) - fraud-service's circuit breaker state isn't exported to Prometheus today, so it can't appear here without that same binding being added there first.",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 20,
+      "type": "state-timeline",
+      "title": "Circuit breaker state by route",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "resilience4j_circuitbreaker_state{service=\"api-gateway\", state=\"open\"}", "refId": "A", "legendFormat": "{{name}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] },
+          "mappings": [{ "type": "value", "options": { "1": { "text": "OPEN", "color": "red" }, "0": { "text": "not open", "color": "green" } } }]
+        },
+        "overrides": []
+      },
+      "options": { "mergeValues": true, "showValue": "always", "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Circuit breaker failure rate (%)",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "resilience4j_circuitbreaker_failure_rate{service=\"api-gateway\"}", "refId": "A", "legendFormat": "{{name}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Database connection pools",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "HikariCP active connections",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(hikaricp_connections_active{service=~\"$service\"}) by (service)", "refId": "A", "legendFormat": "{{service}} active" },
+        { "expr": "sum(hikaricp_connections_idle{service=~\"$service\"}) by (service)", "refId": "B", "legendFormat": "{{service}} idle" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "HikariCP pool usage (%)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(hikaricp_connections_active{service=~\"$service\"}) by (service) / sum(hikaricp_connections_max{service=~\"$service\"}) by (service) * 100", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    }
+  ]
+}

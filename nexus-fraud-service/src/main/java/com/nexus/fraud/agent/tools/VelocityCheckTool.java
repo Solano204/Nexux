@@ -2,6 +2,7 @@ package com.nexus.fraud.agent.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nexus.fraud.infrastructure.http.TransactionServiceClient;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
@@ -10,7 +11,6 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -43,7 +43,7 @@ import java.util.List;
 public class VelocityCheckTool {
 
     private final StringRedisTemplate redisTemplate;
-    private final RestTemplate transactionServiceClient;
+    private final TransactionServiceClient transactionServiceClient;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
 
@@ -142,12 +142,8 @@ public class VelocityCheckTool {
 
     private VelocityData queryVelocity(String userId, int minutes) {
         try {
-            String url = "http://nexus-transaction-service:8086" +
-                    "/internal/v1/streams/velocity/" + userId +
-                    "?windowMinutes=" + minutes;
-
             JsonNode response = transactionServiceClient
-                    .getForObject(url, JsonNode.class);
+                    .getVelocity(userId, minutes);
 
             if (response != null) {
                 return new VelocityData(

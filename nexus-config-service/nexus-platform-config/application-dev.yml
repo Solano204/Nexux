@@ -8,6 +8,10 @@ spring:
   # ── Kafka → localhost ─────────────────────────────────────
   kafka:
     bootstrap-servers: localhost:19092
+    listener:
+      observation-enabled: true
+    template:
+      observation-enabled: true
 
   # ── JPA dev settings ─────────────────────────────────────
   jpa:
@@ -37,6 +41,10 @@ eureka:
 # ── Zipkin → localhost ───────────────────────────────────────
 management:
   tracing:
+    propagation:
+      type: B3
+      produce: B3
+      consume: [B3, W3C]
     sampling:
       probability: 1.0
   zipkin:

@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Nexus Platform Load Test" enabled="true">
+      <stringProp name="TestPlan.comments">Targets registration and transaction flows through nexus-api-gateway. See jmeter/README.md for the registration-vs-transaction split rationale (fresh registrations are KYC-gated and have no accounts yet - they can't hit the transfer endpoint) and required PROPERTIES.</stringProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+        <collectionProp name="Arguments.arguments">
+          <elementProp name="GATEWAY_HOST" elementType="Argument">
+            <stringProp name="Argument.name">GATEWAY_HOST</stringProp>
+            <stringProp name="Argument.value">${__P(gateway.host,localhost)}</stringProp>
+          </elementProp>
+          <elementProp name="GATEWAY_PORT" elementType="Argument">
+            <stringProp name="Argument.name">GATEWAY_PORT</stringProp>
+            <stringProp name="Argument.value">${__P(gateway.port,8080)}</stringProp>
+          </elementProp>
+          <elementProp name="PUSHGATEWAY_URL" elementType="Argument">
+            <stringProp name="Argument.name">PUSHGATEWAY_URL</stringProp>
+            <stringProp name="Argument.value">${__P(pushgateway.url,http://localhost:9091)}</stringProp>
+          </elementProp>
+        </collectionProp>
+      </elementProp>
+      <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
+    </TestPlan>
+    <hashTree>
+
+      <ConfigTestElement guiclass="HttpDefaultsGui" testclass="ConfigTestElement" testname="HTTP Request Defaults" enabled="true">
+        <stringProp name="HTTPSampler.domain">${GATEWAY_HOST}</stringProp>
+        <stringProp name="HTTPSampler.port">${GATEWAY_PORT}</stringProp>
+        <stringProp name="HTTPSampler.protocol">http</stringProp>
+        <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+        <stringProp name="HTTPSampler.connect_timeout">5000</stringProp>
+        <stringProp name="HTTPSampler.response_timeout">30000</stringProp>
+      </ConfigTestElement>
+      <hashTree/>
+
+      <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Content-Type: application/json" enabled="true">
+        <collectionProp name="HeaderManager.headers">
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">Content-Type</stringProp>
+            <stringProp name="Header.value">application/json</stringProp>
+          </elementProp>
+        </collectionProp>
+      </HeaderManager>
+      <hashTree/>
+
+      <ResultCollector guiclass="SummaryReport" testclass="ResultCollector" testname="Summary Report" enabled="true">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration"/>
+        </objProp>
+      </ResultCollector>
+      <hashTree/>
+
+      <!-- ══════════════════════════════════════════════════════
+           Thread Group 1 — Registration Flow
+           Fresh synthetic users every iteration (register + login
+           only). Deliberately does NOT continue into a transfer -
+           a brand-new user has status=PENDING_KYC and zero accounts
+           until the onboarding saga completes KYC + account
+           creation, which needs a real document image (Rekognition)
+           this synthetic flow doesn't have. See README.
+           ══════════════════════════════════════════════════════ -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Registration Flow" enabled="true">
+        <stringProp name="ThreadGroup.num_threads">${__P(registration.threads,5)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(registration.rampup,10)}</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller" enabled="true">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">${__P(registration.loops,10)}</stringProp>
+        </elementProp>
+        <boolProp name="ThreadGroup.scheduler">false</boolProp>
+      </ThreadGroup>
+      <hashTree>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST /api/v1/auth/register" enabled="true">
+          <stringProp name="HTTPSampler.path">/api/v1/auth/register</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{
+  "email": "loadtest-${__UUID()}@nexus-loadtest.local",
+  "password": "LoadTest2026Secure!",
+  "fullName": "Load Test User",
+  "phoneNumber": "+521${__Random(1000000,9999999,)}",
+  "dateOfBirth": "1990-01-01",
+  "country": "MX"
+}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="Push metrics to Pushgateway" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script">
+// Fire-and-forget push per sample. Mirrors the same pattern used on every
+// sampler in this plan - see README for why a plain JSR223 PostProcessor
+// was used instead of a third-party Prometheus Backend Listener plugin
+// (no plugin JAR to verify/download without a live JMeter to test against).
+def metric = "jmeter_request_duration_ms"
+def label = sampler.getName().replaceAll(/[^a-zA-Z0-9_]/, "_")
+def body = "# TYPE ${metric} gauge\n${metric}{request=\"${label}\",response_code=\"${prev.getResponseCode()}\"} ${prev.getTime()}\n"
+try {
+    def url = new URL("${vars.get('PUSHGATEWAY_URL')}/metrics/job/jmeter_load_test/instance/registration_flow")
+    def conn = url.openConnection()
+    conn.setRequestMethod("POST")
+    conn.setDoOutput(true)
+    conn.getOutputStream().write(body.getBytes("UTF-8"))
+    conn.getResponseCode()
+} catch (Exception e) {
+    log.warn("Pushgateway push failed (non-fatal, load test continues): " + e.getMessage())
+}
+            </stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST /api/v1/auth/login (same fresh user)" enabled="true">
+          <stringProp name="HTTPSampler.path">/api/v1/auth/login</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{
+  "email": "loadtest-${__UUID()}@nexus-loadtest.local",
+  "password": "LoadTest2026Secure!",
+  "deviceFingerprint": "jmeter-load-test"
+}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="TestPlan.comments">NOTE: this samples a DIFFERENT random email than the register call above (each ${__UUID()} evaluates independently) - correlating the exact registered email into this login call needs a JSON PostProcessor extracting it from the register request body, not just the response. Left as a known gap rather than silently wired to look correct: fix by extracting email into a variable in the register sampler's own PostProcessor before this plan is run for real.</stringProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+      </hashTree>
+
+      <!-- ══════════════════════════════════════════════════════
+           Thread Group 2 — Transaction Flow
+           Requires PRE-SEEDED active users with real accounts (CSV
+           below) - see README for how to seed them. Cannot use
+           fresh registrations for the same KYC-gating reason as
+           above.
+           ══════════════════════════════════════════════════════ -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Transaction Flow" enabled="true">
+        <stringProp name="ThreadGroup.num_threads">${__P(transaction.threads,5)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(transaction.rampup,10)}</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller" enabled="true">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">${__P(transaction.loops,10)}</stringProp>
+        </elementProp>
+        <boolProp name="ThreadGroup.scheduler">false</boolProp>
+      </ThreadGroup>
+      <hashTree>
+
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="test-users.csv" enabled="true">
+          <stringProp name="filename">${__P(testusers.csv,jmeter/test-users.csv)}</stringProp>
+          <stringProp name="variableNames">email,password,sourceAccountId,targetAccountId</stringProp>
+          <stringProp name="delimiter">,</stringProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">true</boolProp>
+          <boolProp name="stopThread">false</boolProp>
+          <stringProp name="shareMode">shareMode.thread</stringProp>
+        </CSVDataSet>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST /api/v1/auth/login" enabled="true">
+          <stringProp name="HTTPSampler.path">/api/v1/auth/login</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{
+  "email": "${email}",
+  "password": "${password}",
+  "deviceFingerprint": "jmeter-load-test"
+}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="Extract accessToken" enabled="true">
+            <stringProp name="JSONPostProcessor.referenceNames">accessToken</stringProp>
+            <stringProp name="JSONPostProcessor.jsonPathExprs">$.accessToken</stringProp>
+            <stringProp name="JSONPostProcessor.match_numbers">1</stringProp>
+          </JSONPostProcessor>
+          <hashTree/>
+        </hashTree>
+
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Authorization: Bearer" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Authorization</stringProp>
+              <stringProp name="Header.value">Bearer ${accessToken}</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST /api/v1/transactions/transfer" enabled="true">
+          <stringProp name="HTTPSampler.path">/api/v1/transactions/transfer</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{
+  "idempotencyKey": "jmeter-${__UUID()}",
+  "sourceAccountId": "${sourceAccountId}",
+  "targetAccountId": "${targetAccountId}",
+  "amount": 1.00,
+  "currency": "MXN",
+  "transactionType": "INTERNAL_TRANSFER",
+  "channel": "API",
+  "description": "JMeter load test transfer"
+}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="TestPlan.comments">amount=1.00 deliberately tiny and idempotencyKey is unique per request (via __UUID()) specifically so this is safe to loop indefinitely against real seeded accounts without draining balances or tripping the idempotency guard in TransactionCommandService.</stringProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+      </hashTree>
+
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

@@ -1,182 +1,154 @@
-//package com.nexus.transaction.integration;
-//
-//import com.fasterxml.jackson.databind.ObjectMapper;
-//import com.nexus.transaction.domain.model.enums.TransactionStatus;
-//import com.nexus.transaction.domain.model.enums.TransactionType;
-//import com.nexus.transaction.web.dto.request.InitiateTransactionRequest;
-//import com.nexus.transaction.web.dto.response.TransactionResponse;
-//import org.junit.jupiter.api.*;
-//import org.springframework.beans.factory.annotation.Autowired;
-//import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-//import org.springframework.boot.test.context.SpringBootTest;
-//import org.springframework.http.MediaType;
-//import org.springframework.test.context.DynamicPropertyRegistry;
-//import org.springframework.test.context.DynamicPropertySource;
-//import org.springframework.test.web.servlet.MockMvc;
-//import org.testcontainers.containers.KafkaContainer;
-//import org.testcontainers.containers.PostgreSQLContainer;
-//import org.testcontainers.elasticsearch.ElasticsearchContainer;
-//import org.testcontainers.junit.jupiter.Container;
-//import org.testcontainers.junit.jupiter.Testcontainers;
-//import org.testcontainers.utility.DockerImageName;
-//
-//import java.math.BigDecimal;
-//import java.util.UUID;
-//
-//import static org.assertj.core.api.Assertions.*;
-//import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
-//import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
-//
-//@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-//@AutoConfigureMockMvc
-//@Testcontainers
-//@Tag("integration")
-//class TransactionFlowIntegrationTest {
-//
-//    @Container
-//    static final PostgreSQLContainer<?> postgres =
-//            new PostgreSQLContainer<>("pgvector/pgvector:pg16")
-//                    .withDatabaseName("nexus_transaction_test")
-//                    .withUsername("nexus_test")
-//                    .withPassword("nexus_test");
-//
-//    @Container
-//    static final KafkaContainer kafka =
-//            new KafkaContainer(DockerImageName.parse(
-//                    "confluentinc/cp-kafka:7.6.0"));
-//
-//    @Container
-//    static final ElasticsearchContainer elasticsearch =
-//            new ElasticsearchContainer(DockerImageName.parse(
-//                    "docker.elastic.co/elasticsearch/elasticsearch:8.13.0"))
-//                    .withEnv("discovery.type", "single-node")
-//                    .withEnv("xpack.security.enabled", "false");
-//
-//    @Autowired MockMvc mockMvc;
-//    @Autowired ObjectMapper objectMapper;
-//
-//    @DynamicPropertySource
-//    static void configureProperties(DynamicPropertyRegistry registry) {
-//        registry.add("spring.datasource.url", postgres::getJdbcUrl);
-//        registry.add("spring.datasource.username", postgres::getUsername);
-//        registry.add("spring.datasource.password", postgres::getPassword);
-//        registry.add("spring.kafka.bootstrap-servers",
-//                kafka::getBootstrapServers);
-//        registry.add("spring.kafka.streams.bootstrap-servers",
-//                kafka::getBootstrapServers);
-//        registry.add("spring.elasticsearch.uris",
-//                () -> "http://" + elasticsearch.getHttpHostAddress());
-//        registry.add("spring.cloud.config.enabled", () -> "false");
-//        registry.add("eureka.client.enabled", () -> "false");
-//    }
-//
-//    @Test
-//    @DisplayName("POST /transfer creates INITIATED transaction with idempotency")
-//    void initiateTransfer_createsTransaction() throws Exception {
-//        String idempotencyKey = UUID.randomUUID().toString();
-//        UUID userId = UUID.randomUUID();
-//        UUID sourceAccountId = UUID.randomUUID();
-//        UUID targetAccountId = UUID.randomUUID();
-//
-//        var request = new InitiateTransactionRequest(
-//                idempotencyKey,
-//                sourceAccountId, targetAccountId,
-//                null, null,
-//                new BigDecimal("1500.00"),
-//                "MXN",
-//                TransactionType.INTERNAL_TRANSFER,
-//                null,
-//                "Payment for services", null, null, null
-//        );
-//
-//        String body = mockMvc.perform(post("/api/v1/transactions/transfer")
-//                        .contentType(MediaType.APPLICATION_JSON)
-//                        .header("X-User-Id", userId.toString())
-//                        .header("X-Forwarded-For", "192.168.1.100")
-//                        .content(objectMapper.writeValueAsString(request)))
-//                .andExpect(status().isAccepted())
-//                .andExpect(jsonPath("$.transactionId").exists())
-//                .andExpect(jsonPath("$.status").value("INITIATED"))
-//                .andExpect(jsonPath("$.amount").value(1500.00))
-//                .andReturn()
-//                .getResponse()
-//                .getContentAsString();
-//
-//        TransactionResponse response =
-//                objectMapper.readValue(body, TransactionResponse.class);
-//        assertThat(response.transactionId()).isNotNull();
-//    }
-//
-//    @Test
-//    @DisplayName("Idempotent: same idempotency key returns same transaction")
-//    void idempotentRequest_returnsSameTransaction() throws Exception {
-//        String idempotencyKey = UUID.randomUUID().toString();
-//        UUID userId = UUID.randomUUID();
-//
-//        var request = new InitiateTransactionRequest(
-//                idempotencyKey,
-//                UUID.randomUUID(), UUID.randomUUID(),
-//                null, null,
-//                new BigDecimal("250.00"), "MXN",
-//                TransactionType.INTERNAL_TRANSFER,
-//                null, "Test", null, null, null
-//        );
-//
-//        // First request
-//        String firstBody = mockMvc.perform(
-//                        post("/api/v1/transactions/transfer")
-//                                .contentType(MediaType.APPLICATION_JSON)
-//                                .header("X-User-Id", userId.toString())
-//                                .content(objectMapper.writeValueAsString(request)))
-//                .andExpect(status().isAccepted())
-//                .andReturn().getResponse().getContentAsString();
-//
-//        // Second request — same idempotency key
-//        String secondBody = mockMvc.perform(
-//                        post("/api/v1/transactions/transfer")
-//                                .contentType(MediaType.APPLICATION_JSON)
-//                                .header("X-User-Id", userId.toString())
-//                                .content(objectMapper.writeValueAsString(request)))
-//                .andExpect(status().isAccepted())
-//                .andReturn().getResponse().getContentAsString();
-//
-//        TransactionResponse first =
-//                objectMapper.readValue(firstBody, TransactionResponse.class);
-//        TransactionResponse second =
-//                objectMapper.readValue(secondBody, TransactionResponse.class);
-//
-//        // Same transaction returned — idempotency preserved
-//        assertThat(first.transactionId())
-//                .isEqualTo(second.transactionId());
-//    }
-//
-//    @Test
-//    @DisplayName("GET /transactions returns paginated history")
-//    void getHistory_returnsPaginatedResults() throws Exception {
-//        UUID userId = UUID.randomUUID();
-//
-//        // Create a transaction first
-//        mockMvc.perform(post("/api/v1/transactions/transfer")
-//                        .contentType(MediaType.APPLICATION_JSON)
-//                        .header("X-User-Id", userId.toString())
-//                        .content(objectMapper.writeValueAsString(
-//                                new InitiateTransactionRequest(
-//                                        UUID.randomUUID().toString(),
-//                                        UUID.randomUUID(), UUID.randomUUID(),
-//                                        null, null,
-//                                        new BigDecimal("100.00"), "MXN",
-//                                        TransactionType.INTERNAL_TRANSFER,
-//                                        null, "History test", null, null, null))))
-//                .andExpect(status().isAccepted());
-//
-//        // Fetch history
-//        mockMvc.perform(get("/api/v1/transactions")
-//                        .header("X-User-Id", userId.toString())
-//                        .param("page", "0")
-//                        .param("size", "20"))
-//                .andExpect(status().isOk())
-//                .andExpect(jsonPath("$.content").isArray())
-//                .andExpect(jsonPath("$.content[0].status")
-//                        .value("INITIATED"));
-//    }
-//}
+package com.nexus.transaction.integration;
+
+import com.nexus.transaction.application.command.TransactionCommandService;
+import com.nexus.transaction.domain.model.Transaction;
+import com.nexus.transaction.domain.model.enums.TransactionStatus;
+import com.nexus.transaction.domain.model.enums.TransactionType;
+import com.nexus.transaction.infrastructure.persistence.TransactionRepository;
+import com.nexus.transaction.integration.support.AbstractIntegrationTest;
+import com.nexus.transaction.web.dto.request.InitiateTransactionRequest;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+
+/**
+ * Integration test for nexus-transaction-service against REAL Postgres and
+ * REAL Kafka (Testcontainers, see AbstractIntegrationTest). This is the
+ * layer that catches what mocks can't: actual Hibernate/Postgres schema
+ * mapping (column types, constraints, the fraud_reasons _text[] array
+ * mapping), and actual Kafka message deserialization/routing through
+ * SagaReplyConsumer's real @KafkaListener - not a hand-invoked method call
+ * like the component test in fraud-service (Section 2).
+ *
+ * Was previously com.nexus.transaction.integration.TransactionFlowIntegrationTest
+ * - existed as a 181-line file, 100% commented out, never ran. This replaces it.
+ */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+@Tag("integration")
+class TransactionFlowIntegrationTest extends AbstractIntegrationTest {
+
+    @Autowired TransactionCommandService commandService;
+    @Autowired TransactionRepository transactionRepository;
+    @Autowired KafkaTemplate<String, String> kafkaTemplate;
+
+    // Explicit cleanup, NOT @Transactional rollback: the saga.replies message
+    // published below is consumed by SagaReplyConsumer on Spring Kafka's own
+    // listener thread, which commits its own transaction independently of
+    // whatever transaction this test method might have open - a rollback on
+    // the test's transaction would never touch what the listener thread
+    // already committed. @Transactional rollback DOES work for the second
+    // test below (idempotencyCheck_duplicateKey_returnsExistingTransaction),
+    // which never leaves the calling thread - see that test's comment.
+    @BeforeEach
+    void cleanUp() {
+        transactionRepository.deleteAll();
+    }
+
+    @Test
+    @DisplayName("real Postgres + real Kafka: FraudClearedReply on saga.replies transitions transaction to FRAUD_CLEARED")
+    void fraudClearedReply_realKafkaConsumption_updatesRealPostgresRow() {
+        UUID sourceAccountId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        var request = new InitiateTransactionRequest(
+                "idem-" + UUID.randomUUID(),
+                sourceAccountId, UUID.randomUUID(), null, null,
+                new BigDecimal("1500.00"), "MXN",
+                TransactionType.INTERNAL_TRANSFER, null,
+                "integration test transfer", null, null, null);
+
+        var response = commandService.initiateTransaction(
+                request, userId, "192.168.1.100", "device-001", "trace-it-001");
+
+        // TransactionResponse only exposes transactionId as a String and has
+        // no sagaId field at all - reload the entity to get both as their
+        // real types instead of guessing at DTO shape.
+        UUID transactionId = UUID.fromString(response.transactionId());
+        UUID sagaId = transactionRepository.findById(transactionId)
+                .orElseThrow().getSagaId();
+
+        // Real saga order is balance-first: INITIATED -> BALANCE_RESERVING ->
+        // BALANCE_RESERVED -> FRAUD_CLEARED (see Transaction.canTransitionTo's
+        // comment) - the orchestrator always reserves balance before fraud
+        // clears. Drive that step for real instead of jumping straight to
+        // FRAUD_CLEARED, which the state machine correctly rejects.
+        commandService.processBalanceResult(transactionId, sagaId, true, null, "trace-it-001");
+
+        // Same JSON shape FraudAnalysisService.publishSagaReply() actually
+        // builds (see nexus-fraud-service - Section 2's component test
+        // verifies THAT side of this exact contract; this test verifies the
+        // consuming side, over a real broker instead of a mock).
+        String replyJson = """
+                {
+                  "replyType": "FraudClearedReply",
+                  "sagaId": "%s",
+                  "transactionId": "%s",
+                  "sourceService": "nexus-fraud-service",
+                  "decision": "APPROVE",
+                  "riskScore": "12.50",
+                  "fraudScore": "12.50",
+                  "reasons": [],
+                  "traceId": "trace-it-001"
+                }
+                """.formatted(sagaId, transactionId);
+
+        kafkaTemplate.send("saga.replies", sagaId.toString(), replyJson);
+
+        // Consumption is async (real Kafka listener thread) - poll instead
+        // of asserting immediately. 10s was too tight: the saga.replies
+        // @KafkaListener has to join its consumer group and get a partition
+        // assignment against a freshly-started Testcontainers broker before
+        // it can consume anything at all, which alone can take several
+        // seconds under load.
+        await().atMost(Duration.ofSeconds(30))
+                .pollInterval(Duration.ofMillis(200))
+                .untilAsserted(() -> {
+                    Transaction reloaded = transactionRepository.findById(transactionId)
+                            .orElseThrow();
+                    assertThat(reloaded.getStatus()).isEqualTo(TransactionStatus.FRAUD_CLEARED);
+                    assertThat(reloaded.getFraudScore()).isEqualByComparingTo("12.50");
+                    assertThat(reloaded.getFraudDecision()).isEqualTo("CLEARED");
+                    assertThat(reloaded.getSagaStep()).isEqualTo("FRAUD_CLEARED");
+                });
+    }
+
+    // @Transactional rollback works here because everything - the idempotency
+    // check AND the write it triggers - runs synchronously on this test
+    // method's own thread inside one Spring-managed transaction. No listener
+    // thread involved, so no separate committed transaction can outlive the
+    // rollback. This is the pattern for any integration test that stays
+    // entirely within TransactionCommandService's own synchronous API.
+    @Test
+    @Transactional
+    @DisplayName("real Postgres: duplicate idempotencyKey for same user returns the existing transaction, no new row")
+    void idempotencyCheck_duplicateKey_returnsExistingTransaction() {
+        UUID userId = UUID.randomUUID();
+        String idempotencyKey = "idem-" + UUID.randomUUID();
+        var request = new InitiateTransactionRequest(
+                idempotencyKey, UUID.randomUUID(), UUID.randomUUID(), null, null,
+                new BigDecimal("200.00"), "MXN",
+                TransactionType.INTERNAL_TRANSFER, null,
+                "first attempt", null, null, null);
+
+        var first = commandService.initiateTransaction(
+                request, userId, "10.0.0.1", "device-002", "trace-it-002");
+        var second = commandService.initiateTransaction(
+                request, userId, "10.0.0.1", "device-002", "trace-it-002");
+
+        assertThat(second.transactionId()).isEqualTo(first.transactionId());
+        assertThat(transactionRepository.findByUserIdAndIdempotencyKey(userId, idempotencyKey))
+                .hasValueSatisfying(txn ->
+                        assertThat(txn.getTransactionId().toString()).isEqualTo(first.transactionId()));
+    }
+}

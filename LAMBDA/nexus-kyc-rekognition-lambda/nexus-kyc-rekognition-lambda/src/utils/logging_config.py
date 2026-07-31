@@ -18,7 +18,30 @@ import os
 from pythonjsonlogger import jsonlogger
 
 
-def configure_logging() -> logging.Logger:
+class StructuredLogger:
+    """Wraps a stdlib Logger so call sites can pass structured fields as
+    kwargs (e.g. log.info("msg", user_id=x)) instead of via extra=."""
+
+    def __init__(self, logger: logging.Logger):
+        self._logger = logger
+
+    def debug(self, msg, **kwargs):
+        self._logger.debug(msg, extra=kwargs)
+
+    def info(self, msg, **kwargs):
+        self._logger.info(msg, extra=kwargs)
+
+    def warning(self, msg, **kwargs):
+        self._logger.warning(msg, extra=kwargs)
+
+    def error(self, msg, **kwargs):
+        self._logger.error(msg, extra=kwargs)
+
+    def critical(self, msg, **kwargs):
+        self._logger.critical(msg, extra=kwargs)
+
+
+def configure_logging() -> StructuredLogger:
     log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
 
     logger = logging.getLogger("nexus.kyc.rekognition")
@@ -39,7 +62,7 @@ def configure_logging() -> logging.Logger:
     logging.getLogger("boto3").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-    return logger
+    return StructuredLogger(logger)
 
 
 log = configure_logging()

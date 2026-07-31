@@ -240,6 +240,8 @@ resource "aws_iam_role_policy" "reporting_lambda" {
         Action = [
           "s3:GetObject",
           "s3:PutObject",
+          "s3:PutObjectTagging",
+          "s3:GetObjectTagging",
           "s3:DeleteObject",
           "s3:ListBucket"
         ]
@@ -269,6 +271,15 @@ resource "aws_iam_role_policy" "reporting_lambda" {
           "kms:GenerateDataKey"
         ]
         Resource = aws_kms_key.reports.arn
+      },
+      {
+        # fraud_alerts DynamoDB table (owned by lambda-fraud-alert.tf) is
+        # encrypted with its own KMS key — reading it via ReportingTablesRead
+        # needs Decrypt on that key too, not just aws_kms_key.reports.
+        Sid      = "FraudAlertsKmsDecrypt"
+        Effect   = "Allow"
+        Action   = "kms:Decrypt"
+        Resource = aws_kms_key.fraud_alerts.arn
       }
     ]
   })

@@ -1,6 +1,14 @@
 <!-- src/main/resources/templates/email/_layout.html -->
+<!-- Two callers:
+     A) EmailTemplateEngine processes "_layout" directly (AI-generated
+        htmlBody) — bodyContentFragment is unbound, falls back to the
+        raw ${bodyContent} string via th:utext.
+     B) Other templates th:replace="~{_layout :: layout(~{::body-content})}"
+        — binds bodyContentFragment to their body-content fragment,
+        rendered via th:replace. -->
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org">
+<html xmlns:th="http://www.thymeleaf.org"
+      th:fragment="layout(bodyContentFragment)">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width,initial-scale=1.0">
@@ -39,7 +47,17 @@
         <div class="logo">🏦 Nexus Bank</div>
     </div>
     <div class="body">
-        <div th:utext="${bodyContent}"></div>
+        <!-- th:replace has higher processing precedence than th:if/th:unless
+             on the SAME tag, so it would be evaluated (and fail to resolve
+             a null fragment) even when the guard should skip the element.
+             Putting the guard on a wrapping th:block, which carries no
+             th:replace itself, avoids that. -->
+        <th:block th:unless="${bodyContentFragment == null}">
+            <div th:replace="${bodyContentFragment}"></div>
+        </th:block>
+        <th:block th:if="${bodyContentFragment == null}">
+            <div th:utext="${bodyContent}"></div>
+        </th:block>
         <a th:if="${deepLinkUrl and callToAction}"
            th:href="${deepLinkUrl}"
            th:text="${callToAction}"

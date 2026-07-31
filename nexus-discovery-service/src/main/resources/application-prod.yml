@@ -25,12 +25,12 @@ eureka:
     enable-self-preservation: true
     eviction-interval-timer-in-ms: 15000
     renewal-percent-threshold: 0.85
+    peer-node-connect-timeout-ms: 5000
+    peer-node-read-timeout-ms: 10000
 
 management:
   tracing:
     enabled: true
-    sampling:
-      probability: 0.05
   zipkin:
     tracing:
       endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}

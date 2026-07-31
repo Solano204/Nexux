@@ -6,6 +6,13 @@
 
 resource "aws_s3_bucket" "kyc_documents" {
   bucket = var.kyc_bucket_name
+
+  lifecycle {
+    # KYC documents carry a 7-year regulatory retention requirement
+    # (document_retention_days = 2555) - accidental destroy here is
+    # evidence loss, potentially a compliance violation.
+    prevent_destroy = true
+  }
 }
 
 # Block all public access — KYC documents must never be publicly accessible

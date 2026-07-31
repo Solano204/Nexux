@@ -16,7 +16,10 @@ spring:
 
   threads:
     virtual:
-      enabled: true
+      # disabled: Brave's ThreadLocal trace context doesn't survive virtual
+      # thread mount/unmount - controller-dispatched spans were silently
+      # never exported to Zipkin (actuator/internal spans traced fine).
+      enabled: false
 
   datasource:
     url: ${DATASOURCE_URL:jdbc:postgresql://localhost:5433/nexus_fraud}
@@ -106,6 +109,18 @@ eureka:
     lease-renewal-interval-in-seconds: 30
     lease-expiration-duration-in-seconds: 90
 
+nexus:
+  aws:
+    region: ${AWS_REGION:us-east-1}
+    endpoint-override: ${AWS_ENDPOINT:}
+    access-key-id: ${AWS_ACCESS_KEY_ID:}
+    secret-access-key: ${AWS_SECRET_ACCESS_KEY:}
+    # FraudAnalysisService.fraudAlertQueueUrl reads nexus.aws.fraud-alert-queue-url -
+    # this was never bound to any env var, so it was always empty and
+    # publishFraudAlertToSqs() never fired regardless of FRAUD_ALERTS_QUEUE_URL
+    # being set in .env/docker-compose-prod.yml.
+    fraud-alert-queue-url: ${FRAUD_ALERTS_QUEUE_URL:}
+
 resilience4j:
   circuitbreaker:
     instances:
@@ -114,12 +129,53 @@ resilience4j:
         failure-rate-threshold: 50
         wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 3
+      transaction-service:
+        register-health-indicator: true
+        sliding-window-type: count_based
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        slow-call-rate-threshold: 80
+        slow-call-duration-threshold: 2s
+        wait-duration-in-open-state: 15s
+        permitted-number-of-calls-in-half-open-state: 5
+        automatic-transition-from-open-to-half-open-enabled: true
+
+  retry:
+    instances:
+      transaction-service-reads:
+        max-attempts: 2
+        wait-duration: 200ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        enable-randomized-wait: true
+        randomized-wait-factor: 0.5
+        retry-exceptions:
+          - java.net.SocketTimeoutException
+          - java.net.ConnectException
+
+  ratelimiter:
+    instances:
+      # Client-side throttle for FraudLlmGateway's 3 OpenAI call sites
+      # (plan/executeTool/synthesize) - the "openai" CircuitBreaker above
+      # only reacts to sustained failures, it does nothing to stop
+      # concurrent fraud analyses from bursting past OpenAI's per-minute
+      # limit in the first place. Same pattern/incident basis as
+      # nexus-risk-scoring-service's openAiRateLimiter. See
+      # CHANGES-BESTPRACTICES/10_ARCHITECTURE_PATTERNS_CHANGES.md Fase 2.
+      openai:
+        limit-for-period: 20
+        limit-refresh-period: 1m
+        timeout-duration: 30s
 
 management:
+  health:
+    circuitbreakers:
+      enabled: true
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics
+        include: health,info,prometheus,metrics,circuitbreakers,retries,ratelimiters
   metrics:
     distribution:
       percentiles-histogram:

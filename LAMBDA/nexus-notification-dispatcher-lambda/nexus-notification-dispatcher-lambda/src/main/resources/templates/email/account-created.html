@@ -8,19 +8,19 @@
     <p style="font-size:20px;font-weight:700;color:#1a1a2e;">
         🎉 ¡Bienvenido a Nexus Bank!
     </p>
-    <p th:text="'Hola ' + ${userName ?: 'usuario'} + ', tu cuenta ha sido creada exitosamente.'">
+    <p th:text="'Hola ' + ${userName != null ? userName : 'usuario'} + ', tu cuenta ha sido creada exitosamente.'">
         Hola, tu cuenta ha sido creada exitosamente.
     </p>
     <table style="width:100%;border-collapse:collapse;margin:16px 0;">
         <tr>
             <td style="color:#6b7280;padding:8px 0;">Número de cuenta</td>
             <td style="font-weight:700;text-align:right;"
-                th:text="${accountNumber ?: '---'}">---</td>
+                th:text="${accountNumber != null ? accountNumber : '---'}">---</td>
         </tr>
         <tr>
             <td style="color:#6b7280;padding:8px 0;">Tipo de cuenta</td>
             <td style="text-align:right;"
-                th:text="${accountType ?: 'Cuenta personal'}">Cuenta personal</td>
+                th:text="${accountType != null ? accountType : 'Cuenta personal'}">Cuenta personal</td>
         </tr>
     </table>
     <p>Tu próximo paso es completar la verificación de identidad (KYC) para activar todas las funciones de tu cuenta.</p>

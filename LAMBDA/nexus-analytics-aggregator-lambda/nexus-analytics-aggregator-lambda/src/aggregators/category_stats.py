@@ -15,9 +15,9 @@ from decimal import Decimal
 
 import boto3
 
-from utils.decimal_utils import parse_decimal, negate
-from utils.mcc_mapper import mcc_to_category_name
-from utils.logging_config import log
+from src.utils.decimal_utils import parse_decimal, negate
+from src.finance.mcc_mapper import mcc_to_category_name
+from src.utils.logging_config import log
 
 _dynamo = boto3.resource("dynamodb")
 _table = _dynamo.Table(os.environ["CATEGORY_STATS_TABLE"])

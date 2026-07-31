@@ -1,6 +1,5 @@
 package com.nexus.notification.lambda.dispatch;
 
-import com.amazonaws.xray.AWSXRay;
 import com.nexus.notification.lambda.model.*;
 import com.nexus.notification.lambda.template.EmailTemplateEngine;
 import org.slf4j.Logger;
@@ -54,7 +53,12 @@ public class EmailDispatcher {
 
     public DeliveryResult dispatch(DispatchRequest request) {
         long startMs = System.currentTimeMillis();
-        var segment = AWSXRay.beginSubsegment("SES.SendEmail");
+
+        if (request.toEmail() == null || request.toEmail().isBlank()) {
+            throw new DeliveryException("EMAIL",
+                    "No recipient email on request: notificationId=" +
+                            request.notificationId(), false);
+        }
 
         try {
             // ── Render HTML ────────────────────────────────────
@@ -132,8 +136,6 @@ public class EmailDispatcher {
                     ses.sendEmail(sesRequest);
 
             long durationMs = System.currentTimeMillis() - startMs;
-            segment.putMetadata("messageId",
-                    sesResponse.messageId());
 
             log.info("Email delivered: notificationId={} " +
                             "sesMessageId={} to={} durationMs={}",
@@ -147,31 +149,24 @@ public class EmailDispatcher {
 
         } catch (MessageRejectedException e) {
             // SES rejected: invalid address, domain reputation
-            segment.addException(e);
             throw new DeliveryException("EMAIL",
                     "SES rejected: " + e.getMessage(), false);
 
         } catch (MailFromDomainNotVerifiedException e) {
-            segment.addException(e);
             throw new DeliveryException("EMAIL",
                     "SES domain not verified: " + e.getMessage(), false);
 
         } catch (AccountSuspendedException e) {
             // Critical — SES account-level suspension
-            segment.addException(e);
             log.error("SES ACCOUNT SUSPENDED — escalate immediately");
             throw new DeliveryException("EMAIL",
                     "SES account suspended", false);
 
         } catch (SesV2Exception e) {
-            segment.addException(e);
             boolean transient_ = e.statusCode() >= 500;
             throw new DeliveryException("EMAIL",
                     "SES error " + e.statusCode() + ": " + e.getMessage(),
                     transient_);
-
-        } finally {
-            AWSXRay.endSubsegment();
         }
     }
 

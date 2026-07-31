@@ -5,11 +5,15 @@
                     source="spring.application.name"
                     defaultValue="nexus-identity-service"/>
 
+    <springProperty name="lokiUrl"
+                    source="loki.url"
+                    defaultValue="http://nexus-loki:3100/loki/api/v1/push"/>
+
     <!-- ================================================================
          LOCAL DEV PROFILE (no docker, no production)
          Plain text console only — no Loki connection attempted
          ================================================================ -->
-    <springProfile name="!docker,!production">
+    <springProfile name="!docker,!production,!prod">
 
         <appender name="CONSOLE"
                   class="ch.qos.logback.core.ConsoleAppender">
@@ -36,7 +40,7 @@
          DOCKER / PRODUCTION PROFILES
          JSON console (LogstashEncoder) + async Loki4j appender
          ================================================================ -->
-    <springProfile name="docker,production">
+    <springProfile name="docker,production,prod">
 
         <appender name="CONSOLE"
                   class="ch.qos.logback.core.ConsoleAppender">
@@ -58,13 +62,12 @@
         <appender name="LOKI"
                   class="com.github.loki4j.logback.Loki4jAppender">
             <http>
-                <url>${LOKI_URL:http://nexus-loki:3100/loki/api/v1/push}</url>
+                <url>${lokiUrl}</url>
             </http>
             <format>
                 <label>
                     <pattern>
-                        service=${appName},level=%level,
-                        traceId=%X{traceId:-no-trace}
+                        service=${appName},level=%level
                     </pattern>
                 </label>
                 <message class="com.github.loki4j.logback.JsonLayout">

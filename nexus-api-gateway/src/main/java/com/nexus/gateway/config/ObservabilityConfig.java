@@ -1,9 +1,12 @@
 package com.nexus.gateway.config;
 
+import com.nexus.tracing.observation.ErrorTaggingObservationHandler;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.config.MeterFilter;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.observation.aop.ObservedAspect;
 import io.micrometer.tracing.Tracer;
@@ -99,6 +102,24 @@ public class ObservabilityConfig {
         // Enables @Observed annotation on any Spring-managed bean
         // Usage: @Observed(name = "my.operation") on methods
         return new ObservedAspect(observationRegistry);
+    }
+
+    /**
+     * Platform-wide: adds a consistent error.type tag to every Observation
+     * whenever .error(ex) is called - see ErrorTaggingObservationHandler.
+     * Not adding ActuatorObservationPredicate here (unlike identity/
+     * transaction/etc.) - it checks org.springframework.http.server.
+     * observation.ServerRequestObservationContext (the servlet variant);
+     * gateway is WebFlux/reactive and gets org.springframework.http.server.
+     * reactive.observation.ServerRequestObservationContext instead, which
+     * the current predicate wouldn't match (silent no-op, not a crash, but
+     * still no exclusion). Each service already guarantees its own
+     * healthcheck noise exclusion independently, so nothing is lost by
+     * deferring this here until a reactive-context variant is written.
+     */
+    @Bean
+    public ObservationHandler<Observation.Context> errorTaggingObservationHandler() {
+        return new ErrorTaggingObservationHandler();
     }
 
     /**

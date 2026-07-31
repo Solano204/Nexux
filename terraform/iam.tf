@@ -3,12 +3,15 @@
 # Its access key is injected as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
 #
 # Which services use this user:
-#   nexus-identity-service        → S3 PutObject, SQS SendMessage
+#   nexus-identity-service        → S3 PutObject, SQS SendMessage,
+#                                    Cognito AdminCreateUser/SetUserPassword/
+#                                    UpdateUserAttributes (Option B mirror)
 #   nexus-ai-kyc-service          → S3 GetObject, SQS ReceiveMessage/DeleteMessage
 #   nexus-fraud-service           → SQS SendMessage (fraud alerts)
 #   nexus-notification-service    → SNS Publish (notification dispatch)
+#   nexus-transaction-service     → DynamoDB PutItem (analytics snapshot feed)
 #
-# All other services (account, transaction, ledger, etc.) only use:
+# All other services (account, ledger, etc.) only use:
 #   - Kafka (self-hosted)         → no AWS credential needed
 #   - PostgreSQL (self-hosted)    → no AWS credential needed
 #   - MongoDB (self-hosted)       → no AWS credential needed
@@ -178,6 +181,60 @@ resource "aws_iam_policy" "nexus_sns_notification" {
   })
 }
 
+# ── DynamoDB Policy (Transaction Analytics) ───────────────────────────────────
+# nexus-transaction-service: PutItem on the transactions table (terminal-state
+# snapshots) — this is the event source that feeds nexus-analytics-aggregator-lambda
+# via DynamoDB Streams. See TransactionDynamoDbWriter.java.
+
+resource "aws_iam_policy" "nexus_dynamodb_transactions" {
+  name        = "nexus-josue-dynamodb-transactions-policy-${var.environment}"
+  description = "DynamoDB transactions table write access for nexus-transaction-service"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "TransactionsTableWrite"
+        Effect   = "Allow"
+        Action   = ["dynamodb:PutItem"]
+        Resource = aws_dynamodb_table.transactions.arn
+      }
+    ]
+  })
+}
+
+# ── Cognito Policy (Option B auth mirror) ─────────────────────────────────────
+# nexus-identity-service: mirrors Docker-plane users into the Cognito user pool
+# on registration + KYC status changes, and revokes the Cognito session on
+# logout (CognitoUserMirror) — see AWS-DOCKER-WORKFLOWS/02_LOGIN_FLOW.md
+#
+# Login itself (InitiateAuth + USER_PASSWORD_AUTH) needs no IAM permission
+# here — it's one of Cognito's unauthenticated-by-design APIs, gated by the
+# app client's explicit_auth_flows instead (see lambda-auth.tf).
+
+resource "aws_iam_policy" "nexus_cognito_mirror" {
+  name        = "nexus-josue-cognito-mirror-policy-${var.environment}"
+  description = "Cognito admin user-mirroring access for nexus-identity-service"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "CognitoUserMirror"
+        Effect = "Allow"
+        Action = [
+          "cognito-idp:AdminCreateUser",
+          "cognito-idp:AdminSetUserPassword",
+          "cognito-idp:AdminUpdateUserAttributes",
+          "cognito-idp:AdminGetUser",
+          "cognito-idp:AdminUserGlobalSignOut"
+        ]
+        Resource = aws_cognito_user_pool.nexus.arn
+      }
+    ]
+  })
+}
+
 # ── Attach policies to user ───────────────────────────────────────────────────
 
 resource "aws_iam_user_policy_attachment" "nexus_s3" {
@@ -203,4 +260,14 @@ resource "aws_iam_user_policy_attachment" "nexus_sqs_kyc_rekognition" {
 resource "aws_iam_user_policy_attachment" "nexus_sns_notification" {
   user       = aws_iam_user.nexus_platform.name
   policy_arn = aws_iam_policy.nexus_sns_notification.arn
+}
+
+resource "aws_iam_user_policy_attachment" "nexus_cognito_mirror" {
+  user       = aws_iam_user.nexus_platform.name
+  policy_arn = aws_iam_policy.nexus_cognito_mirror.arn
+}
+
+resource "aws_iam_user_policy_attachment" "nexus_dynamodb_transactions" {
+  user       = aws_iam_user.nexus_platform.name
+  policy_arn = aws_iam_policy.nexus_dynamodb_transactions.arn
 }

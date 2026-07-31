@@ -3,7 +3,7 @@
     {
       "messageId": "test-message-id-001",
       "receiptHandle": "test-receipt-handle",
-      "body": "{\"alertId\":\"alert-abc-123\",\"transactionId\":\"txn-xyz-789\",\"userId\":\"user-456\",\"fraudScore\":92,\"riskLevel\":\"CRITICAL\",\"triggeringFactors\":[\"VELOCITY_SPIKE\",\"GEOLOCATION_ANOMALY\"],\"detectedPatterns\":[\"STRUCTURING\"],\"amount\":9500.00,\"currency\":\"MXN\",\"merchantId\":\"merchant-001\",\"merchantName\":\"Unknown Merchant\",\"detectedAt\":\"2024-01-15T03:45:00Z\"}",
+      "body": "{\"alertId\":\"alert-abc-123\",\"transactionId\":\"txn-xyz-789\",\"userId\":\"user-456\",\"sourceAccountId\":\"acct-source-001\",\"targetAccountId\":\"acct-target-002\",\"amount\":9500.00,\"currency\":\"MXN\",\"transactionType\":\"EXTERNAL_TRANSFER\",\"riskScore\":92,\"alertCategory\":\"HIGH_SEVERITY_FRAUD\",\"recommendedAction\":\"BLOCK_AND_REVIEW\",\"sourceService\":\"nexus-fraud-service\",\"traceId\":\"trace-test-001\",\"detectedAt\":\"2024-01-15T03:45:00Z\",\"fraudDecision\":{\"outcome\":\"BLOCK\",\"reasoning\":\"Velocity spike and geolocation anomaly detected\",\"riskScore\":92,\"confidenceLevel\":0.94},\"triggeringFactors\":[{\"category\":\"VELOCITY_SPIKE\",\"description\":\"Multiple transactions in short window\",\"evidence\":\"5 txns in 2 minutes\",\"weight\":0.6},{\"category\":\"GEOLOCATION_ANOMALY\",\"description\":\"Impossible travel detected\",\"evidence\":\"Login from 2 countries in 10 minutes\",\"weight\":0.4}]}",
       "attributes": {
         "ApproximateReceiveCount": "1",
         "SentTimestamp": "1705290300000",

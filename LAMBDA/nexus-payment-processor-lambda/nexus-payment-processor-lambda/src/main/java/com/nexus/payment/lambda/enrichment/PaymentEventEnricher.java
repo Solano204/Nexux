@@ -146,15 +146,16 @@ public class PaymentEventEnricher {
         if (token == null) return "UNRESOLVED";
 
         // Deterministic: same token always → same accountId
-        return "ACC-" + Integer.toHexString(
-                        Math.abs(token.hashCode()))
-                .substring(0, 8).toUpperCase();
+        // String.format("%08X", ...) zero-pads to a fixed 8 hex digits —
+        // Integer.toHexString() does not, and its output can be as short
+        // as 1 char, which crashed a subsequent substring(0, 8).
+        return "ACC-" + String.format(
+                "%08X", Math.abs(token.hashCode()));
     }
 
     private String resolveUserId(String accountId) {
         if ("UNRESOLVED".equals(accountId)) return "UNKNOWN";
-        return "USR-" + Integer.toHexString(
-                        Math.abs(accountId.hashCode()))
-                .substring(0, 8).toUpperCase();
+        return "USR-" + String.format(
+                "%08X", Math.abs(accountId.hashCode()));
     }
 }

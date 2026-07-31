@@ -1,5 +1,9 @@
 server:
   port: 8010
+  tomcat:
+    threads:
+      max: 100
+    accept-count: 50
 
 springdoc:
   api-docs:
@@ -31,15 +35,23 @@ spring:
 
   threads:
     virtual:
-      enabled: true
+      # disabled: Brave's ThreadLocal trace context doesn't survive virtual
+      # thread mount/unmount - controller-dispatched spans (register, login,
+      # jwks) were silently never exported to Zipkin, confirmed live on this
+      # service (actuator/internal spans traced fine).
+      enabled: false
 
   datasource:
     url: ${DATASOURCE_URL:jdbc:postgresql://localhost:5433/nexus_identity}
     username: ${POSTGRES_USER:nexus}
     password: ${POSTGRES_PASSWORD:nexus_dev_password}
     hikari:
+      # Fase 8: connection-timeout was missing (30s default vs. the 5s
+      # HTTP ceiling from Fase 1) — see account-service for the full
+      # reasoning.
       maximum-pool-size: 20
       minimum-idle: 5
+      connection-timeout: 3000
       pool-name: nexus-identity-pool
 
   jpa:
@@ -88,6 +100,8 @@ eureka:
     lease-expiration-duration-in-seconds: 90
 
 nexus:
+  load-shedding:
+    max-in-flight: 80
   jwt:
     keystore:
       path: ${JWT_KEYSTORE_PATH:./keys/nexus-identity.jks}
@@ -103,13 +117,34 @@ nexus:
     region: ${AWS_REGION:us-east-1}
     endpoint-override: ${AWS_ENDPOINT:}
     kyc-bucket: ${KYC_S3_BUCKET:nexus-kyc-documents}
-    kyc-queue-url: ${KYC_QUEUE_URL:}
+    # SqsKycPublisher reads nexus.aws.kyc-queue-url. docker-compose-prod.yml
+    # sets KYC_SQS_QUEUE_URL (see the ":?required" env var), not KYC_QUEUE_URL
+    # - this was reading the wrong name and always resolving empty, so the
+    # audit-trail tracking message to the kyc-pending queue never sent (the
+    # core KYC decision path via Kafka + OpenAI is unaffected by this).
+    kyc-queue-url: ${KYC_SQS_QUEUE_URL:}
+    cognito-user-pool-id: ${COGNITO_USER_POOL_ID:}
+    cognito-client-id: ${COGNITO_CLIENT_ID:}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      cognito:
+        sliding-window-type: TIME_BASED
+        sliding-window-size: 60
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        slow-call-rate-threshold: 80
+        slow-call-duration-threshold: 3000ms
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics
+        include: health,info,prometheus,metrics,circuitbreakers
   metrics:
     tags:
       application: ${spring.application.name}

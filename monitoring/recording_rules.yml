@@ -1,0 +1,57 @@
+# Pre-aggregates the 3 heaviest queries actually used by the existing
+# dashboards (grep'd directly from monitoring/grafana/provisioning/
+# dashboards/json/*.json - see alert_rules.yml's header for the same
+# verification approach):
+#
+#   - 02-spring-boot-statistics.json runs histogram_quantile(0.50/0.95/0.99,
+#     sum(rate(http_server_requests_seconds_bucket[5m])) by (service, le))
+#     three times per dashboard load (one per percentile panel). Each is a
+#     full bucket-cardinality rate() + sum by(service, le) over every
+#     service's every latency bucket, every 15s the dashboard is open -
+#     the classic expensive Prometheus pattern. HighP99Latency in
+#     alert_rules.yml re-runs the p99 version of this again on its own
+#     evaluation_interval, so today the same expensive query runs on two
+#     independent schedules (dashboard refresh + alert eval).
+#   - 02-spring-boot-statistics.json's error-rate panel and
+#     alert_rules.yml's HighErrorRate both compute the same
+#     5xx-rate/total-rate ratio by service independently.
+#   - 03-kafka-overview.json's lag panel is a plain max(...) by (service,
+#     topic) - much cheaper than the histogram queries above since it has
+#     no rate()/bucket cardinality, but still recomputed on every dashboard
+#     refresh; included for completeness since KafkaConsumerLagHigh also
+#     re-queries it.
+#
+# Recording rules below give both the dashboards and the alert rules a
+# single pre-computed series to read instead of each re-deriving it on
+# its own schedule. Naming follows Prometheus's own convention:
+# level:metric:operation (https://prometheus.io/docs/practices/rules/).
+groups:
+  - name: nexus-platform-recording-rules
+    interval: 30s
+    rules:
+      - record: service:http_request_duration_seconds:p50
+        expr: |
+          histogram_quantile(0.50,
+            sum(rate(http_server_requests_seconds_bucket[5m])) by (service, le)
+          )
+
+      - record: service:http_request_duration_seconds:p95
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_server_requests_seconds_bucket[5m])) by (service, le)
+          )
+
+      - record: service:http_request_duration_seconds:p99
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_server_requests_seconds_bucket[5m])) by (service, le)
+          )
+
+      - record: service:http_requests_error_ratio:rate5m
+        expr: |
+          sum(rate(http_server_requests_seconds_count{status=~"5.."}[5m])) by (service)
+          /
+          sum(rate(http_server_requests_seconds_count[5m])) by (service)
+
+      - record: service_topic:kafka_consumer_lag:max
+        expr: max(kafka_consumer_fetch_manager_records_lag_max) by (service, topic)

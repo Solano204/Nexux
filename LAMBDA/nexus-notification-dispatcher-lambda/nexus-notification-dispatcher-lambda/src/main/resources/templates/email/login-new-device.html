@@ -13,17 +13,17 @@
         <tr>
             <td style="color:#6b7280;padding:8px 0;">Dispositivo</td>
             <td style="text-align:right;"
-                th:text="${deviceName ?: 'Desconocido'}">Desconocido</td>
+                th:text="${deviceName != null ? deviceName : 'Desconocido'}">Desconocido</td>
         </tr>
         <tr>
             <td style="color:#6b7280;padding:8px 0;">Ubicación</td>
             <td style="text-align:right;"
-                th:text="${location ?: 'No disponible'}">No disponible</td>
+                th:text="${location != null ? location : 'No disponible'}">No disponible</td>
         </tr>
         <tr>
             <td style="color:#6b7280;padding:8px 0;">Fecha y hora</td>
             <td style="text-align:right;"
-                th:text="${loginTime ?: '---'}">---</td>
+                th:text="${loginTime != null ? loginTime : '---'}">---</td>
         </tr>
     </table>
     <p>Si fuiste tú, puedes ignorar este mensaje. Si no reconoces esta actividad, te recomendamos cambiar tu contraseña inmediatamente.</p>

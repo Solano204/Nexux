@@ -1,0 +1,21 @@
+# Dockerfile.native COPYs target/quarkus-app/{lib,*.jar,app,quarkus} (host
+# `mvn package` already ran) — everything else here just slows down
+# build-context transfer, especially over the Docker Desktop VM boundary
+# on Windows/Git Bash.
+src/
+pom.xml
+*.md
+observability/
+scripts/
+.git/
+.idea/
+*.iml
+.vscode/
+*.log
+
+# Keep only target/quarkus-app/ — exclude target/* (not target/) so the
+# negation below can still reach into it; Docker skips descending into a
+# directory excluded by name outright.
+target/*
+!target/quarkus-app
+!target/quarkus-app/**

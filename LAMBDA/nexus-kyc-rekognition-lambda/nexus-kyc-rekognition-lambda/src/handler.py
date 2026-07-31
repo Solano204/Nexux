@@ -24,24 +24,24 @@ HTTP 200 to S3 (to prevent S3 retrying the trigger).
 import hashlib
 import time
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 from typing import Optional
 
 import boto3
 
-from model.document_metadata import extract_document_metadata
-from model.result_builder import (
+from src.model.document_metadata import extract_document_metadata
+from src.model.result_builder import (
     build_complete_result,
     build_error_result,
     build_rejection_result,
 )
-from publishing.sqs_publisher import publish_result
-from rekognition.face_detector import detect_faces
-from rekognition.text_detector import detect_text
-from utils.logging_config import log
-from utils.metrics import emit_processing_metrics
-from validation.document_validator import validate_document
-from validation.quality_gates import evaluate_quality_gates
+from src.publishing.sqs_publisher import publish_result
+from src.rekognition.face_detector import detect_faces
+from src.rekognition.text_detector import detect_text
+from src.utils.logging_config import log
+from src.utils.metrics import emit_processing_metrics
+from src.validation.document_validator import validate_document
+from src.validation.quality_gates import evaluate_quality_gates
 
 s3_client = boto3.client("s3")
 
@@ -62,7 +62,18 @@ def process_kyc_document(event: dict, context) -> dict:
             record["s3"]["object"]["key"])
         size = record["s3"]["object"].get("size", 0)
 
-        result = _process_document(bucket, key, size)
+        try:
+            result = _process_document(bucket, key, size)
+        except Exception as exc:
+            # Enforce the documented guarantee at the top level too:
+            # a bug anywhere in the per-document pipeline must not take
+            # down the rest of this batch or the whole invocation.
+            log.error("Unhandled exception processing document",
+                      bucket=bucket, key=key, error=str(exc))
+            result = build_error_result(
+                _processing_id(bucket, key), None, key, bucket,
+                "UNHANDLED_EXCEPTION", str(exc))
+            _publish_and_tag(result, bucket, key)
         results.append(result)
 
     duration_ms = int((time.monotonic() - start) * 1000)
@@ -123,20 +134,44 @@ def _process_document(bucket: str, key: str, size: int) -> dict:
         text_future = pool.submit(detect_text, bucket, key)
         face_future = pool.submit(detect_faces, bucket, key)
 
-        for future in as_completed([text_future, face_future],
-                                   timeout=25):
-            if future is text_future:
-                result_or_none = future.result()
-                if result_or_none is None:
-                    text_error = "detect_text returned None"
+        try:
+            for future in as_completed([text_future, face_future],
+                                       timeout=25):
+                try:
+                    result_or_none = future.result()
+                except Exception as exc:
+                    result_or_none = None
+                    log.error("Rekognition call raised unexpectedly",
+                              processing_id=processing_id,
+                              error=str(exc))
+
+                if future is text_future:
+                    if result_or_none is None:
+                        text_error = "detect_text returned None"
+                    else:
+                        text_result = result_or_none
                 else:
-                    text_result = result_or_none
-            else:
-                result_or_none = future.result()
-                if result_or_none is None:
-                    face_error = "detect_faces returned None"
-                else:
-                    face_result = result_or_none
+                    if result_or_none is None:
+                        face_error = "detect_faces returned None"
+                    else:
+                        face_result = result_or_none
+
+        except FutureTimeoutError:
+            # One or both Rekognition calls exceeded 25s (throttling /
+            # latency spike). Don't let this crash the whole invocation
+            # (and the rest of the S3 event batch with it) - record
+            # whichever side never finished as an error and proceed
+            # with whatever did complete. The still-running thread is
+            # abandoned; the `with` block above will block on it during
+            # shutdown, same as it always would have.
+            if text_result is None and text_error is None:
+                text_error = "detect_text timed out after 25s"
+            if face_result is None and face_error is None:
+                face_error = "detect_faces timed out after 25s"
+            log.error("Rekognition parallel calls timed out",
+                      processing_id=processing_id,
+                      text_done=text_future.done(),
+                      face_done=face_future.done())
 
     rekog_ms = int((time.monotonic() - rekog_start) * 1000)
     log.info("Rekognition parallel calls complete",

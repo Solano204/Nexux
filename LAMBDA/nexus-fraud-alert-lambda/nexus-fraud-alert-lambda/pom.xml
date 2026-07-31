@@ -50,6 +50,14 @@
             <artifactId>aws-lambda-java-log4j2</artifactId>
             <version>1.6.0</version>
         </dependency>
+        <!-- Bridges org.slf4j.Logger calls (used throughout this codebase)
+             into log4j2. Without this, SLF4J finds no binding and all
+             log.info/warn/error calls are silently dropped. -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j-impl</artifactId>
+            <version>2.17.1</version>
+        </dependency>
 
         <!-- ══════════════════════════════════════════════════
              AWS SDK v2 — DynamoDB, SNS, CloudWatch
@@ -76,13 +84,16 @@
         </dependency>
 
         <!-- ══════════════════════════════════════════════════
-             X-RAY TRACING
+             X-RAY TRACING: not a dependency here.
+             aws-xray-recorder-sdk-core crashes at cold-start init with
+             NoSuchFieldError — its LocalizedSamplingStrategy static
+             initializer references
+             PropertyNamingStrategy.CAMEL_CASE_TO_LOWER_CASE_WITH_UNDERSCORES,
+             a field removed by jackson-databind ${jackson.version}.
+             Confirmed via a real AWS invoke. Lambda's platform-level
+             Tracing=Active (terraform tracing_config) still traces the
+             invocation itself without any SDK code.
              ══════════════════════════════════════════════════ -->
-        <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-xray-recorder-sdk-core</artifactId>
-            <version>2.14.0</version>
-        </dependency>
 
         <!-- ══════════════════════════════════════════════════
              JSON
@@ -143,6 +154,18 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
                 <version>3.5.2</version>
+                <dependencies>
+                    <!-- Without this, shading multiple log4j2 jars (log4j-core +
+                         aws-lambda-java-log4j2) silently drops one jar's
+                         META-INF/.../Log4j2Plugins.dat instead of merging them,
+                         breaking log4j2's plugin discovery (e.g. PatternLayout)
+                         at runtime with no build-time error. -->
+                    <dependency>
+                        <groupId>com.github.edwgiz</groupId>
+                        <artifactId>maven-shade-plugin.log4j2-cachefile-transformer</artifactId>
+                        <version>2.15</version>
+                    </dependency>
+                </dependencies>
                 <executions>
                     <execution>
                         <phase>package</phase>
@@ -159,6 +182,9 @@
                                     </excludes>
                                 </filter>
                             </filters>
+                            <transformers>
+                                <transformer implementation="com.github.edwgiz.maven_shade_plugin.log4j2_cache_transformer.PluginsCacheFileTransformer"/>
+                            </transformers>
                         </configuration>
                     </execution>
                 </executions>

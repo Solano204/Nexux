@@ -21,6 +21,12 @@
     </description>
 
     <dependencies>
+        <dependency>
+            <groupId>com.nexus</groupId>
+            <artifactId>nexus-tracing-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Spring Boot Core -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -137,7 +143,18 @@
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
+            <artifactId>cognitoidentityprovider</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
             <artifactId>url-connection-client</artifactId>
+        </dependency>
+
+        <!-- Circuit breaker for CognitoUserMirror (resiliencia guide, Fase 3) -->
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-spring-boot3</artifactId>
+            <version>2.2.0</version>
         </dependency>
 
         <!-- Observability -->
@@ -157,6 +174,11 @@
             <groupId>net.logstash.logback</groupId>
             <artifactId>logstash-logback-encoder</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.github.loki4j</groupId>
+            <artifactId>loki-logback-appender</artifactId>
+            <version>1.5.2</version>
+        </dependency>
 
         <!-- Utilities -->
         <dependency>
@@ -173,6 +195,11 @@
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

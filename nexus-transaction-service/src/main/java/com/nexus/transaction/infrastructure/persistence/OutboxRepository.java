@@ -11,18 +11,20 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * The processedAt-based methods this interface used to have
+ * (findUnprocessedEntries/countUnprocessed/deleteProcessedEntriesBefore)
+ * were dead code: nothing in this service ever sets processedAt to
+ * non-null - Debezium reads the WAL directly and never writes back to
+ * this table. Same finding as the other 5 outbox tables on the platform.
+ * See CHANGES-BESTPRACTICES/08_EVENT_DESIGN_CHANGES.md Section 3.
+ */
 @Repository
 public interface OutboxRepository extends JpaRepository<OutboxEntry, UUID> {
 
-    @Query("SELECT o FROM OutboxEntry o WHERE o.processedAt IS NULL ORDER BY o.createdAt ASC")
-    List<OutboxEntry> findUnprocessedEntries();
-
-    @Query("SELECT COUNT(o) FROM OutboxEntry o WHERE o.processedAt IS NULL")
-    long countUnprocessed();
-
     @Modifying
-    @Query("DELETE FROM OutboxEntry o WHERE o.processedAt IS NOT NULL AND o.processedAt < :before")
-    int deleteProcessedEntriesBefore(@Param("before") Instant before);
+    @Query("DELETE FROM OutboxEntry o WHERE o.createdAt < :before")
+    int deleteEntriesOlderThan(@Param("before") Instant before);
 
     List<OutboxEntry> findByAggregateTypeAndAggregateIdOrderByCreatedAtAsc(
             String aggregateType, UUID aggregateId);

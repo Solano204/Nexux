@@ -22,7 +22,7 @@ from typing import Optional
 
 import boto3
 
-from utils.logging_config import log
+from src.utils.logging_config import log
 
 rekognition_client = boto3.client("rekognition")
 

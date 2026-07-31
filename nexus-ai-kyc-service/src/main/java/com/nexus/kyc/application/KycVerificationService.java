@@ -12,9 +12,12 @@ import com.nexus.kyc.domain.model.KycVerificationRequest;
 import com.nexus.kyc.domain.model.enums.KycStatus;
 import com.nexus.kyc.domain.model.enums.RejectionReason;
 import com.nexus.kyc.infrastructure.jpa.KycAuditRepository;
-import com.nexus.kyc.infrastructure.kafka.KycEventProducer;
+import com.nexus.kyc.infrastructure.kafka.KycResultOutboxPublisher;
 import com.nexus.kyc.infrastructure.mongodb.KycDocumentMongoDB;
 import com.nexus.kyc.infrastructure.mongodb.KycDocumentRepository;
+import io.github.resilience4j.bulkhead.ThreadPoolBulkhead;
+import io.github.resilience4j.bulkhead.ThreadPoolBulkheadRegistry;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -34,6 +37,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 
 /**
  * KYC Verification Service — Main pipeline orchestrator.
@@ -41,6 +45,20 @@ import java.util.UUID;
 @Slf4j
 @Service
 public class KycVerificationService {
+
+    // Self-injection via proxy (same pattern as AccountCommandService in
+    // account-service): doVerify() runs on the ThreadPoolBulkhead's own
+    // worker thread via self.doVerify(...), not a bare this.doVerify(...)
+    // call — @Transactional only takes effect when invoked through the
+    // Spring proxy. A plain self-invocation would silently run doVerify()
+    // with NO transaction at all, and separately, Spring's ThreadLocal-based
+    // transaction binding only works if the transaction is created on the
+    // SAME thread that runs the DB work — which is exactly what calling
+    // through the proxy from inside the bulkhead's supplier achieves,
+    // since that lambda executes ON the bulkhead's thread.
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private KycVerificationService self;
 
     // ── Pipeline stages ───────────────────────────────────────
     private final Stage1DocumentExtraction stage1;
@@ -53,7 +71,7 @@ public class KycVerificationService {
     private final KycAuditRepository auditRepository;
 
     // ── Messaging ─────────────────────────────────────────────
-    private final KycEventProducer eventProducer;
+    private final KycResultOutboxPublisher resultPublisher;
 
     // ── Observability ─────────────────────────────────────────
     private final ObservationRegistry observationRegistry;
@@ -66,6 +84,9 @@ public class KycVerificationService {
     // ── JSON ───────────────────────────────────────────────────
     private final ObjectMapper objectMapper;
 
+    // ── Resilience (resiliencia guide, Fase 4) ──────────────────
+    private final ThreadPoolBulkhead bulkhead;
+
     public KycVerificationService(
             Stage1DocumentExtraction stage1,
             Stage2DataComparison stage2,
@@ -73,10 +94,11 @@ public class KycVerificationService {
             DocumentQualityValidator qualityValidator,
             KycDocumentRepository kycDocumentRepository,
             KycAuditRepository auditRepository,
-            KycEventProducer eventProducer,
+            KycResultOutboxPublisher resultPublisher,
             ObservationRegistry observationRegistry,
             MeterRegistry meterRegistry,
-            ObjectMapper objectMapper) {  // ✅ Added ObjectMapper parameter
+            ObjectMapper objectMapper,  // ✅ Added ObjectMapper parameter
+            ThreadPoolBulkheadRegistry bulkheadRegistry) {
 
         this.stage1 = stage1;
         this.stage2 = stage2;
@@ -84,9 +106,10 @@ public class KycVerificationService {
         this.qualityValidator = qualityValidator;
         this.kycDocumentRepository = kycDocumentRepository;
         this.auditRepository = auditRepository;
-        this.eventProducer = eventProducer;
+        this.resultPublisher = resultPublisher;
         this.observationRegistry = observationRegistry;
         this.objectMapper = objectMapper;  // ✅ Initialize ObjectMapper
+        this.bulkhead = bulkheadRegistry.bulkhead("kyc-verification");
 
         this.pipelineTimer = Timer.builder("kyc.pipeline.total.duration")
                 .description("End-to-end KYC pipeline duration")
@@ -109,12 +132,84 @@ public class KycVerificationService {
 
     // ── Public API ────────────────────────────────────────────
 
-    @Transactional
+    /**
+     * ThreadPool bulkhead (resiliencia guide, Fase 4): doVerify() is a
+     * genuinely blocking pipeline (Stage 1 vision + Stage 2 comparison,
+     * both real OpenAI calls) invoked from two Kafka/SQS consumer threads
+     * (KycInitiationConsumer, SqsRekognitionResultConsumer) — unlike
+     * ai-assistant-service's chat() this isn't reactive, so a real
+     * ThreadPoolBulkhead applies cleanly. Submits the whole pipeline as one
+     * unit to the bulkhead's own small executor and blocks this calling
+     * thread for the result — isolates however many KYC verifications can
+     * run at once from every OTHER concurrent Kafka message this service
+     * processes, so a slow OpenAI vision call can't starve the consumer's
+     * capacity to keep making progress on unrelated messages.
+     */
     public KycDocumentMongoDB verify(
             KycVerificationRequest request,
             byte[] imageBytes,
             String mimeType,
             String sagaId) {
+        // No caller-supplied verificationId (e.g. the synchronous
+        // KycController upload endpoint has no prior async correlation ID
+        // to propagate) - doVerify() mints its own.
+        return verify(request, imageBytes, mimeType, sagaId, UUID.randomUUID().toString());
+    }
+
+    /**
+     * @param verificationId the durable ID this verification is tracked
+     *                        under by the caller (e.g. the "identity.kyc"
+     *                        event's verificationId) - used as-is for the
+     *                        persisted document so the result can be
+     *                        correlated back by the originating caller.
+     *                        Distinct from sagaId (see the other overload).
+     */
+    public KycDocumentMongoDB verify(
+            KycVerificationRequest request,
+            byte[] imageBytes,
+            String mimeType,
+            String sagaId,
+            String verificationId) {
+        try {
+            // ThreadPoolBulkhead.executeSupplier() returns CompletionStage,
+            // not CompletableFuture - .get() isn't declared on that
+            // interface, only .toCompletableFuture().get() is (pre-existing
+            // build break, unrelated to Section 6 - resilience4j-bulkhead's
+            // actual API vs. what the ExecutionException/InterruptedException
+            // catches below assumed).
+            return bulkhead.executeSupplier(() ->
+                    self.doVerify(request, imageBytes, mimeType, sagaId, verificationId))
+                    .toCompletableFuture().get();
+        } catch (BulkheadFullException e) {
+            throw new IllegalStateException(
+                    "KYC verification capacity exhausted — too many " +
+                            "verifications in flight, try again shortly", e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException re) throw re;
+            throw new RuntimeException("KYC verification failed", cause);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("KYC verification interrupted", e);
+        }
+    }
+
+    @Transactional
+    public KycDocumentMongoDB doVerify(
+            KycVerificationRequest request,
+            byte[] imageBytes,
+            String mimeType,
+            String sagaId) {
+        return doVerify(request, imageBytes, mimeType, sagaId, UUID.randomUUID().toString());
+    }
+
+    @Transactional
+    public KycDocumentMongoDB doVerify(
+            KycVerificationRequest request,
+            byte[] imageBytes,
+            String mimeType,
+            String sagaId,
+            String verificationId) {
 
         Observation obs = Observation.createNotStarted(
                         "kyc.pipeline", observationRegistry)
@@ -123,7 +218,6 @@ public class KycVerificationService {
                 .start();
 
         Timer.Sample sample = Timer.start();
-        String verificationId = UUID.randomUUID().toString();
 
         log.info("KYC pipeline start: verificationId={} userId={}",
                 verificationId, request.userId());
@@ -139,7 +233,7 @@ public class KycVerificationService {
                         buildQualityFailureDoc(
                                 verificationId, request, sagaId,
                                 quality.issues()),
-                        null, request, sagaId);
+                        null, request);
             }
 
             // ── Step 2: Hard rules ────────────────────────
@@ -154,7 +248,7 @@ public class KycVerificationService {
                         buildHardRejectDoc(
                                 verificationId, request, sagaId,
                                 hardRules.failures()),
-                        null, request, sagaId);
+                        null, request);
             }
 
             // ── Step 3: Stage 1 — Vision extraction ───────
@@ -171,7 +265,7 @@ public class KycVerificationService {
                         buildDocQualityRejectDoc(
                                 verificationId, request, sagaId,
                                 e.getReasons()),
-                        null, request, sagaId);
+                        null, request);
             }
 
             long s1Duration = System.currentTimeMillis() - s1Start;
@@ -220,7 +314,7 @@ public class KycVerificationService {
                             .build())
                     .build();
 
-            return persistAndPublish(doc, extracted, request, sagaId);
+            return persistAndPublish(doc, extracted, request);
 
         } finally {
             sample.stop(pipelineTimer);
@@ -233,12 +327,14 @@ public class KycVerificationService {
     private KycDocumentMongoDB persistAndPublish(
             KycDocumentMongoDB doc,
             KycExtractedData extracted,
-            KycVerificationRequest request,
-            String sagaId) {
+            KycVerificationRequest request) {
 
         kycDocumentRepository.save(doc);
         persistAuditEntry(doc, extracted, request);
-        eventProducer.publishKycDecision(doc, sagaId);
+        // Reliable outbox-backed publish (Section 6) - runs inside this
+        // method's caller's @Transactional, same PostgreSQL DB as
+        // persistAuditEntry above, so both commit atomically.
+        resultPublisher.publishResult(doc.getUserId(), doc.getVerificationId(), doc);
 
         log.info("KYC pipeline complete: verificationId={} status={} userId={}",
                 doc.getVerificationId(), doc.getStatus(), doc.getUserId());

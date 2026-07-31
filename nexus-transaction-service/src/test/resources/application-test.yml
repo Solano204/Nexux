@@ -1,0 +1,71 @@
+# ══════════════════════════════════════════════════════════════
+# nexus-transaction-service — TEST profile
+# Used by: @SpringBootTest component/integration tests
+#
+# Was previously at src/test/java/resources/application-test.yml (wrong
+# path — Maven only copies src/test/resources to the test classpath, not
+# src/test/java/resources) and empty besides. Every @SpringBootTest that
+# activated "test" was silently getting zero property overrides from it.
+#
+# No datasource/kafka properties here on purpose: integration tests get
+# those from Testcontainers via @ServiceConnection (see
+# integration/support/AbstractIntegrationTest) - hardcoding a placeholder
+# here would just be dead config that @ServiceConnection overrides anyway.
+# ══════════════════════════════════════════════════════════════
+
+spring:
+  cloud:
+    config:
+      enabled: false
+      fail-fast: false
+    bus:
+      enabled: false
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+  data:
+    redis:
+      host: localhost
+      port: 6380
+      password: ""
+
+  ai:
+    openai:
+      api-key: test
+
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false
+
+management:
+  tracing:
+    enabled: false    # No Zipkin in tests
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  health:
+    elasticsearch:
+      # elasticsearch-java is pinned to 8.13.0 (see pom.xml) to match the
+      # server version, but Spring Boot Actuate's ElasticsearchReactiveHealthIndicator
+      # was compiled against a newer client API and calls
+      # HealthResponse.activeShardsPercentAsNumber(), which doesn't exist in
+      # 8.13.0 -> NoSuchMethodError on every health check. Diagnostic
+      # plumbing only, not what any test verifies.
+      enabled: false
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      transaction-service:
+        minimum-number-of-calls: 1000
+        failure-rate-threshold: 99
+
+logging:
+  level:
+    com.nexus.transaction: DEBUG

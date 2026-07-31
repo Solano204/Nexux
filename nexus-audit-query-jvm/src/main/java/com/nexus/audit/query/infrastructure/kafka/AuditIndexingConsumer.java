@@ -2,6 +2,10 @@ package com.nexus.audit.query.infrastructure.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.ai.document.Document;
@@ -32,6 +36,8 @@ public class AuditIndexingConsumer {
 
     private final PgVectorStore auditVectorStore;
     private final ObjectMapper objectMapper;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     private static final DateTimeFormatter FORMATTER =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
@@ -39,9 +45,13 @@ public class AuditIndexingConsumer {
 
     public AuditIndexingConsumer(
             @Qualifier("auditVectorStore") PgVectorStore auditVectorStore,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            Tracer tracer,
+            Propagator propagator) {
         this.auditVectorStore = auditVectorStore;
         this.objectMapper = objectMapper;
+        this.tracer = tracer;
+        this.propagator = propagator;
     }
 
     @KafkaListener(
@@ -65,12 +75,15 @@ public class AuditIndexingConsumer {
             groupId = "audit-vector-indexer"
     )
     public void consume(ConsumerRecord<String, String> record, Acknowledgment ack) {
-        try {
+        Span span = KafkaTracePropagation.extractAndStartSpan(
+                tracer, propagator, record, "audit-vector-indexer", record.topic() + " receive");
+        try (Tracer.SpanInScope ignored = tracer.withSpan(span)) {
             indexAuditEvent(record.topic(), record.value(), record.partition(), record.offset());
         } catch (Exception e) {
             log.warn("Failed to index audit event from topic={}: {}", record.topic(), e.getMessage());
         } finally {
             ack.acknowledge();
+            span.end();
         }
     }
 

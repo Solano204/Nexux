@@ -1,0 +1,80 @@
+# ══════════════════════════════════════════════════════════════
+# nexus-fraud-service — TEST profile
+# Used by: @SpringBootTest component/integration tests
+#
+# Was previously at src/test/java/resources/application-test.yml (wrong
+# path — Maven only copies src/test/resources to the test classpath, not
+# src/test/java/resources) and empty besides. Every @SpringBootTest that
+# activated "test" was silently getting zero property overrides from it.
+# ══════════════════════════════════════════════════════════════
+
+spring:
+  cloud:
+    config:
+      enabled: false
+      fail-fast: false
+    bus:
+      enabled: false
+
+  datasource:
+    # Overridden by @DynamicPropertySource with the Testcontainers Postgres
+    # URL in integration tests (Section 4). Component tests never reach the
+    # datasource at all - FraudDecisionRepository/OutboxRepository are
+    # @MockBean - but Spring still validates this property is well-formed
+    # at context startup, so it needs a syntactically valid placeholder.
+    url: jdbc:postgresql://localhost:5432/nexus_fraud_test
+    username: nexus
+    password: test
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+  data:
+    redis:
+      host: localhost
+      port: 6380
+      password: ""
+
+  kafka:
+    bootstrap-servers: localhost:19092
+
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false
+
+management:
+  tracing:
+    enabled: false    # No Zipkin in tests
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+# Resilience4j: lenient in tests - component tests aren't exercising
+# circuit-breaker/retry behavior itself (that's a unit-test concern for
+# TransactionServiceClient specifically), don't want it interfering here.
+resilience4j:
+  circuitbreaker:
+    instances:
+      transaction-service:
+        minimum-number-of-calls: 1000
+        failure-rate-threshold: 99
+      openai:
+        minimum-number-of-calls: 1000
+        failure-rate-threshold: 99
+  retry:
+    instances:
+      transaction-service-reads:
+        max-attempts: 1
+
+nexus:
+  aws:
+    fraud-alert-queue-url: ""   # blank = publishFraudAlertToSqs() short-circuits
+
+logging:
+  level:
+    com.nexus.fraud: DEBUG

@@ -3,6 +3,7 @@ package com.nexus.identity.web.advice;
 import com.nexus.identity.application.command.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -210,6 +211,7 @@ public class GlobalExceptionHandler {
                 request.getDescription(false), ex.getMessage(), ex);
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of(
                         "error", "INTERNAL_ERROR",
                         "message", "An unexpected error occurred",

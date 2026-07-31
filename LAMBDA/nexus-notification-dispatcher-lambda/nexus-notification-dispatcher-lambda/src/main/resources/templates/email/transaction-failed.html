@@ -17,12 +17,12 @@
         <tr>
             <td style="color:#6b7280;padding:8px 0;">Destinatario</td>
             <td style="text-align:right;"
-                th:text="${targetName ?: 'N/A'}">N/A</td>
+                th:text="${targetName != null ? targetName : 'N/A'}">N/A</td>
         </tr>
         <tr>
             <td style="color:#6b7280;padding:8px 0;">Motivo</td>
             <td style="text-align:right;color:#dc2626;"
-                th:text="${failureReason ?: 'Error en el procesamiento'}">Error</td>
+                th:text="${failureReason != null ? failureReason : 'Error en el procesamiento'}">Error</td>
         </tr>
     </table>
     <p>El monto no fue debitado de tu cuenta. Puedes intentar nuevamente.</p>

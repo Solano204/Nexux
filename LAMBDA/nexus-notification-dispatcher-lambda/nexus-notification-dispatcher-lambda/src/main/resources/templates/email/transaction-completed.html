@@ -15,7 +15,7 @@
         <tr>
             <td style="color:#6b7280;padding:8px 0;">Destinatario</td>
             <td style="text-align:right;"
-                th:text="${targetName ?: 'N/A'}">N/A</td>
+                th:text="${targetName != null ? targetName : 'N/A'}">N/A</td>
         </tr>
     </table>
 </th:block>

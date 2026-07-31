@@ -16,7 +16,7 @@ import os
 
 import boto3
 
-from utils.logging_config import log
+from src.utils.logging_config import log
 
 _cw = boto3.client("cloudwatch",
                    region_name=os.environ.get(
@@ -25,6 +25,7 @@ _cw = boto3.client("cloudwatch",
 CW_NAMESPACE = os.environ.get("CLOUDWATCH_NAMESPACE",
                               "Nexus/HealthMonitor")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
+REGION = os.environ.get("AWS_REGION_NAME", "us-east-1")
 
 
 def ensure_dashboard(services: list[dict]) -> None:
@@ -50,6 +51,7 @@ def ensure_dashboard(services: list[dict]) -> None:
                 "width": 4, "height": 3,
                 "properties": {
                     "title": short,
+                    "region": REGION,
                     "metrics": [[
                         CW_NAMESPACE, "ServiceHealthStatus",
                         "ServiceName", name,
@@ -71,6 +73,7 @@ def ensure_dashboard(services: list[dict]) -> None:
         "width": 24, "height": 6,
         "properties": {
             "title": "Platform Health Overview",
+            "region": REGION,
             "metrics": [
                 [CW_NAMESPACE, "HealthyServiceCount",
                  "Environment", ENVIRONMENT,

@@ -16,5 +16,5 @@ iam_user_name = "nexus-josue-platform-svc"
 cors_allowed_origins = ["https://app.nexusbank.com"]
 
 # ── Lambda-specific ───────────────────────────────────────────────────────────
-compliance_team_email  = "chucho@shippilot.ai" # change if you want a different inbox
-ops_notification_email = "chucho@shippilot.ai"
+compliance_team_email  = "carlosjosuelopezsolano98@gmail.com"
+ops_notification_email = "carlosjosuelopezsolano98@gmail.com"

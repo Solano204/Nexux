@@ -2,8 +2,14 @@ package com.nexus.risk.infrastructure.kafka;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.risk.domain.model.RiskProfile;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
@@ -17,6 +23,9 @@ public class RiskEventProducer {
 
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
+    private final Tracer tracer;
+    private final Propagator propagator;
+    private final ObservationRegistry observationRegistry;
 
     /**
      * Publishes risk.profile.updated after every successful computation.
@@ -24,6 +33,11 @@ public class RiskEventProducer {
      */
     public void publishProfileUpdated(RiskProfile profile,
                                       String previousTier) {
+        Observation obs = Observation.createNotStarted(
+                        "kafka.publish", observationRegistry)
+                .lowCardinalityKeyValue("topic", "risk.profile.updated")
+                .highCardinalityKeyValue("kafka.key", profile.userId())
+                .start();
         try {
             boolean tierChanged = !profile.riskTier().name()
                     .equals(previousTier);
@@ -48,16 +62,21 @@ public class RiskEventProducer {
                     "computedAt", Instant.now().toString()
             );
 
-            kafkaTemplate.send("risk.profile.updated",
-                    profile.userId(),
+            ProducerRecord<String, String> record = new ProducerRecord<>(
+                    "risk.profile.updated", profile.userId(),
                     objectMapper.writeValueAsString(event));
+            KafkaTracePropagation.injectTraceHeaders(tracer, propagator, record);
+            kafkaTemplate.send(record);
 
             log.debug("risk.profile.updated published: userId={} " +
                     "tier={}", profile.userId(), profile.riskTier());
 
         } catch (Exception e) {
+            obs.error(e);
             log.error("Failed to publish risk event: userId={} {}",
                     profile.userId(), e.getMessage());
+        } finally {
+            obs.stop();
         }
     }
 

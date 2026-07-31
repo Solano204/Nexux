@@ -15,62 +15,34 @@ import java.util.UUID;
  * OutboxRepository — Data access for Outbox Pattern entries.
  *
  * Outbox entries are written atomically with domain changes.
- * Debezium CDC reads PostgreSQL WAL and publishes to Kafka.
+ * Debezium CDC reads the PostgreSQL WAL directly (not this table via a
+ * query) and publishes to Kafka - it never updates any column here to
+ * mark a row delivered.
  *
- * Cleanup operations:
- * - Processed entries older than 7 days are purged by scheduled job
- * - Unprocessed entries older than 24h trigger alerts (Debezium lag)
+ * The processedAt-based methods this interface used to have
+ * (findUnprocessedEntries/findStaleUnprocessedEntries/countUnprocessed/
+ * deleteProcessedEntriesBefore) were dead code: confirmed by grepping the
+ * whole codebase for anywhere that sets processedAt to non-null - there
+ * isn't one, on any of the 6 services with an outbox table. That column
+ * is a leftover from a poll-and-mark-as-processed relay design that
+ * predates the move to Debezium CDC. A cleanup query built on
+ * `processedAt IS NOT NULL` matches zero rows forever - not a bug that
+ * throws, just a job that silently never deletes anything, which is how
+ * this table grew unbounded with no cleanup ever actually running. See
+ * OutboxCleanupJob and CHANGES-BESTPRACTICES/08_EVENT_DESIGN_CHANGES.md
+ * Section 3.
  *
- * This repository is primarily used for:
- * 1. Save (by AccountCommandService, in same TX as domain writes)
- * 2. Cleanup (by scheduled maintenance job)
- * 3. Monitoring (checking for stuck entries)
+ * deleteEntriesOlderThan() uses age alone as the safe deletion criterion:
+ * Debezium's WAL-based capture happens within seconds of commit under
+ * normal operation, so a multi-day retention buffer is a generous safety
+ * margin, not a race condition.
  */
 @Repository
 public interface OutboxRepository extends JpaRepository<OutboxEntry, UUID> {
 
-    /**
-     * Find unprocessed entries — indicates Debezium lag or failure.
-     * Used by health monitoring and alerting.
-     */
-    @Query("""
-        SELECT o FROM OutboxEntry o
-        WHERE o.processedAt IS NULL
-        ORDER BY o.createdAt ASC
-        """)
-    List<OutboxEntry> findUnprocessedEntries();
-
-    /**
-     * Find unprocessed entries older than threshold.
-     * If any exist, Debezium may be down or lagging.
-     */
-    @Query("""
-        SELECT o FROM OutboxEntry o
-        WHERE o.processedAt IS NULL
-        AND o.createdAt < :threshold
-        ORDER BY o.createdAt ASC
-        """)
-    List<OutboxEntry> findStaleUnprocessedEntries(
-            @Param("threshold") Instant threshold);
-
-    /**
-     * Count unprocessed entries — metric for monitoring dashboard.
-     */
-    @Query("SELECT COUNT(o) FROM OutboxEntry o WHERE o.processedAt IS NULL")
-    long countUnprocessed();
-
-    /**
-     * Purge old processed entries (cleanup job).
-     * Only deletes entries that have been successfully processed
-     * by Debezium and are older than the retention period.
-     */
     @Modifying
-    @Query("""
-        DELETE FROM OutboxEntry o
-        WHERE o.processedAt IS NOT NULL
-        AND o.processedAt < :before
-        """)
-    int deleteProcessedEntriesBefore(@Param("before") Instant before);
+    @Query("DELETE FROM OutboxEntry o WHERE o.createdAt < :before")
+    int deleteEntriesOlderThan(@Param("before") Instant before);
 
     /**
      * Find entries by aggregate for debugging/replay.

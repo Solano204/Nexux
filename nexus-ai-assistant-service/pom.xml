@@ -28,6 +28,12 @@
     <!-- NO <dependencyManagement> — parent owns it -->
 
     <dependencies>
+        <dependency>
+            <groupId>com.nexus</groupId>
+            <artifactId>nexus-tracing-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Spring Boot Core -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -111,6 +117,19 @@
             <artifactId>spring-cloud-starter-circuitbreaker-reactor-resilience4j</artifactId>
         </dependency>
 
+        <!-- Imperative Resilience4j (resiliencia guide, Fase 2) — the reactive
+             starter above only wires ReactiveCircuitBreakerFactory for the
+             Ollama fallback; it does NOT provide the @Retry/@CircuitBreaker
+             AOP annotations needed on blocking beans like
+             infrastructure.client.*ServiceClient (RestClient-based, run on
+             the servlet stack, not WebFlux). Without this, @Retry below
+             would compile but silently never trigger — no proxy wired up. -->
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-spring-boot3</artifactId>
+            <version>2.2.0</version>
+        </dependency>
+
         <!-- Kafka -->
         <dependency>
             <groupId>org.springframework.kafka</groupId>
@@ -162,6 +181,11 @@
             <groupId>net.logstash.logback</groupId>
             <artifactId>logstash-logback-encoder</artifactId>
             <!-- NO hardcoded version — parent BOM manages it -->
+        </dependency>
+        <dependency>
+            <groupId>com.github.loki4j</groupId>
+            <artifactId>loki-logback-appender</artifactId>
+            <version>1.5.2</version>
         </dependency>
 
         <!-- AspectJ — required by ObservedAspect (micrometer-observation) -->

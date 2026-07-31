@@ -1,138 +1,151 @@
-//package com.nexus.transaction.unit;
-//
-//import com.nexus.transaction.domain.exception.InvalidTransactionStateException;
-//import com.nexus.transaction.domain.model.Transaction;
-//import com.nexus.transaction.domain.model.enums.*;
-//import org.junit.jupiter.api.*;
-//import org.junit.jupiter.params.ParameterizedTest;
-//import org.junit.jupiter.params.provider.EnumSource;
-//
-//import java.math.BigDecimal;
-//import java.util.List;
-//import java.util.UUID;
-//
-//import static org.assertj.core.api.Assertions.*;
-//
-//@Tag("unit")
-//class TransactionStateMachineTest {
-//
-//    private Transaction buildTransaction(TransactionStatus status) {
-//        return Transaction.builder()
-//                .transactionId(UUID.randomUUID())
-//                .idempotencyKey(UUID.randomUUID().toString())
-//                .userId(UUID.randomUUID())
-//                .sourceAccountId(UUID.randomUUID())
-//                .amount(new BigDecimal("500.00"))
-//                .currency("MXN")
-//                .transactionType(TransactionType.INTERNAL_TRANSFER)
-//                .status(status)
-//                .feeAmount(BigDecimal.ZERO)
-//                .build();
-//    }
-//
-//    @Test
-//    @DisplayName("Happy path: INITIATED → COMPLETED")
-//    void happyPath_fullLifecycle() {
-//        Transaction txn = buildTransaction(TransactionStatus.INITIATED);
-//
-//        txn.markFraudChecking();
-//        assertThat(txn.getStatus()).isEqualTo(
-//                TransactionStatus.FRAUD_CHECKING);
-//
-//        txn.markFraudCleared(new BigDecimal("0.05"), List.of());
-//        assertThat(txn.getStatus()).isEqualTo(
-//                TransactionStatus.FRAUD_CLEARED);
-//
-//        txn.markBalanceReserving();
-//        txn.markBalanceReserved();
-//        txn.markLedgerPosting();
-//        txn.markLedgerPosted(UUID.randomUUID());
-//        txn.markCompleted();
-//
-//        assertThat(txn.getStatus()).isEqualTo(
-//                TransactionStatus.COMPLETED);
-//        assertThat(txn.getCompletedAt()).isNotNull();
-//        assertThat(txn.getLedgerEntryId()).isNotNull();
-//    }
-//
-//    @Test
-//    @DisplayName("Fraud rejection path: INITIATED → FRAUD_REJECTED → FAILED")
-//    void fraudRejection_terminatesCorrectly() {
-//        Transaction txn = buildTransaction(TransactionStatus.INITIATED);
-//
-//        txn.markFraudChecking();
-//        txn.markFraudRejected(
-//                new BigDecimal("0.95"),
-//                List.of("HIGH_VELOCITY", "UNUSUAL_AMOUNT"));
-//
-//        assertThat(txn.getStatus()).isEqualTo(
-//                TransactionStatus.FRAUD_REJECTED);
-//        assertThat(txn.getFraudDecision()).isEqualTo("REJECTED");
-//        assertThat(txn.getFraudReasons())
-//                .contains("HIGH_VELOCITY", "UNUSUAL_AMOUNT");
-//        assertThat(txn.getFailedAt()).isNotNull();
-//    }
-//
-//    @Test
-//    @DisplayName("Invalid transition throws exception")
-//    void invalidTransition_throwsException() {
-//        Transaction txn = buildTransaction(TransactionStatus.INITIATED);
-//
-//        // Cannot skip FRAUD_CHECKING
-//        assertThatThrownBy(() ->
-//                txn.markBalanceReserving()
-//        ).isInstanceOf(InvalidTransactionStateException.class)
-//                .hasMessageContaining("INITIATED")
-//                .hasMessageContaining("BALANCE_RESERVING");
-//    }
-//
-//    @Test
-//    @DisplayName("Terminal states cannot transition")
-//    void terminalStates_cannotTransition() {
-//        for (TransactionStatus terminal : List.of(
-//                TransactionStatus.COMPLETED,
-//                TransactionStatus.FAILED,
-//                TransactionStatus.REVERSED,
-//                TransactionStatus.CANCELLED)) {
-//
-//            Transaction txn = buildTransaction(terminal);
-//            assertThatThrownBy(txn::markFraudChecking)
-//                    .isInstanceOf(InvalidTransactionStateException.class);
-//        }
-//    }
-//
-//    @Test
-//    @DisplayName("markFailed is idempotent on terminal states")
-//    void markFailed_onTerminalState_isIdempotent() {
-//        Transaction txn = buildTransaction(TransactionStatus.COMPLETED);
-//        // Should not throw — markFailed checks isTerminalStatus
-//        assertThatCode(() ->
-//                txn.markFailed("some reason")
-//        ).doesNotThrowAnyException();
-//        // Status unchanged
-//        assertThat(txn.getStatus()).isEqualTo(
-//                TransactionStatus.COMPLETED);
-//    }
-//
-//    @Test
-//    @DisplayName("Ledger failure path triggers reversal")
-//    void ledgerFailure_triggersReversal() {
-//        Transaction txn = buildTransaction(TransactionStatus.INITIATED);
-//        txn.markFraudChecking();
-//        txn.markFraudCleared(new BigDecimal("0.1"), List.of());
-//        txn.markBalanceReserving();
-//        txn.markBalanceReserved();
-//        txn.markLedgerPosting();
-//        txn.markLedgerFailed("LEDGER_UNAVAILABLE");
-//
-//        assertThat(txn.getStatus()).isEqualTo(
-//                TransactionStatus.LEDGER_FAILED);
-//        assertThat(txn.getFailureReason())
-//                .isEqualTo("LEDGER_UNAVAILABLE");
-//
-//        // After ledger failure, reversal should be possible
-//        txn.markReversed();
-//        assertThat(txn.getStatus()).isEqualTo(
-//                TransactionStatus.REVERSED);
-//    }
-//}
+package com.nexus.transaction.unit;
+
+import com.nexus.transaction.domain.exception.InvalidTransactionStateException;
+import com.nexus.transaction.domain.model.Transaction;
+import com.nexus.transaction.domain.model.enums.TransactionStatus;
+import com.nexus.transaction.domain.model.enums.TransactionType;
+import org.junit.jupiter.api.Test;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+class TransactionStateMachineTest {
+
+    private Transaction buildTransaction(TransactionStatus status) {
+        return Transaction.builder()
+                .transactionId(UUID.randomUUID())
+                .idempotencyKey(UUID.randomUUID().toString())
+                .userId(UUID.randomUUID())
+                .sourceAccountId(UUID.randomUUID())
+                .amount(new BigDecimal("500.00"))
+                .currency("MXN")
+                .transactionType(TransactionType.INTERNAL_TRANSFER)
+                .status(status)
+                .feeAmount(BigDecimal.ZERO)
+                .build();
+    }
+
+    @Test
+    void balanceFirstHappyPathReachesCompleted() {
+        Transaction txn = buildTransaction(TransactionStatus.INITIATED);
+
+        txn.markBalanceReserving();
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.BALANCE_RESERVING);
+
+        txn.markBalanceReserved();
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.BALANCE_RESERVED);
+        assertThat(txn.getBalanceReservedAt()).isNotNull();
+
+        txn.markFraudCleared(new BigDecimal("5.00"), List.of());
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.FRAUD_CLEARED);
+        assertThat(txn.getFraudDecision()).isEqualTo("CLEARED");
+
+        txn.markLedgerPosting();
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.LEDGER_POSTING);
+
+        UUID ledgerEntryId = UUID.randomUUID();
+        txn.markLedgerPosted(ledgerEntryId);
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.LEDGER_POSTED);
+        assertThat(txn.getLedgerEntryId()).isEqualTo(ledgerEntryId);
+
+        txn.markCompleted();
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.COMPLETED);
+        assertThat(txn.getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    void depositPathSkipsBalanceAndFraudSteps() {
+        Transaction txn = buildTransaction(TransactionStatus.INITIATED);
+
+        txn.markLedgerPosting();
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.LEDGER_POSTING);
+
+        txn.markLedgerPosted(UUID.randomUUID());
+        txn.markCompleted();
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.COMPLETED);
+    }
+
+    @Test
+    void fraudRejectionSetsFailureDetails() {
+        Transaction txn = buildTransaction(TransactionStatus.BALANCE_RESERVED);
+
+        txn.markFraudRejected(new BigDecimal("92.50"), List.of("VELOCITY_ANOMALY"));
+
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.FRAUD_REJECTED);
+        assertThat(txn.getFraudDecision()).isEqualTo("REJECTED");
+        assertThat(txn.getFailedAt()).isNotNull();
+        assertThat(txn.getFailureReason()).contains("FRAUD_REJECTED");
+    }
+
+    @Test
+    void reserveFailureIsRecorded() {
+        Transaction txn = buildTransaction(TransactionStatus.BALANCE_RESERVING);
+
+        txn.markReserveFailed("INSUFFICIENT_FUNDS");
+
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.RESERVE_FAILED);
+        assertThat(txn.getFailureReason()).isEqualTo("INSUFFICIENT_FUNDS");
+    }
+
+    @Test
+    void ledgerFailureTransitionsToReversingEventually() {
+        Transaction txn = buildTransaction(TransactionStatus.LEDGER_POSTING);
+
+        txn.markLedgerFailed("LEDGER_DB_TIMEOUT");
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.LEDGER_FAILED);
+
+        txn.markReversed();
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.REVERSED);
+    }
+
+    @Test
+    void markFailedIsNoOpOnTerminalStatus() {
+        Transaction txn = buildTransaction(TransactionStatus.COMPLETED);
+
+        txn.markFailed("SHOULD_NOT_APPLY");
+
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.COMPLETED);
+        assertThat(txn.getFailureReason()).isNull();
+    }
+
+    @Test
+    void markFailedAppliesFromNonTerminalStatus() {
+        Transaction txn = buildTransaction(TransactionStatus.BALANCE_RESERVING);
+
+        txn.markFailed("MANUAL_CANCEL");
+
+        assertThat(txn.getStatus()).isEqualTo(TransactionStatus.FAILED);
+        assertThat(txn.getFailureReason()).isEqualTo("MANUAL_CANCEL");
+    }
+
+    @Test
+    void rejectsInvalidTransitionSkippingSteps() {
+        Transaction txn = buildTransaction(TransactionStatus.INITIATED);
+
+        assertThatThrownBy(() -> txn.markLedgerPosted(UUID.randomUUID()))
+                .isInstanceOf(InvalidTransactionStateException.class);
+    }
+
+    @Test
+    void rejectsTransitionFromTerminalCompletedState() {
+        Transaction txn = buildTransaction(TransactionStatus.COMPLETED);
+
+        assertThatThrownBy(txn::markBalanceReserving)
+                .isInstanceOf(InvalidTransactionStateException.class);
+    }
+
+    @Test
+    void isTerminalStatusIdentifiesAllTerminalStates() {
+        assertThat(Transaction.isTerminalStatus(TransactionStatus.COMPLETED)).isTrue();
+        assertThat(Transaction.isTerminalStatus(TransactionStatus.FAILED)).isTrue();
+        assertThat(Transaction.isTerminalStatus(TransactionStatus.REVERSED)).isTrue();
+        assertThat(Transaction.isTerminalStatus(TransactionStatus.CANCELLED)).isTrue();
+        assertThat(Transaction.isTerminalStatus(TransactionStatus.FRAUD_REJECTED)).isTrue();
+        assertThat(Transaction.isTerminalStatus(TransactionStatus.INITIATED)).isFalse();
+        assertThat(Transaction.isTerminalStatus(TransactionStatus.LEDGER_POSTING)).isFalse();
+    }
+}

@@ -29,8 +29,9 @@ from typing import Optional
 
 import urllib3
 
-from utils.logging_config import log
-from checks.response_parser import parse_health_response
+from src.utils.logging_config import log
+# response_parser imports _build_result from this module — deferred to
+# call-time to avoid a load-time circular import between the two.
 
 BRIDGE_SECRET = os.environ.get("PLANE_BRIDGE_SECRET", "")
 BASE_URL = os.environ.get("LOCAL_PLANE_BASE_URL",
@@ -107,6 +108,7 @@ def _check_one(service: dict) -> dict:
             # Both 200 (healthy) and 503 (unhealthy) carry Actuator JSON
             try:
                 health_data = json.loads(body)
+                from src.checks.response_parser import parse_health_response
                 return parse_health_response(
                     service, health_data, response_ms)
             except json.JSONDecodeError:

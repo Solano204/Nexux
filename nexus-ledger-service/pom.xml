@@ -25,6 +25,12 @@
     <!-- NO <dependencyManagement> — parent owns it -->
 
     <dependencies>
+        <dependency>
+            <groupId>com.nexus</groupId>
+            <artifactId>nexus-tracing-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Spring Boot Core -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -146,6 +152,11 @@
             <artifactId>logstash-logback-encoder</artifactId>
             <!-- NO hardcoded version — parent BOM manages it -->
         </dependency>
+        <dependency>
+            <groupId>com.github.loki4j</groupId>
+            <artifactId>loki-logback-appender</artifactId>
+            <version>1.5.2</version>
+        </dependency>
 
         <!-- AspectJ — required by ObservedAspect (micrometer-observation) -->
         <dependency>
@@ -167,6 +178,11 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

@@ -51,11 +51,10 @@ nexus:
     endpoint-override: ""
     kyc-bucket: ${KYC_S3_BUCKET:nexus-kyc-documents}
     kyc-queue-url: ${KYC_SQS_QUEUE_URL}
+    cognito-user-pool-id: ${COGNITO_USER_POOL_ID:}
+    cognito-client-id: ${COGNITO_CLIENT_ID:}
 
 management:
-  tracing:
-    sampling:
-      probability: ${TRACING_SAMPLE_RATE:0.05}
   zipkin:
     tracing:
       endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}

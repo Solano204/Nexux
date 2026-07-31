@@ -25,4 +25,4 @@ nexus:
     region: ${AWS_REGION:us-east-1}
     access-key-id: ${AWS_ACCESS_KEY_ID:}
     secret-access-key: ${AWS_SECRET_ACCESS_KEY:}
-    fraud-alert-queue-url: ${FRAUD_ALERT_QUEUE_URL:}
+    fraud-alert-queue-url: ${FRAUD_ALERTS_QUEUE_URL:}

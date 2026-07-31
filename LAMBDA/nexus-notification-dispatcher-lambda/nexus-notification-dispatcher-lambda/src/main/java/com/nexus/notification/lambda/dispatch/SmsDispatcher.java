@@ -1,6 +1,5 @@
 package com.nexus.notification.lambda.dispatch;
 
-import com.amazonaws.xray.AWSXRay;
 import com.nexus.notification.lambda.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,7 +50,6 @@ public class SmsDispatcher {
 
     public DeliveryResult dispatch(DispatchRequest request) {
         long startMs = System.currentTimeMillis();
-        var segment = AWSXRay.beginSubsegment("SNS.SendSMS");
 
         try {
             // ── Validate phone number ──────────────────────────
@@ -103,7 +101,6 @@ public class SmsDispatcher {
                     sns.publish(publishRequest);
 
             long durationMs = System.currentTimeMillis() - startMs;
-            segment.putMetadata("messageId", response.messageId());
 
             log.info("SMS delivered: notificationId={} " +
                             "snsMessageId={} phone={} durationMs={}",
@@ -117,19 +114,14 @@ public class SmsDispatcher {
 
         } catch (InvalidParameterException e) {
             // Invalid phone number or number opted out
-            segment.addException(e);
             throw new DeliveryException("SMS",
                     "SNS rejected SMS: " + e.getMessage(), false);
 
         } catch (SnsException e) {
-            segment.addException(e);
             boolean transient_ = e.statusCode() >= 500;
             throw new DeliveryException("SMS",
                     "SNS SMS error " + e.statusCode() + ": " +
                             e.getMessage(), transient_);
-
-        } finally {
-            AWSXRay.endSubsegment();
         }
     }
 

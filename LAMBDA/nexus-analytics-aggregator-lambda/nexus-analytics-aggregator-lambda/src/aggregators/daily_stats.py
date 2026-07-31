@@ -20,8 +20,8 @@ from decimal import Decimal
 
 import boto3
 
-from utils.decimal_utils import parse_decimal, negate
-from utils.logging_config import log
+from src.utils.decimal_utils import parse_decimal, negate
+from src.utils.logging_config import log
 
 _dynamo = boto3.resource("dynamodb")
 _table = _dynamo.Table(os.environ["DAILY_STATS_TABLE"])

@@ -4,10 +4,16 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.fraud.application.FraudAnalysisService;
 import com.nexus.fraud.web.dto.FraudAnalysisRequest;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Headers;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -38,14 +44,28 @@ public class FraudCommandConsumer {
     private final FraudAnalysisService fraudService;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     @KafkaListener(
             topics = "saga.commands",
             groupId = "fraud-service-saga-commands",
             containerFactory = "kafkaListenerContainerFactory"
     )
-    public void consumeFraudCommand(String message,
+    public void consumeFraudCommand(ConsumerRecord<String, String> record,
                                     Acknowledgment ack) {
+        String message = record.value();
+        Headers headers = record.headers();
+        Span span = KafkaTracePropagation.extractAndStartSpan(
+                tracer, propagator, record, "fraud-service-saga-commands", "saga.commands receive");
+        try (Tracer.SpanInScope ignored = tracer.withSpan(span)) {
+            consumeFraudCommandTraced(message, ack);
+        } finally {
+            span.end();
+        }
+    }
+
+    private void consumeFraudCommandTraced(String message, Acknowledgment ack) {
 
         Observation obs = Observation.createNotStarted(
                         "kafka.message.processed", observationRegistry)
@@ -115,7 +135,11 @@ public class FraudCommandConsumer {
             obs.error(e);
             log.error("Failed to process fraud command: {}",
                     e.getMessage(), e);
-            // Do NOT acknowledge — Kafka will redeliver
+            // Rethrow so KafkaConfig's DefaultErrorHandler(deadLetterRecoverer,
+            // FixedBackOff) actually sees this failure and applies the bounded
+            // 3-retry-then-DLT policy, instead of an unbounded wait for a
+            // restart/rebalance to redeliver.
+            throw new RuntimeException("Failed to process fraud command", e);
         } finally {
             obs.stop();
         }

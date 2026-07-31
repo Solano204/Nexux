@@ -2,14 +2,22 @@ package com.nexus.saga.application.ai;
 
 import com.nexus.saga.domain.model.SagaFailureContext;
 import com.nexus.saga.domain.model.SagaFailureExplanation;
+import io.micrometer.context.ContextExecutorService;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Saga Failure Explainer Service — Section 3 structured output.
@@ -32,6 +40,22 @@ public class SagaFailureExplainerService {
 
     private final Counter aiExplanationCounter;
     private final Counter fallbackExplanationCounter;
+    private final Counter timeoutExplanationCounter;
+
+    // This call used to run inline on the Kafka listener thread (saga.replies,
+    // concurrency=3) with no timeout — a slow/hanging gpt-4o-mini call held a
+    // listener thread (and the caller's open @Transactional) for as long as
+    // the HTTP client allowed, starving the other 2 threads for unrelated
+    // sagas. explain() is enrichment content for an already-terminal saga
+    // failure, not a gate anything downstream waits on, so it's dispatched
+    // here and bounded by EXPLAIN_TIMEOUT instead of blocking indefinitely.
+    // Wrapped with ContextExecutorService: a raw virtual-thread executor doesn't
+    // inherit the calling thread's ThreadLocal Brave trace context, so the
+    // "saga.ai.explain" span opened below and the gpt-4o-mini call span inside
+    // callAi() would land in two disconnected traces instead of parent/child.
+    private static final long EXPLAIN_TIMEOUT_SECONDS = 5;
+    private final ExecutorService explainerExecutor =
+            ContextExecutorService.wrap(Executors.newVirtualThreadPerTaskExecutor());
 
     public SagaFailureExplainerService(
             @Qualifier("sagaFailureExplainerClient")
@@ -48,11 +72,19 @@ public class SagaFailureExplainerService {
         this.fallbackExplanationCounter =
                 Counter.builder("saga.ai.explanation.total")
                         .tag("method", "FALLBACK").register(meterRegistry);
+        this.timeoutExplanationCounter =
+                Counter.builder("saga.ai.explanation.total")
+                        .tag("method", "TIMEOUT").register(meterRegistry);
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        explainerExecutor.shutdownNow();
     }
 
     /**
      * Generates a user-facing failure explanation.
-     * Always succeeds — uses fallback on any AI failure.
+     * Always succeeds — uses fallback on any AI failure or on timeout.
      */
     public SagaFailureExplanation explain(SagaFailureContext ctx) {
 
@@ -61,17 +93,11 @@ public class SagaFailureExplainerService {
 
         try (Observation.Scope scope = obs.openScope()) {
 
-            String prompt = buildPrompt(ctx);
+            Future<SagaFailureExplanation> future =
+                    explainerExecutor.submit(() -> callAi(ctx));
 
             SagaFailureExplanation explanation =
-                    explainerClient.prompt()
-                            .user(prompt)
-                            .call()
-                            .entity(SagaFailureExplanation.class);
-
-            if (explanation == null) {
-                throw new RuntimeException("AI returned null explanation");
-            }
+                    future.get(EXPLAIN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
             aiExplanationCounter.increment();
             obs.event(Observation.Event.of("ai.explain.success"));
@@ -83,21 +109,46 @@ public class SagaFailureExplainerService {
 
             return explanation;
 
+        } catch (TimeoutException e) {
+            obs.error(e);
+            timeoutExplanationCounter.increment();
+            log.warn("AI explanation timed out after {}s, using fallback: type={}",
+                    EXPLAIN_TIMEOUT_SECONDS, ctx.getFailureType());
+            return fallbackFor(ctx);
+
         } catch (Exception e) {
             obs.error(e);
             fallbackExplanationCounter.increment();
             log.warn("AI explanation failed, using fallback: {}",
                     e.getMessage());
-
-            // ✅ FIX: getX() throughout — SagaFailureContext is a @Getter class, not a record
-            return SagaFailureExplanation.fallback(
-                    ctx.getFailureType().name(),
-                    ctx.isFundsAreReleased(),
-                    ctx.isCanRetry(),
-                    ctx.getLanguage());
+            return fallbackFor(ctx);
         } finally {
             obs.stop();
         }
+    }
+
+    private SagaFailureExplanation callAi(SagaFailureContext ctx) {
+        String prompt = buildPrompt(ctx);
+
+        SagaFailureExplanation explanation =
+                explainerClient.prompt()
+                        .user(prompt)
+                        .call()
+                        .entity(SagaFailureExplanation.class);
+
+        if (explanation == null) {
+            throw new RuntimeException("AI returned null explanation");
+        }
+        return explanation;
+    }
+
+    // ✅ FIX: getX() throughout — SagaFailureContext is a @Getter class, not a record
+    private SagaFailureExplanation fallbackFor(SagaFailureContext ctx) {
+        return SagaFailureExplanation.fallback(
+                ctx.getFailureType().name(),
+                ctx.isFundsAreReleased(),
+                ctx.isCanRetry(),
+                ctx.getLanguage());
     }
 
     private String buildPrompt(SagaFailureContext ctx) {

@@ -7,8 +7,14 @@ import com.nexus.notification.application.NotificationProcessingService;
 import com.nexus.notification.domain.model.UserNotificationPreferences;
 import com.nexus.notification.domain.model.enums.NotificationEventType;
 import com.nexus.notification.infrastructure.mongodb.PreferencesRepository;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Headers;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
@@ -30,6 +36,8 @@ public class IdentityEventsConsumer {
     private final ObjectMapper objectMapper;
     private final SnsClient snsClient;
     private final PreferencesRepository preferencesRepository;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     @Value("${nexus.aws.notification-dispatch-topic-arn:}")
     private String notificationDispatchTopicArn;
@@ -39,7 +47,13 @@ public class IdentityEventsConsumer {
             groupId = "notification-service-identity-events",
             containerFactory = "kafkaListenerContainerFactory"
     )
-    public void consumeIdentityEvent(String message, Acknowledgment ack) {
+    public void consumeIdentityEvent(ConsumerRecord<String, String> record,
+                                     Acknowledgment ack) {
+        String message = record.value();
+        Headers headers = record.headers();
+        Span span = KafkaTracePropagation.extractAndStartSpan(
+                tracer, propagator, record, "notification-service-identity-events", "identity.events receive");
+        try (Tracer.SpanInScope ignoredScope = tracer.withSpan(span)) {
         try {
             JsonNode event = objectMapper.readTree(message);
             String eventType = event.path("eventType").asText();
@@ -57,9 +71,14 @@ public class IdentityEventsConsumer {
                             NotificationEventType.PASSWORD_RESET_REQUESTED,
                             userId, userId, ctx, traceId, "identity.events");
                     if (sent && !notificationDispatchTopicArn.isBlank()) {
-                        publishSecurityAlert(userId, NotificationEventType.PASSWORD_RESET_REQUESTED,
-                                email, "Solicitud de restablecimiento de contraseña",
-                                "Recibimos una solicitud para restablecer tu contraseña. Si no fuiste tú, ignora este mensaje.");
+                        if (email.isBlank()) {
+                            log.warn("Skipping security alert SNS publish — " +
+                                    "no email on event: userId={} eventType=PasswordResetRequested", userId);
+                        } else {
+                            publishSecurityAlert(userId, NotificationEventType.PASSWORD_RESET_REQUESTED,
+                                    email, "Solicitud de restablecimiento de contraseña",
+                                    "Recibimos una solicitud para restablecer tu contraseña. Si no fuiste tú, ignora este mensaje.");
+                        }
                     }
                 }
                 case "PasswordResetCompleted" -> {
@@ -70,9 +89,14 @@ public class IdentityEventsConsumer {
                             userId, userId, ctx, traceId, "identity.events");
                     if (sent && !notificationDispatchTopicArn.isBlank()) {
                         String email = resolveEmail(userId);
-                        publishSecurityAlert(userId, NotificationEventType.PASSWORD_RESET_COMPLETED,
-                                email, "Tu contraseña fue restablecida",
-                                "Tu contraseña fue restablecida exitosamente. Si no fuiste tú, contacta a soporte inmediatamente.");
+                        if (email.isBlank()) {
+                            log.warn("Skipping security alert SNS publish — " +
+                                    "could not resolve email: userId={} eventType=PasswordResetCompleted", userId);
+                        } else {
+                            publishSecurityAlert(userId, NotificationEventType.PASSWORD_RESET_COMPLETED,
+                                    email, "Tu contraseña fue restablecida",
+                                    "Tu contraseña fue restablecida exitosamente. Si no fuiste tú, contacta a soporte inmediatamente.");
+                        }
                     }
                 }
                 case "PasswordChanged" -> {
@@ -83,9 +107,14 @@ public class IdentityEventsConsumer {
                             userId, userId, ctx, traceId, "identity.events");
                     if (sent && !notificationDispatchTopicArn.isBlank()) {
                         String email = resolveEmail(userId);
-                        publishSecurityAlert(userId, NotificationEventType.PASSWORD_CHANGED,
-                                email, "Tu contraseña fue cambiada",
-                                "Tu contraseña fue cambiada exitosamente. Si no fuiste tú, contacta a soporte al 800-NEXUS-01 de inmediato.");
+                        if (email.isBlank()) {
+                            log.warn("Skipping security alert SNS publish — " +
+                                    "could not resolve email: userId={} eventType=PasswordChanged", userId);
+                        } else {
+                            publishSecurityAlert(userId, NotificationEventType.PASSWORD_CHANGED,
+                                    email, "Tu contraseña fue cambiada",
+                                    "Tu contraseña fue cambiada exitosamente. Si no fuiste tú, contacta a soporte al 800-NEXUS-01 de inmediato.");
+                        }
                     }
                 }
                 default -> log.debug("identity.events: unhandled eventType={}", eventType);
@@ -93,6 +122,9 @@ public class IdentityEventsConsumer {
             ack.acknowledge();
         } catch (Exception e) {
             log.error("identity.events processing failed: {}", e.getMessage(), e);
+        }
+        } finally {
+            span.end();
         }
     }
 

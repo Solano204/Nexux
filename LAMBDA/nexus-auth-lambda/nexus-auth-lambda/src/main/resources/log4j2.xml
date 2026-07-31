@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Log4j2 configuration for AWS Lambda.
+
+  Lambda captures stdout/stderr to CloudWatch Logs automatically.
+  LambdaAppender integrates with CloudWatch request IDs.
+
+  No file appenders — Lambda /tmp is ephemeral.
+  No async appenders — Lambda freezes between invocations.
+-->
+<Configuration status="WARN">
+    <Appenders>
+        <Lambda name="Lambda">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %X{AWSRequestId} %-5level %logger{36} - %msg%n"/>
+        </Lambda>
+    </Appenders>
+    <Loggers>
+        <Logger name="com.nexus.auth.lambda" level="INFO" additivity="false">
+            <AppenderRef ref="Lambda"/>
+        </Logger>
+
+        <!-- AWS SDK — WARN to suppress verbose HTTP logging -->
+        <Logger name="software.amazon.awssdk" level="WARN" additivity="false">
+            <AppenderRef ref="Lambda"/>
+        </Logger>
+        <Logger name="software.amazon.awssdk.request" level="WARN" additivity="false">
+            <AppenderRef ref="Lambda"/>
+        </Logger>
+
+        <Root level="INFO">
+            <AppenderRef ref="Lambda"/>
+        </Root>
+    </Loggers>
+</Configuration>

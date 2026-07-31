@@ -46,13 +46,15 @@ public class SecurityConfig {
                         .anyExchange().permitAll()
                 )
 
-                // Security headers — also added by SecurityHeadersFilter
-                // but keeping here as defense-in-depth
-                .headers(headers -> headers
-                        .frameOptions(
-                                org.springframework.security.config.web.server
-                                        .ServerHttpSecurity.HeaderSpec.FrameOptionsSpec::disable)
-                )
+                // Security headers: Spring Security's default X-Frame-Options
+                // (DENY) is left enabled here as defense-in-depth for paths
+                // that never reach SecurityHeadersFilter - that filter is a
+                // Spring Cloud Gateway GlobalFilter, so it only runs for
+                // requests that match a gateway route, not for endpoints
+                // like /actuator/health that Spring Boot Actuator serves
+                // directly. Was previously disabled here on the (incorrect)
+                // assumption that SecurityHeadersFilter always covers it,
+                // leaving actuator responses with no X-Frame-Options at all.
 
                 .build();
     }

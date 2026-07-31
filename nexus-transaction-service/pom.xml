@@ -25,6 +25,12 @@
     <!-- NO <dependencyManagement> — parent owns it -->
 
     <dependencies>
+        <dependency>
+            <groupId>com.nexus</groupId>
+            <artifactId>nexus-tracing-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Spring Boot Core -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -74,6 +80,17 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-elasticsearch</artifactId>
+        </dependency>
+        <!-- spring-boot-starter-data-elasticsearch transitively pulls
+             elasticsearch-java 8.18.1, but the server (docker-compose-prod.yml)
+             runs 8.13.0. The 8.18.1 client's HealthResponse deserializer
+             requires fields the 8.13.0 server doesn't return, breaking every
+             health check (MissingRequiredPropertyException). Pin the client
+             to match the server, same as nexus-audit-query-jvm. -->
+        <dependency>
+            <groupId>co.elastic.clients</groupId>
+            <artifactId>elasticsearch-java</artifactId>
+            <version>8.13.0</version>
         </dependency>
 
         <!-- Redis -->
@@ -139,6 +156,11 @@
             <artifactId>logstash-logback-encoder</artifactId>
             <!-- NO hardcoded version — parent BOM manages it -->
         </dependency>
+        <dependency>
+            <groupId>com.github.loki4j</groupId>
+            <artifactId>loki-logback-appender</artifactId>
+            <version>1.5.2</version>
+        </dependency>
 
         <!-- AspectJ — required by ObservedAspect (micrometer-observation) -->
         <dependency>
@@ -182,6 +204,14 @@
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-streams-test-utils</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Provides @ServiceConnection (org.springframework.boot.testcontainers.
+             service.connection) used by AbstractIntegrationTest - a separate
+             artifact from spring-boot-starter-test, not pulled in transitively. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

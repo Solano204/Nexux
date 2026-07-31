@@ -1,0 +1,29 @@
+apiVersion: 1
+
+# Generic webhook contact point rather than a Discord- or Slack-specific
+# type: this works with either (both accept an incoming webhook URL) without
+# committing to one platform. Swap `type: webhook` for `type: discord` or
+# `type: slack` later if native formatting (embeds/blocks instead of a raw
+# JSON POST) turns out to matter.
+#
+# URL comes from $__env{ALERT_WEBHOOK_URL} - Grafana's documented mechanism
+# for injecting secrets into provisioning files without ever writing them to
+# disk in this repo. Set ALERT_WEBHOOK_URL in your .env (never commit it) and
+# it's picked up by the grafana service's environment block in
+# docker-compose-prod.yml. Grafana validates this url field at provisioning
+# LOAD time, not just at delivery time - a truly empty value fails startup
+# entirely rather than just failing deliveries harmlessly (confirmed live,
+# "required field 'url' is not specified"), so docker-compose-prod.yml
+# defaults ALERT_WEBHOOK_URL to an inert placeholder rather than "".
+# Deliveries against the placeholder fail harmlessly; alerts still show up
+# in Grafana's own Alerting UI either way, same as originally intended.
+contactPoints:
+  - orgId: 1
+    name: platform-webhook
+    receivers:
+      - uid: platform-webhook-receiver
+        type: webhook
+        settings:
+          url: $__env{ALERT_WEBHOOK_URL}
+          httpMethod: POST
+        disableResolveMessage: false

@@ -118,6 +118,14 @@ public class TransferSagaState {
     @Column(name = "compensation_attempts")
     private int compensationAttempts;
 
+    /**
+     * Retry counter for BALANCE_FINALIZE only (post-pivot, after LEDGER_POSTED).
+     * Separate from compensationAttempts because it drives a retry-the-idempotent-
+     * command loop, not a compensation loop — see TransferSagaProcessor.retryFinalizeOrEscalate.
+     */
+    @Column(name = "finalize_retry_count")
+    private int finalizeRetryCount;
+
     @Column(name = "started_at", nullable = false)
     private Instant startedAt;
 

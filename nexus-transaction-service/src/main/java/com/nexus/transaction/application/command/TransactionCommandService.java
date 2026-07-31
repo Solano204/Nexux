@@ -71,10 +71,13 @@ public class TransactionCommandService {
             var existing = transactionRepository.findByUserIdAndIdempotencyKey(userId, request.idempotencyKey());
             if (existing.isPresent()) {
                 obs.event(Observation.Event.of("transaction.idempotent"));
+                obs.lowCardinalityKeyValue("nexus.idempotency.duplicate", "true");
                 return toResponse(existing.get());
             }
             UUID transactionId = UUID.randomUUID();
             UUID sagaId = UUID.randomUUID();
+            obs.highCardinalityKeyValue("transaction.id", transactionId.toString());
+            obs.highCardinalityKeyValue("saga.id", sagaId.toString());
             Transaction txn = Transaction.builder().transactionId(transactionId).idempotencyKey(request.idempotencyKey()).userId(userId)
                     .sourceAccountId(request.sourceAccountId()).targetAccountId(request.targetAccountId()).targetAccountNumber(request.targetAccountNumber())
                     .targetUserId(request.targetUserId()).amount(request.amount()).currency(request.currency() != null ? request.currency() : "MXN")
@@ -88,7 +91,17 @@ public class TransactionCommandService {
             initiatedCounter.increment();
             amountSummary.record(request.amount().doubleValue());
             log.info("Transaction initiated: txnId={} sagaId={} type={} amount={}", transactionId, sagaId, request.transactionType(), request.amount());
+            obs.lowCardinalityKeyValue("operation.result", "success");
             return toResponse(txn);
+        } catch (Exception e) {
+            // No error handling existed here at all - any exception (e.g. a
+            // constraint violation on save()) propagated with no obs.error()
+            // call, so a failed transaction.initiate span looked identical
+            // to a successful one in Zipkin unless you already knew to check
+            // the HTTP status code separately.
+            obs.lowCardinalityKeyValue("operation.result", "failed");
+            obs.error(e);
+            throw e;
         } finally {
             timerSample.stop(processingTimer);
             obs.stop();
@@ -165,7 +178,7 @@ public class TransactionCommandService {
     }
 
     private Transaction loadTransaction(UUID id) { return transactionRepository.findById(id).orElseThrow(() -> new TransactionNotFoundException("Transaction not found: " + id)); }
-    private void writeOutbox(String topic, UUID aggregateId, UUID sagaId, String eventType, ObjectNode payload) { payload.put("sagaId", sagaId.toString()); outboxRepository.save(OutboxEntry.of(topic, aggregateId, eventType, payload)); }
+    private void writeOutbox(String topic, UUID aggregateId, UUID sagaId, String eventType, ObjectNode payload) { payload.put("sagaId", sagaId.toString()); OutboxEntry entry = OutboxEntry.of(topic, aggregateId, eventType, payload); entry.attachTraceContext(tracer); outboxRepository.save(entry); }
     private BigDecimal calculateFee(InitiateTransactionRequest req) { return req.transactionType() == TransactionType.EXTERNAL_TRANSFER ? req.amount().multiply(new BigDecimal("0.015")).setScale(4, java.math.RoundingMode.HALF_UP) : BigDecimal.ZERO; }
 
     private ObjectNode buildInitiatedPayload(Transaction t, String traceId) { return objectMapper.createObjectNode().put("transactionId",t.getTransactionId().toString()).put("sagaId",t.getSagaId().toString()).put("userId",t.getUserId().toString()).put("sourceAccountId",t.getSourceAccountId().toString()).put("targetAccountId",t.getTargetAccountId()!=null?t.getTargetAccountId().toString():null).put("amount",t.getAmount().toPlainString()).put("currency",t.getCurrency()).put("transactionType",t.getTransactionType().name()).put("ipAddress",t.getIpAddress()).put("traceId",traceId).put("initiatedAt",Instant.now().toString()); }

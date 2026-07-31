@@ -4,15 +4,12 @@ import com.nexus.notification.domain.model.NotificationContent;
 import com.nexus.notification.domain.model.UserNotificationPreferences;
 import com.nexus.notification.domain.model.enums.NotificationEventType;
 import com.nexus.notification.domain.model.enums.NotificationTone;
-import io.github.resilience4j.retry.annotation.Retry;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -40,7 +37,7 @@ import java.util.Map;
 @Service
 public class NotificationContentGenerator {
 
-    private final ChatClient chatClient;
+    private final NotificationLlmGateway llmGateway;
     private final FallbackContentGenerator fallbackGenerator;
     private final ObservationRegistry observationRegistry;
 
@@ -49,12 +46,12 @@ public class NotificationContentGenerator {
     private final Counter fallbackCounter;
 
     public NotificationContentGenerator(
-            @Qualifier("notificationChatClient") ChatClient chatClient,
+            NotificationLlmGateway llmGateway,
             FallbackContentGenerator fallbackGenerator,
             ObservationRegistry observationRegistry,
             MeterRegistry meterRegistry) {
 
-        this.chatClient = chatClient;
+        this.llmGateway = llmGateway;
         this.fallbackGenerator = fallbackGenerator;
         this.observationRegistry = observationRegistry;
 
@@ -94,7 +91,7 @@ public class NotificationContentGenerator {
             log.debug("Generating notification: type={} lang={}",
                     eventType, prefs != null ? prefs.getLanguage() : "es");
 
-            NotificationContent content = generateWithRetry(
+            NotificationContent content = llmGateway.generate(
                     eventType, userMessage, eventContext);
 
             aiSuccessCounter.increment();
@@ -119,31 +116,6 @@ public class NotificationContentGenerator {
             sample.stop(aiGenerationTimer);
             obs.stop();
         }
-    }
-
-    @Retry(name = "openai-retry",
-            fallbackMethod = "generateFallback")
-    private NotificationContent generateWithRetry(
-            NotificationEventType eventType,
-            String userMessage,
-            Map<String, Object> eventContext) {
-
-        return chatClient.prompt()
-                .user(userMessage)
-                .call()
-                .entity(NotificationContent.class);
-    }
-
-    private NotificationContent generateFallback(
-            NotificationEventType eventType,
-            String userMessage,
-            Map<String, Object> eventContext,
-            Exception ex) {
-
-        log.warn("All retries exhausted for notification generation: {}",
-                ex.getMessage());
-        return fallbackGenerator.generate(eventType,
-                buildFallbackContext(eventContext, null));
     }
 
     /**

@@ -31,7 +31,10 @@ spring:
 
   threads:
     virtual:
-      enabled: true
+      # disabled: Brave's ThreadLocal trace context doesn't survive virtual
+      # thread mount/unmount - controller-dispatched spans were silently
+      # never exported to Zipkin (actuator/internal spans traced fine).
+      enabled: false
 
   datasource:
     url: ${DATASOURCE_URL:jdbc:postgresql://localhost:5433/nexus_saga}

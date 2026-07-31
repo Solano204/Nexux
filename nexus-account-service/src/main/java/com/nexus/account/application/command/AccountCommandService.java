@@ -13,6 +13,7 @@ import com.nexus.account.infrastructure.mongodb.AccountAnalyticsRepository;
 import com.nexus.account.infrastructure.persistence.*;
 import com.nexus.account.infrastructure.redis.*;
 import com.nexus.account.web.dto.response.*;
+import io.micrometer.context.ContextExecutorService;
 import io.micrometer.core.instrument.*;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.observation.Observation;
@@ -71,6 +72,7 @@ public class AccountCommandService {
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
     private final Tracer tracer;
+    private final com.nexus.account.integration.AccountIntegrationEventMapper integrationEventMapper;
 
     // Micrometer metrics
     private final Timer reservationDurationTimer;
@@ -91,7 +93,8 @@ public class AccountCommandService {
             ObjectMapper objectMapper,
             ObservationRegistry observationRegistry,
             Tracer tracer,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            com.nexus.account.integration.AccountIntegrationEventMapper integrationEventMapper) {
 
         this.accountRepository = accountRepository;
         this.reservationRepository = reservationRepository;
@@ -103,6 +106,7 @@ public class AccountCommandService {
         this.objectMapper = objectMapper;
         this.observationRegistry = observationRegistry;
         this.tracer = tracer;
+        this.integrationEventMapper = integrationEventMapper;
 
         this.reservationDurationTimer = Timer.builder(
                         "account.balance.reservation.duration")
@@ -167,7 +171,12 @@ public class AccountCommandService {
 
             // Use a virtual-thread executor when available (Java 21+),
             // otherwise fall back to a cached thread pool.
-            ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+            // Wrapped with ContextExecutorService: a raw virtual-thread executor
+            // doesn't inherit this thread's ThreadLocal trace context, so pgTask/
+            // mongoTask/redisTask below would otherwise run as disconnected root
+            // spans instead of children of "account.create.parallel".
+            ExecutorService executor = ContextExecutorService.wrap(
+                    Executors.newVirtualThreadPerTaskExecutor());
 
             // Task A: PostgreSQL write (two accounts, atomic transaction).
             // Called via self-proxy so @Transactional(REQUIRES_NEW) is applied.
@@ -230,10 +239,19 @@ public class AccountCommandService {
         // Write account_events for both
         for (Account acct : List.of(checking, savings)) {
             accountEventRepository.save(buildCreateEvent(acct, traceId));
-            outboxRepository.save(OutboxEntry.of(
+            // Explicit integration-event mapping (CHANGES-BESTPRACTICES/
+            // 08_EVENT_DESIGN_CHANGES.md Section 2), replacing the ad-hoc
+            // buildAccountCreatedPayload(acct) ObjectNode builder that used
+            // to live here - same fields published, now via a typed,
+            // testable contract instead of untyped .put() calls.
+            var integrationEvent = integrationEventMapper.toAccountCreated(acct);
+            OutboxEntry createdEntry = OutboxEntry.of(
                     "accounts.created", acct.getAccountId(),
                     "AccountCreated",
-                    buildAccountCreatedPayload(acct)));
+                    (ObjectNode)
+                            objectMapper.valueToTree(integrationEvent));
+            createdEntry.attachTraceContext(tracer);
+            outboxRepository.save(createdEntry);
         }
 
         return List.of(checking, savings);
@@ -277,6 +295,7 @@ public class AccountCommandService {
                                 "accountId={} transactionId={}",
                         accountId, transactionId);
                 obs.event(Observation.Event.of("reservation.idempotent"));
+                obs.lowCardinalityKeyValue("nexus.idempotency.duplicate", "true");
                 return BalanceOperationResult.success(
                         existing.get().getReservedAmount(),
                         null, transactionIdStr, true);
@@ -324,11 +343,15 @@ public class AccountCommandService {
                 // ── Step 6: Account event + outbox ───────────────
                 accountEventRepository.save(buildReserveEvent(
                         account, transactionId, amount, traceId));
-                outboxRepository.save(OutboxEntry.of(
+                var reservedEvent = integrationEventMapper.toBalanceReserved(
+                        accountId, transactionId, amount,
+                        reservation.newAvailableBalance());
+                OutboxEntry reservedEntry = OutboxEntry.of(
                         "account.events", accountId, "BalanceReserved",
-                        buildBalanceReservedPayload(
-                                accountId, transactionId, amount,
-                                reservation.newAvailableBalance())));
+                        (ObjectNode)
+                                objectMapper.valueToTree(reservedEvent));
+                reservedEntry.attachTraceContext(tracer);
+                outboxRepository.save(reservedEntry);
 
                 obs.event(Observation.Event.of("reservation.success"));
                 log.info("Balance reserved: accountId={} " +
@@ -440,10 +463,14 @@ public class AccountCommandService {
             // Events + outbox
             accountEventRepository.save(buildReleaseEvent(
                     account, transactionId, amount, traceId));
-            outboxRepository.save(OutboxEntry.of(
+            var releasedEvent = integrationEventMapper.toBalanceReleased(
+                    accountId, transactionId, amount, account.getAvailableBalance());
+            OutboxEntry releasedEntry = OutboxEntry.of(
                     "account.events", accountId, "BalanceReleased",
-                    buildBalanceReleasedPayload(accountId, transactionId,
-                            amount, account.getAvailableBalance())));
+                    (ObjectNode)
+                            objectMapper.valueToTree(releasedEvent));
+            releasedEntry.attachTraceContext(tracer);
+            outboxRepository.save(releasedEntry);
 
             balanceCacheRepository.invalidate(accountId);
 
@@ -473,6 +500,40 @@ public class AccountCommandService {
                 "account.finalize-transfer", observationRegistry).start();
 
         try {
+            // ── Step 0: Idempotency check (mirrors reserveBalance) ──
+            // Without this, a redelivered FinalizeTransferCommand re-runs
+            // finalizeDebit() against a reservation whose amount was already
+            // decremented to zero by the first successful run, throwing
+            // AccountingIntegrityException ("only 0.0000 reserved"). A
+            // RELEASED reservation means a ReleaseBalanceCommand already
+            // ran for this transaction (compensation, or command reordering)
+            // - finalizing now would credit the target with no matching
+            // debit, so that case is refused, not silently treated as
+            // success.
+            Optional<BalanceReservation> existingReservation =
+                    reservationRepository.findByAccountIdAndTransactionId(
+                            sourceAccountId, transactionId);
+            if (existingReservation.isPresent()) {
+                ReservationStatus status = existingReservation.get().getStatus();
+                if (status == ReservationStatus.FINALIZED) {
+                    log.info("Idempotent replay: transfer already finalized " +
+                                    "sourceAccountId={} transactionId={}",
+                            sourceAccountId, transactionId);
+                    obs.event(Observation.Event.of("finalize.idempotent"));
+                    obs.lowCardinalityKeyValue("nexus.idempotency.duplicate", "true");
+                    return;
+                }
+                if (status == ReservationStatus.RELEASED
+                        || status == ReservationStatus.RELEASED_BY_EXPIRY) {
+                    log.error("Refusing to finalize transfer: reservation " +
+                                    "already {} (funds no longer held) " +
+                                    "sourceAccountId={} transactionId={}",
+                            status, sourceAccountId, transactionId);
+                    obs.event(Observation.Event.of("finalize.already-released"));
+                    return;
+                }
+            }
+
             // ── Deadlock prevention: lock in consistent UUID order ──
             List<UUID> sortedIds = new ArrayList<>(
                     List.of(sourceAccountId, targetAccountId));
@@ -514,14 +575,24 @@ public class AccountCommandService {
             accountEventRepository.save(buildCreditEvent(
                     target, transactionId, amount, traceId));
 
-            outboxRepository.save(OutboxEntry.of(
+            var debitEvent = integrationEventMapper.toBalanceFinalizedDebit(
+                    sourceAccountId, targetAccountId, transactionId,
+                    amount, source.getAvailableBalance());
+            OutboxEntry debitEntry = OutboxEntry.of(
                     "account.events", sourceAccountId, "BalanceFinalizedDebit",
-                    buildFinalizedPayload(sourceAccountId, targetAccountId,
-                            transactionId, amount, source.getAvailableBalance())));
-            outboxRepository.save(OutboxEntry.of(
+                    (ObjectNode)
+                            objectMapper.valueToTree(debitEvent));
+            debitEntry.attachTraceContext(tracer);
+            outboxRepository.save(debitEntry);
+            var creditEvent = integrationEventMapper.toBalanceCredited(
+                    targetAccountId, sourceAccountId, transactionId,
+                    amount, target.getAvailableBalance());
+            OutboxEntry creditEntry = OutboxEntry.of(
                     "account.events", targetAccountId, "BalanceCredited",
-                    buildCreditedPayload(targetAccountId, sourceAccountId,
-                            transactionId, amount, target.getAvailableBalance())));
+                    (ObjectNode)
+                            objectMapper.valueToTree(creditEvent));
+            creditEntry.attachTraceContext(tracer);
+            outboxRepository.save(creditEntry);
 
             balanceCacheRepository.invalidate(sourceAccountId);
             balanceCacheRepository.invalidate(targetAccountId);
@@ -544,6 +615,23 @@ public class AccountCommandService {
                 "account.credit-account", observationRegistry).start();
 
         try {
+            // Idempotency: a redelivered CreditAccountCommand (Kafka
+            // at-least-once, or a saga-level retry after a lost reply — see
+            // TransferSagaProcessor.retryFinalizeOrEscalate) must not
+            // double-credit. Deposits (CASH_IN/DIRECT_DEPOSIT) skip balance
+            // reservation, so there's no BalanceReservation row to key
+            // idempotency off of like reserve/release/finalize do — the
+            // transactionId on the event trail is the guard instead.
+            if (!accountEventRepository
+                    .findByTransactionIdOrderByOccurredAtAsc(transactionId)
+                    .isEmpty()) {
+                log.info("Idempotent replay: account already credited for " +
+                                "transactionId={} accountId={}",
+                        transactionId, accountId);
+                obs.event(Observation.Event.of("credit.idempotent"));
+                return;
+            }
+
             List<Account> accounts = accountRepository
                     .findWithLocksForTransfer(List.of(accountId));
             if (accounts.isEmpty()) {
@@ -558,10 +646,15 @@ public class AccountCommandService {
 
             // System external account UUID is the logical debit source for deposits
             UUID externalFunds = UUID.fromString("00000000-0000-0000-0000-000000000001");
-            outboxRepository.save(OutboxEntry.of(
+            var depositEvent = integrationEventMapper.toBalanceCredited(
+                    accountId, externalFunds, transactionId,
+                    amount, account.getAvailableBalance());
+            OutboxEntry depositEntry = OutboxEntry.of(
                     "account.events", accountId, "BalanceCredited",
-                    buildCreditedPayload(accountId, externalFunds,
-                            transactionId, amount, account.getAvailableBalance())));
+                    (ObjectNode)
+                            objectMapper.valueToTree(depositEvent));
+            depositEntry.attachTraceContext(tracer);
+            outboxRepository.save(depositEntry);
 
             balanceCacheRepository.invalidate(accountId);
 
@@ -656,65 +749,6 @@ public class AccountCommandService {
                         account.getStatus().name(),
                         Instant.now()
                 ));
-    }
-
-    private ObjectNode buildAccountCreatedPayload(Account a) {
-        return objectMapper.createObjectNode()
-                .put("accountId", a.getAccountId().toString())
-                .put("accountNumber", a.getAccountNumber())
-                .put("accountType", a.getAccountType().name())
-                .put("userId", a.getUserId().toString())
-                .put("currency", a.getCurrency())
-                .put("initialBalance", a.getAvailableBalance().toPlainString())
-                .put("createdAt", Instant.now().toString());
-    }
-
-    private ObjectNode buildBalanceReservedPayload(UUID accountId,
-                                                   UUID transactionId,
-                                                   BigDecimal amount,
-                                                   BigDecimal newAvailable) {
-        return objectMapper.createObjectNode()
-                .put("accountId", accountId.toString())
-                .put("transactionId", transactionId.toString())
-                .put("reservedAmount", amount.toPlainString())
-                .put("newAvailableBalance", newAvailable.toPlainString())
-                .put("reservedAt", Instant.now().toString());
-    }
-
-    private ObjectNode buildBalanceReleasedPayload(UUID accountId,
-                                                   UUID transactionId,
-                                                   BigDecimal amount,
-                                                   BigDecimal newAvailable) {
-        return objectMapper.createObjectNode()
-                .put("accountId", accountId.toString())
-                .put("transactionId", transactionId.toString())
-                .put("releasedAmount", amount.toPlainString())
-                .put("newAvailableBalance", newAvailable.toPlainString())
-                .put("releasedAt", Instant.now().toString());
-    }
-
-    private ObjectNode buildFinalizedPayload(UUID source, UUID target,
-                                             UUID txnId, BigDecimal amount,
-                                             BigDecimal newBalance) {
-        return objectMapper.createObjectNode()
-                .put("accountId", source.toString())
-                .put("targetAccountId", target.toString())
-                .put("transactionId", txnId.toString())
-                .put("debitedAmount", amount.toPlainString())
-                .put("newAvailableBalance", newBalance.toPlainString())
-                .put("finalizedAt", Instant.now().toString());
-    }
-
-    private ObjectNode buildCreditedPayload(UUID accountId, UUID sourceId,
-                                            UUID txnId, BigDecimal amount,
-                                            BigDecimal newBalance) {
-        return objectMapper.createObjectNode()
-                .put("accountId", accountId.toString())
-                .put("sourceAccountId", sourceId.toString())
-                .put("transactionId", txnId.toString())
-                .put("creditedAmount", amount.toPlainString())
-                .put("newAvailableBalance", newBalance.toPlainString())
-                .put("creditedAt", Instant.now().toString());
     }
 
     private AccountEvent buildCreateEvent(Account a, String traceId) {

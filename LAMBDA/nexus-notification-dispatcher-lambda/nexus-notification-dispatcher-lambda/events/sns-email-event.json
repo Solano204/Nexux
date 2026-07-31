@@ -9,7 +9,7 @@
         "MessageId": "test-message-id-001",
         "TopicArn": "arn:aws:sns:us-east-1:000000000000:nexus-notification-dispatch",
         "Subject": null,
-        "Message": "{\"notificationId\":\"notif-abc-123\",\"userId\":\"user-456\",\"channel\":\"EMAIL\",\"eventType\":\"TRANSACTION_COMPLETED\",\"recipientEmail\":\"usuario@example.com\",\"recipientName\":\"Juan García\",\"language\":\"es\",\"priority\":\"NORMAL\",\"payload\":{\"amount\":\"2,500.00\",\"currency\":\"MXN\",\"merchantName\":\"Restaurante El Buen Sabor\",\"transactionId\":\"txn-xyz-789\",\"completedAt\":\"2024-01-15T14:30:00Z\"}}",
+        "Message": "{\"dispatchId\":\"dispatch-abc-123\",\"notificationId\":\"notif-abc-123\",\"userId\":\"user-456\",\"channel\":\"EMAIL\",\"priority\":\"NORMAL\",\"eventType\":\"TRANSACTION_COMPLETED\",\"toEmail\":\"usuario@example.com\",\"subject\":\"Transferencia completada\",\"tone\":\"POSITIVE\",\"deepLinkUrl\":\"https://app.nexusbank.com/transactions/txn-xyz-789\",\"callToAction\":\"Ver detalles\",\"language\":\"es\",\"metadata\":{\"amount\":\"2,500.00\",\"currency\":\"MXN\",\"targetName\":\"Restaurante El Buen Sabor\"}}",
         "MessageAttributes": {
           "channel": {
             "Type": "String",

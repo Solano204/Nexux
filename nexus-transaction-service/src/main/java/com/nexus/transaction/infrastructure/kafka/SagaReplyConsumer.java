@@ -3,10 +3,16 @@ package com.nexus.transaction.infrastructure.kafka;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.transaction.application.command.TransactionCommandService;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Headers;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -20,10 +26,31 @@ public class SagaReplyConsumer {
     private final TransactionCommandService commandService;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     @KafkaListener(topics = "saga.replies", groupId = "transaction-service-saga-replies", containerFactory = "kafkaListenerContainerFactory")
-    public void consumeSagaReply(String message, Acknowledgment ack) {
-        Observation obs = Observation.createNotStarted("kafka.message.processed", observationRegistry).lowCardinalityKeyValue("topic", "saga.replies").start();
+    public void consumeSagaReply(ConsumerRecord<String, String> record,
+                                 Acknowledgment ack) {
+        String message = record.value();
+        Headers headers = record.headers();
+        Span span = KafkaTracePropagation.extractAndStartSpan(
+                tracer, propagator, record, "transaction-service-saga-replies", "saga.replies receive");
+        try (Tracer.SpanInScope ignoredScope = tracer.withSpan(span)) {
+        consumeSagaReplyTraced(message, ack);
+        } finally {
+            span.end();
+        }
+    }
+
+    private void consumeSagaReplyTraced(String message, Acknowledgment ack) {
+        // Tag-key set (topic, consumerGroup) must match every other manual
+        // "kafka.message.processed" observation platform-wide - this one
+        // was missing consumerGroup, which is what caused Micrometer's
+        // "already an existing meter... different tag keys" registration
+        // conflict (Prometheus requires a consistent tag-key set per meter
+        // name within one registry/JVM).
+        Observation obs = Observation.createNotStarted("kafka.message.processed", observationRegistry).lowCardinalityKeyValue("topic", "saga.replies").lowCardinalityKeyValue("consumerGroup", "transaction-service-saga-replies").start();
         try {
             JsonNode reply = objectMapper.readTree(message);
             String replyType = reply.path("replyType").asText();
@@ -66,6 +93,16 @@ public class SagaReplyConsumer {
             }
 
             ack.acknowledge();
-        } catch (Exception e) { obs.error(e); log.error("Failed to process saga reply: {}", e.getMessage(), e); } finally { obs.stop(); }
+        } catch (Exception e) {
+            obs.error(e);
+            log.error("Failed to process saga reply: {}", e.getMessage(), e);
+            // Rethrow so KafkaConfig's DefaultErrorHandler(deadLetterRecoverer,
+            // FixedBackOff) actually sees this failure and applies the bounded
+            // 3-retry-then-DLT policy, instead of an unbounded wait for a
+            // restart/rebalance to redeliver.
+            throw new RuntimeException("Failed to process saga reply", e);
+        } finally {
+            obs.stop();
+        }
     }
 }

@@ -6,7 +6,6 @@ import com.auth0.jwt.exceptions.*;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayV2HTTPEvent;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayV2HTTPResponse;
-import com.amazonaws.xray.AWSXRay;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.auth.lambda.AuthLambdaHandler;
 import com.nexus.auth.lambda.auth.JwksCache;
@@ -63,8 +62,6 @@ public class TokenValidationHandler {
 
     public APIGatewayV2HTTPResponse handle(
             APIGatewayV2HTTPEvent event) {
-
-        var segment = AWSXRay.beginSubsegment("ValidateToken");
 
         try {
             // ── Extract Bearer token ───────────────────────────
@@ -168,9 +165,6 @@ public class TokenValidationHandler {
                     verified.getExpiresAtAsInstant()
             );
 
-            segment.putMetadata("userId", session.userId());
-            segment.putMetadata("kycVerified", session.kycVerified());
-
             log.info("Token validated: userId={} kycVerified={}",
                     session.userId(), session.kycVerified());
 
@@ -178,12 +172,9 @@ public class TokenValidationHandler {
                     mapper);
 
         } catch (Exception e) {
-            segment.addException(e);
             log.error("Validation error: {}", e.getMessage(), e);
             return AuthLambdaHandler.errorResponse(500,
                     "INTERNAL_ERROR", "Validation failed");
-        } finally {
-            AWSXRay.endSubsegment();
         }
     }
 }

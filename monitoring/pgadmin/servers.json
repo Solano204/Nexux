@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "NEXUS Postgres",
+      "Group": "Servers",
+      "Host": "nexus-postgres",
+      "Port": 5432,
+      "MaintenanceDB": "postgres",
+      "Username": "nexus",
+      "SSLMode": "prefer"
+    }
+  }
+}

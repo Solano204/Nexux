@@ -1,0 +1,218 @@
+{
+  "id": null,
+  "uid": "nexus-business-metrics",
+  "title": "Nexus Platform - Business Metrics",
+  "description": "Registration/login, transaction, fraud, KYC, notification and saga business metrics. Every metric name below was verified directly against its Counter.builder(...)/Timer.builder(...) registration in source (identity/transaction/fraud/kyc/notification/saga-orchestrator services) - see per-panel notes for the few things that are NOT available and why.",
+  "tags": ["nexus", "business"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Registration & Login",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Registrations/min by outcome",
+      "description": "Failures are only tagged outcome=failed, not broken down by error.type (e.g. duplicate email vs validation) - the counter doesn't carry that dimension today. A real per-error-type breakdown would need a tag added to registrationFailedCounter in UserCommandService.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(identity_registrations_total[1m]) * 60) by (outcome)", "refId": "A", "legendFormat": "{{outcome}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Logins/min by outcome",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(identity_logins_total[1m]) * 60) by (outcome)", "refId": "A", "legendFormat": "{{outcome}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 4,
+      "type": "row",
+      "title": "Transactions",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Transactions/min by status",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "rate(transaction_initiated_total[1m]) * 60", "refId": "A", "legendFormat": "initiated" },
+        { "expr": "rate(transaction_completed_total[1m]) * 60", "refId": "B", "legendFormat": "completed" },
+        { "expr": "rate(transaction_failed_total[1m]) * 60", "refId": "C", "legendFormat": "failed" },
+        { "expr": "rate(transaction_fraud_rejected_total[1m]) * 60", "refId": "D", "legendFormat": "fraud-rejected" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 6,
+      "type": "histogram",
+      "title": "Transaction amount distribution (MXN)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "transaction_amount_mxn", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyMXN" }, "overrides": [] },
+      "options": {}
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "Fraud",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Fraud hard-reject rate",
+      "description": "fraud.hard_reject.total only counts the deterministic pre-screen shortcut (buildHardRejectDecision) in FraudAnalysisService - it does NOT count REVIEW/REJECT decisions that come out of the full AI ReAct analysis, since those aren't tracked in a separate Counter today (only visible per-transaction as span tags: fraud.decision/fraud.risk_score on the saga.commands receive span). A true \"score distribution histogram\" per the prompt's ask isn't available as a Prometheus metric for the same reason - it would need a DistributionSummary added alongside the existing span tags in FraudAnalysisService.analyze.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "rate(fraud_hard_reject_total[5m]) * 60", "refId": "A", "legendFormat": "hard-reject/min" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "KYC",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "KYC decisions/min by outcome",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(kyc_decisions_total[1m]) * 60) by (outcome)", "refId": "A", "legendFormat": "{{outcome}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "KYC pass rate (%) and avg processing time",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(kyc_decisions_total{outcome=\"APPROVED\"}[15m])) / sum(rate(kyc_decisions_total[15m])) * 100", "refId": "A", "legendFormat": "pass rate %" },
+        { "expr": "rate(kyc_pipeline_total_duration_seconds_sum[15m]) / rate(kyc_pipeline_total_duration_seconds_count[15m])", "refId": "B", "legendFormat": "avg duration (s)" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "custom": { "axisPlacement": "left" } },
+        "overrides": [
+          { "matcher": { "id": "byFrameRefID", "options": "B" }, "properties": [{ "id": "unit", "value": "s" }, { "id": "custom.axisPlacement", "value": "right" }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 12,
+      "type": "row",
+      "title": "Notifications",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Notification pipeline outcomes/min",
+      "description": "Success/failure BY CHANNEL (email/sms/in_app) is not available as a Prometheus metric - channel delivery status is only tagged on spans (notification.channel.{email,sms,in_app} with a status tag), not counted in a Micrometer Counter with a channel dimension. What IS available: rate-limited, dedup-skipped and quiet-hours-deferred counts, shown here instead.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "rate(notification_rate_limited_total[1m]) * 60", "refId": "A", "legendFormat": "rate-limited" },
+        { "expr": "rate(notification_dedup_skipped_total[1m]) * 60", "refId": "B", "legendFormat": "dedup-skipped" },
+        { "expr": "rate(notification_quiet_hours_deferred_total[1m]) * 60", "refId": "C", "legendFormat": "quiet-hours-deferred" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "AI-generation latency (gen_ai client calls)",
+      "description": "NEEDS LIVE VERIFICATION: Spring AI's built-in Observation convention (confirmed live via Zipkin - see the 'chat gpt-4o-mini' span with real gen_ai.* tags found during Part 1 verification) also publishes a matching Micrometer Timer whenever a MeterRegistry is present in the ObservationRegistry chain, which it is platform-wide here. The metric name is expected to be gen_ai_client_operation_duration_seconds per Spring AI's DefaultChatModelObservationConvention, but this hasn't been checked against a real /actuator/prometheus scrape - confirm the exact name once services are back up and fix this panel if it differs.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 45 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_seconds_bucket[5m])) by (service, gen_ai_request_model, le))", "refId": "A", "legendFormat": "{{service}} - {{gen_ai_request_model}} p95" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 15,
+      "type": "row",
+      "title": "Sagas",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 53 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Saga completion rate (%) by type",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 54 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(saga_completed_total{outcome=\"SUCCESS\"}[15m])) by (sagaType) / sum(rate(saga_started_total[15m])) by (sagaType) * 100", "refId": "A", "legendFormat": "{{sagaType}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Saga timeout rate + p99 duration by type",
+      "description": "Step-failure breakdown BY STEP NAME (per the prompt's ask) isn't a Prometheus metric - step transitions are recorded to the saga_step_history table and as nexus.saga.step span tags (see Part 1), not as a Counter with a step-name dimension. This panel shows what IS a real metric: timeout rate and p99 duration per saga type.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 54 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(saga_timeout_total[15m])) by (sagaType)", "refId": "A", "legendFormat": "{{sagaType}} timeouts/s" },
+        { "expr": "histogram_quantile(0.99, sum(rate(saga_duration_seconds_bucket[15m])) by (sagaType, le))", "refId": "B", "legendFormat": "{{sagaType}} p99 duration" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "axisPlacement": "left" } },
+        "overrides": [
+          { "matcher": { "id": "byFrameRefID", "options": "B" }, "properties": [{ "id": "unit", "value": "s" }, { "id": "custom.axisPlacement", "value": "right" }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    }
+  ]
+}

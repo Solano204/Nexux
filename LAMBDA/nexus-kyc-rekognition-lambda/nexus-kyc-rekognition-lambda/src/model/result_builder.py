@@ -68,15 +68,13 @@ def build_complete_result(
             (text_result or {}).get("lineCount", 0)
         ),
         "faceQualityBrightness": (
-            (face_result or {})
-            .get("primaryFace", {})
-            .get("quality", {})
+            (((face_result or {}).get("primaryFace") or {})
+             .get("quality") or {})
             .get("brightness", 0)
         ),
         "faceQualitySharpness": (
-            (face_result or {})
-            .get("primaryFace", {})
-            .get("quality", {})
+            (((face_result or {}).get("primaryFace") or {})
+             .get("quality") or {})
             .get("sharpness", 0)
         ),
 

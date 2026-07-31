@@ -23,7 +23,7 @@ DEGRADED is important: a service that is "up" but responding in
 BEFORE it fails completely.
 """
 
-from checks.health_checker import _build_result
+from src.checks.health_checker import _build_result
 
 
 def parse_health_response(service: dict,

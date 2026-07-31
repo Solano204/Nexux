@@ -45,8 +45,6 @@ eureka:
 management:
   tracing:
     enabled: true
-    sampling:
-      probability: ${TRACING_SAMPLE_RATE:0.05}
   zipkin:
     tracing:
       endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}
@@ -60,3 +58,9 @@ logging:
     org.apache.kafka.streams: WARN
     com.netflix.eureka: WARN
     com.netflix.discovery: WARN
+
+nexus:
+  analytics:
+    dynamodb:
+      enabled: ${ANALYTICS_DYNAMODB_ENABLED:false}
+      table: ${ANALYTICS_TRANSACTIONS_TABLE:nexus-transactions}

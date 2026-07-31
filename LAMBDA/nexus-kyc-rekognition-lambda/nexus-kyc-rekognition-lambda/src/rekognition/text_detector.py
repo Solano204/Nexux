@@ -18,7 +18,7 @@ from typing import Optional
 
 import boto3
 
-from utils.logging_config import log
+from src.utils.logging_config import log
 
 rekognition_client = boto3.client("rekognition")
 
@@ -39,8 +39,11 @@ _PROFESSIONAL_KEYWORDS = frozenset([
     "CEDULA", "PROFESIONAL", "CÉDULA",
 ])
 
-# Matches alphanumeric sequences 8-20 chars (potential ID numbers)
-_ID_NUMBER_RE = re.compile(r"\b[A-Z0-9]{8,20}\b")
+# Matches alphanumeric sequences 8-20 chars (potential ID numbers) -
+# requires at least one digit, or plain uppercase Spanish document-header
+# words (INSTITUTO, NACIONAL, ELECTORAL, CREDENCIAL...) match just as
+# readily as real IDs and crowd them out of the [:5] slice in _parse_response.
+_ID_NUMBER_RE = re.compile(r"\b(?=[A-Z0-9]*\d)[A-Z0-9]{8,20}\b")
 
 
 def detect_text(bucket: str, key: str) -> Optional[dict]:

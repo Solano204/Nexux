@@ -34,4 +34,15 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 
+# Python bytecode cache (Lambda functions)
+__pycache__/
+*.pyc
+
+# Terraform plan output (local artifacts, not source)
+terraform/tfplan-*
+
+# Local build/scratch artifacts
+/terraform.zip
+/README.html
+
 

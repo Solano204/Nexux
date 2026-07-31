@@ -32,7 +32,7 @@ from decimal import Decimal
 
 import boto3
 
-from aggregators import (
+from src.aggregators import (
     daily_stats,
     category_stats,
     hourly_volume,
@@ -40,16 +40,16 @@ from aggregators import (
     user_summary,
     platform_metrics,
 )
-from stream.record_parser import (
+from src.stream.record_parser import (
     parse_new_image,
     parse_old_image,
     parse_sequence_number,
     is_transaction_record,
 )
-from stream.transition_detector import detect_transition
-from utils.decimal_utils import parse_decimal
-from utils.logging_config import log
-from utils.metrics import build_metric
+from src.stream.transition_detector import detect_transition
+from src.utils.decimal_utils import parse_decimal
+from src.utils.logging_config import log
+from src.utils.metrics import build_metric
 
 _cw = boto3.client("cloudwatch",
                    region_name=os.environ.get("AWS_REGION_NAME",

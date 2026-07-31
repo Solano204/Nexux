@@ -6,6 +6,7 @@ import com.nexus.identity.domain.model.*;
 import com.nexus.identity.domain.model.enums.KycDecision;
 import com.nexus.identity.domain.model.enums.UserStatus;
 import com.nexus.identity.infrastructure.ai.KycRejectionExplainer;
+import com.nexus.identity.infrastructure.aws.CognitoUserMirror;
 import com.nexus.identity.infrastructure.aws.S3DocumentUploader;
 import com.nexus.identity.infrastructure.aws.SqsKycPublisher;
 import com.nexus.identity.infrastructure.jwt.JwtIssuer;
@@ -14,11 +15,13 @@ import com.nexus.identity.infrastructure.redis.JwtBlacklistRepository;
 import com.nexus.identity.infrastructure.redis.SessionCacheRepository;
 import com.nexus.identity.web.dto.request.*;
 import com.nexus.identity.web.dto.response.*;
+import io.micrometer.context.ContextSnapshot;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.Tracer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -65,10 +68,12 @@ public class UserCommandService {
     private final SessionCacheRepository sessionCacheRepository;
     private final S3DocumentUploader s3Uploader;
     private final SqsKycPublisher sqsPublisher;
+    private final CognitoUserMirror cognitoMirror;
     private final KycRejectionExplainer rejectionExplainer;
     private final BCryptPasswordEncoder passwordEncoder;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
+    private final Tracer tracer;
 
     /** Redis TTL for password reset tokens (30 minutes). */
     private static final Duration PASSWORD_RESET_TOKEN_TTL =
@@ -95,10 +100,12 @@ public class UserCommandService {
             SessionCacheRepository sessionCacheRepository,
             S3DocumentUploader s3Uploader,
             SqsKycPublisher sqsPublisher,
+            CognitoUserMirror cognitoMirror,
             KycRejectionExplainer rejectionExplainer,
             BCryptPasswordEncoder passwordEncoder,
             ObjectMapper objectMapper,
             ObservationRegistry observationRegistry,
+            Tracer tracer,
             MeterRegistry meterRegistry) {
 
         this.userRepository = userRepository;
@@ -112,10 +119,12 @@ public class UserCommandService {
         this.sessionCacheRepository = sessionCacheRepository;
         this.s3Uploader = s3Uploader;
         this.sqsPublisher = sqsPublisher;
+        this.cognitoMirror = cognitoMirror;
         this.rejectionExplainer = rejectionExplainer;
         this.passwordEncoder = passwordEncoder;
         this.objectMapper = objectMapper;
         this.observationRegistry = observationRegistry;
+        this.tracer = tracer;
 
         registrationSuccessCounter = Counter.builder("identity.registrations")
                 .tag("outcome", "success").register(meterRegistry);
@@ -182,7 +191,11 @@ public class UserCommandService {
                     .build();
 
             user = userRepository.save(user);
+            obs.highCardinalityKeyValue("user.id", user.getUserId().toString());
             savePasswordHistory(user.getUserId(), passwordHash);
+
+            cognitoMirror.mirrorNewUser(user.getUserId(), user.getEmail(),
+                    request.password());
 
             writeOutboxEntry("users.registered", user.getUserId(),
                     "UserRegistered", buildUserRegisteredPayload(user, traceId));
@@ -195,6 +208,7 @@ public class UserCommandService {
                     ));
 
             registrationSuccessCounter.increment();
+            obs.lowCardinalityKeyValue("operation.result", "success");
             obs.event(Observation.Event.of("registration.success"));
             log.info("User registered: userId={} traceId={}",
                     user.getUserId(), traceId);
@@ -206,9 +220,11 @@ public class UserCommandService {
             );
 
         } catch (DuplicateEmailException | DuplicatePhoneException e) {
+            obs.lowCardinalityKeyValue("operation.result", "duplicate");
             obs.event(Observation.Event.of("registration.duplicate"));
             throw e;
         } catch (Exception e) {
+            obs.lowCardinalityKeyValue("operation.result", "failed");
             obs.error(e);
             registrationFailedCounter.increment();
             throw e;
@@ -282,6 +298,7 @@ public class UserCommandService {
             }
 
             User user = userOpt.get();
+            obs.highCardinalityKeyValue("user.id", user.getUserId().toString());
 
             if (user.isAccountLocked()) {
                 loginFailedCounter.increment();
@@ -332,18 +349,37 @@ public class UserCommandService {
                     buildLoginSuccessPayload(user, session, ipAddress));
 
             loginSuccessCounter.increment();
+            obs.lowCardinalityKeyValue("outcome", "success");
             obs.event(Observation.Event.of("login.success"));
             log.info("Login successful: userId={} sessionId={} traceId={}",
                     user.getUserId(), session.getSessionId(), traceId);
+
+            // Best-effort — Postgres above is what actually decided this
+            // login succeeded. A Cognito token just rides along when it
+            // works; its absence never affects the response otherwise.
+            Optional<CognitoUserMirror.CognitoTokens> cognitoTokens =
+                    cognitoMirror.loginWithCognito(email, request.password());
 
             return new LoginResponse(
                     tokenPair.accessToken(),
                     tokenPair.refreshToken(),
                     900L, "Bearer",
                     user.getUserId().toString(),
-                    user.getRoles()
+                    user.getRoles(),
+                    cognitoTokens.map(CognitoUserMirror.CognitoTokens::accessToken).orElse(null),
+                    cognitoTokens.map(CognitoUserMirror.CognitoTokens::idToken).orElse(null),
+                    cognitoTokens.map(CognitoUserMirror.CognitoTokens::refreshToken).orElse(null)
             );
 
+        } catch (Exception e) {
+            // Previously uncaught here - rate-limited/invalid-credentials/
+            // locked/suspended all threw straight past this method without
+            // ever calling obs.error(), so none of login's failure paths
+            // were marked as errors on the span (only the "pending" outcome
+            // tag from .start() ever showed, regardless of what happened).
+            obs.lowCardinalityKeyValue("outcome", "failed");
+            obs.error(e);
+            throw e;
         } finally {
             obs.stop();
         }
@@ -367,6 +403,12 @@ public class UserCommandService {
         blacklistRepository.blacklist(jti, tokenExpiresAt);
         blacklistRepository.publishRevocationEvent(jti);
         sessionCacheRepository.invalidate(userId);
+
+        // Best-effort — the Redis blacklist above is what actually logs
+        // the user out. Cognito-side revocation just rides along when
+        // it's configured and reachable; its absence never blocks logout.
+        userRepository.findByUserIdAndDeletedAtIsNull(userId)
+                .ifPresent(u -> cognitoMirror.revokeSession(u.getEmail()));
 
         writeAuditLog(userId, "LOGOUT", ipAddress,
                 null, null, Map.of("jti", jti));
@@ -393,13 +435,18 @@ public class UserCommandService {
             UUID verificationId = UUID.randomUUID();
 
             String s3Path;
+            // Forked subtasks run on their own virtual threads and don't inherit
+            // the calling thread's ThreadLocal trace context - without this
+            // snapshot, the S3 upload call (and any span it opens) would detach
+            // from the "identity.kyc.initiate" span opened above.
+            ContextSnapshot snapshot = ContextSnapshot.captureAll();
             try (var scope = StructuredTaskScope.open(
                     StructuredTaskScope.Joiner
                             .<Object>awaitAllSuccessfulOrThrow())) {
 
                 // Task A: Redis retry count check (fast ~2ms)
                 StructuredTaskScope.Subtask<Integer> retryCheckTask =
-                        scope.fork(() -> {
+                        scope.fork(snapshot.wrap(() -> {
                             int retries = sessionCacheRepository
                                     .getKycRetryCount(userId);
                             if (retries >= 3) {
@@ -407,12 +454,12 @@ public class UserCommandService {
                                         "KYC attempt limit (3) reached in 30 days.");
                             }
                             return retries;
-                        });
+                        }));
 
                 // Task B: S3 document upload (slow ~500ms–2s)
                 StructuredTaskScope.Subtask<String> uploadTask =
-                        scope.fork(() -> s3Uploader.uploadKycDocument(
-                                userId, verificationId, documentType, document));
+                        scope.fork(snapshot.wrap(() -> s3Uploader.uploadKycDocument(
+                                userId, verificationId, documentType, document)));
 
                 // Blocks; throws FailedException if either task fails
                 scope.join();
@@ -509,7 +556,7 @@ public class UserCommandService {
                 user.approveKyc();
 
                 writeOutboxEntry("identity.verified", userId, "IdentityVerified",
-                        buildIdentityVerifiedPayload(userId, verificationId, traceId));
+                        buildIdentityVerifiedPayload(userId, verificationId, user.getFullName(), traceId));
 
                 writeAuditLog(userId, "KYC_APPROVED", null, null, traceId,
                         Map.of(
@@ -536,7 +583,7 @@ public class UserCommandService {
 
                 writeOutboxEntry("identity.rejected", userId, "IdentityRejected",
                         buildIdentityRejectedPayload(
-                                userId, verificationId, result.failureReasons(),
+                                userId, verificationId, user.getFullName(), result.failureReasons(),
                                 attempts, 3 - attempts, userMessage, permanent, traceId));
 
                 writeAuditLog(userId, "KYC_REJECTED", null, null, traceId,
@@ -553,6 +600,9 @@ public class UserCommandService {
 
             kycRepository.save(verification);
             userRepository.save(user);
+
+            cognitoMirror.syncStatus(userId, user.getEmail(),
+                    user.getStatus().name(), user.isKycVerified());
 
         } finally {
             obs.stop();
@@ -894,8 +944,9 @@ public class UserCommandService {
                                   UUID aggregateId,
                                   String eventType,
                                   ObjectNode payload) {
-        outboxRepository.save(
-                OutboxEntry.of(aggregateType, aggregateId, eventType, payload));
+        OutboxEntry entry = OutboxEntry.of(aggregateType, aggregateId, eventType, payload);
+        entry.attachTraceContext(tracer);
+        outboxRepository.save(entry);
     }
 
     @Transactional
@@ -973,24 +1024,37 @@ public class UserCommandService {
 
     private ObjectNode buildIdentityVerifiedPayload(UUID userId,
                                                     UUID verificationId,
+                                                    String fullName,
                                                     String traceId) {
+        // fullName was missing here - notification-service's
+        // IdentityEventConsumer.processIdentityEvent() reads
+        // event.path("fullName") for this exact event (identity.verified)
+        // and silently got "" for every KYC-approved notification sent,
+        // since ObjectNode.path() on a missing field returns a missing
+        // node, not an error. See CHANGES-BESTPRACTICES/
+        // 08_EVENT_DESIGN_CHANGES.md Section 1.
         return objectMapper.createObjectNode()
                 .put("eventType",      "IdentityVerified")
                 .put("userId",         userId.toString())
                 .put("verificationId", verificationId.toString())
+                .put("fullName",       fullName)
                 .put("verifiedAt",     Instant.now().toString())
                 .put("traceId",        traceId != null ? traceId : "");
     }
 
     private ObjectNode buildIdentityRejectedPayload(
-            UUID userId, UUID verificationId,
+            UUID userId, UUID verificationId, String fullName,
             List<String> reasons, int attempt, int remaining,
             String userMessage, boolean permanent, String traceId) {
 
+        // fullName was missing here too - same bug as
+        // buildIdentityVerifiedPayload above, affecting every
+        // KYC-rejected notification instead.
         var node = objectMapper.createObjectNode()
                 .put("eventType",         "IdentityRejected")
                 .put("userId",            userId.toString())
                 .put("verificationId",    verificationId.toString())
+                .put("fullName",          fullName)
                 .put("attempt",           attempt)
                 .put("attemptsRemaining", remaining)
                 .put("userMessage",       userMessage)

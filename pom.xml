@@ -16,6 +16,7 @@
     </description>
 
     <modules>
+        <module>nexus-tracing-common</module>
         <module>nexus-api-gateway</module>
         <module>nexus-account-service</module>
         <module>nexus-identity-service</module>

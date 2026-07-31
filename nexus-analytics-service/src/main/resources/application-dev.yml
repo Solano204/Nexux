@@ -5,7 +5,8 @@ spring:
 
   threads:
     virtual:
-      enabled: true
+      # disabled: breaks Brave trace-context propagation - see application.yml
+      enabled: false
 
   data:
     elasticsearch:

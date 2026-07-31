@@ -5,10 +5,10 @@
     <springProperty name="environment" source="management.metrics.tags.environment" defaultValue="local"/>
     <springProperty name="lokiUrl"     source="loki.url"                defaultValue="http://nexus-loki:3100/loki/api/v1/push"/>
 
-    <springProfile name="!docker,!production">
+    <springProfile name="!docker,!production,!prod">
         <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
             <encoder>
-                <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level service=${appName} %logger{36} - %msg%n</pattern>
+                <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level traceId=%X{traceId:-} spanId=%X{spanId:-} service=${appName} %logger{36} - %msg%n</pattern>
             </encoder>
         </appender>
         <logger name="com.netflix.eureka" level="INFO"/>
@@ -16,10 +16,12 @@
         <root level="INFO"><appender-ref ref="CONSOLE"/></root>
     </springProfile>
 
-    <springProfile name="docker,production">
+    <springProfile name="docker,production,prod">
         <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
             <encoder class="net.logstash.logback.encoder.LogstashEncoder">
                 <customFields>{"service":"${appName}","version":"${appVersion}","environment":"${environment}"}</customFields>
+                <includeMdcKeyName>traceId</includeMdcKeyName>
+                <includeMdcKeyName>spanId</includeMdcKeyName>
             </encoder>
         </appender>
 

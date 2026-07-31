@@ -16,7 +16,10 @@ spring:
 
   threads:
     virtual:
-      enabled: true
+      # disabled: Brave's ThreadLocal trace context doesn't survive virtual
+      # thread mount/unmount - controller-dispatched spans were silently
+      # never exported to Zipkin (actuator/internal spans traced fine).
+      enabled: false
 
   data:
     elasticsearch:
@@ -30,7 +33,8 @@ spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
     producer:
-      acks: "1"
+      acks: all
+      enable-idempotence: true
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
     streams:
@@ -56,6 +60,10 @@ spring:
 
 server:
   port: 8092
+  tomcat:
+    threads:
+      max: 50
+    accept-count: 25
 
 springdoc:
   api-docs:
@@ -68,6 +76,10 @@ springdoc:
     tagsSorter: alpha
     doc-expansion: none
     display-request-duration: true
+
+nexus:
+  load-shedding:
+    max-in-flight: 40
 
 eureka:
   client:

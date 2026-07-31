@@ -1,6 +1,5 @@
 package com.nexus.fraud.lambda.notification;
 
-import com.amazonaws.xray.AWSXRay;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.fraud.lambda.model.*;
@@ -63,7 +62,6 @@ public class FraudAlertNotifier {
                                    SarConsiderationResult sar,
                                    String alertId) {
 
-        var segment = AWSXRay.beginSubsegment("SNS.ComplianceAlert");
         try {
             ComplianceAlertMessage message = new ComplianceAlertMessage(
                     alertId,
@@ -119,12 +117,9 @@ public class FraudAlertNotifier {
             return response.messageId();
 
         } catch (Exception e) {
-            segment.addException(e);
             log.error("Compliance SNS publish failed: alertId={} {}",
                     alertId, e.getMessage());
             return null;
-        } finally {
-            AWSXRay.endSubsegment();
         }
     }
 
@@ -132,7 +127,6 @@ public class FraudAlertNotifier {
                                     AlertClassification classification,
                                     String alertId) {
 
-        var segment = AWSXRay.beginSubsegment("SNS.SecurityOpsAlert");
         try {
             SecurityOpsMessage message = new SecurityOpsMessage(
                     alertId,
@@ -181,12 +175,9 @@ public class FraudAlertNotifier {
             return response.messageId();
 
         } catch (Exception e) {
-            segment.addException(e);
             log.error("Security ops SNS failed: alertId={} {}",
                     alertId, e.getMessage());
             return null;
-        } finally {
-            AWSXRay.endSubsegment();
         }
     }
 

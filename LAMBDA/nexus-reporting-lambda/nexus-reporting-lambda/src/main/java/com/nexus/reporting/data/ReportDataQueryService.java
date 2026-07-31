@@ -175,24 +175,39 @@ public class ReportDataQueryService {
         return result;
     }
 
+    // Both hourly_volume and platform_metrics write to NUM_SHARDS items
+    // (PK="PLATFORM#0".."PLATFORM#9") instead of a single fixed PK="PLATFORM" -
+    // see the aggregators' src/aggregators/hourly_volume.py and
+    // platform_metrics.py (06_NOSQL_MODELING_CHANGES.md Section 5: a single
+    // fixed PK put 100% of platform-wide write traffic on one partition).
+    // Readers here MUST fan out across all shards and sum, or every read
+    // after that change would silently return zero (querying a PK that no
+    // longer receives writes).
+    private static final int NUM_SHARDS = 10;
+
     private List<HourlyVolumeRecord> queryHourlyVolumes(LocalDate date) {
         List<HourlyVolumeRecord> volumes = new ArrayList<>();
         for (int h = 0; h < 24; h++) {
             String hourKey = String.format("%sT%02d", date, h);
+            String sk = "HOUR#" + hourKey;
+            BigDecimal totalVolume = BigDecimal.ZERO;
+            int totalCount = 0;
             try {
-                GetItemResponse resp = dynamo.getItem(GetItemRequest.builder()
-                    .tableName(hourlyVolumeTable)
-                    .key(Map.of(
-                        "PK", AttributeValue.fromS("PLATFORM"),
-                        "SK", AttributeValue.fromS("HOUR#" + hourKey)))
-                    .build());
-                if (resp.hasItem()) {
-                    volumes.add(new HourlyVolumeRecord(h,
-                        num(resp.item(), "totalVolume"),
-                        numInt(resp.item(), "transactionCount")));
-                } else {
-                    volumes.add(HourlyVolumeRecord.zero(h));
+                List<Map<String, AttributeValue>> keys = new ArrayList<>();
+                for (int s = 0; s < NUM_SHARDS; s++) {
+                    keys.add(Map.of(
+                        "PK", AttributeValue.fromS("PLATFORM#" + s),
+                        "SK", AttributeValue.fromS(sk)));
                 }
+                BatchGetItemResponse resp = dynamo.batchGetItem(BatchGetItemRequest.builder()
+                    .requestItems(Map.of(hourlyVolumeTable,
+                        KeysAndAttributes.builder().keys(keys).build()))
+                    .build());
+                for (var item : resp.responses().getOrDefault(hourlyVolumeTable, List.of())) {
+                    totalVolume = totalVolume.add(num(item, "totalVolume"));
+                    totalCount += numInt(item, "transactionCount");
+                }
+                volumes.add(new HourlyVolumeRecord(h, totalVolume, totalCount));
             } catch (Exception e) {
                 volumes.add(HourlyVolumeRecord.zero(h));
             }
@@ -202,44 +217,68 @@ public class ReportDataQueryService {
 
     private PlatformMetrics queryPlatformMetrics() {
         try {
-            GetItemResponse resp = dynamo.getItem(GetItemRequest.builder()
-                .tableName(platformMetricsTable)
-                .key(Map.of(
-                    "PK", AttributeValue.fromS("PLATFORM"),
-                    "SK", AttributeValue.fromS("REALTIME")))
-                .build());
-            if (resp.hasItem()) {
-                var i = resp.item();
-                int transactionsToday = numInt(i, "transactionsToday");
-                BigDecimal volumeToday = num(i, "volumeToday");
-                int activeUsersToday = numInt(i, "activeUsersToday");
-                String updatedAt = str(i, "updatedAt");
-
-                // peakTransactionsPerMinute: fall back to last-minute counter
-                // (accurate peak tracking requires a windowing process)
-                int peak = numInt(i, "peakTransactionsPerMinute");
-                if (peak == 0) peak = numInt(i, "transactionsLastMinute");
-
-                // avgFraudScore: aggregator accumulates sum + count; compute here
-                BigDecimal totalFraudScoreSum = num(i, "totalFraudScoreSum");
-                int fraudScoredCount = numInt(i, "fraudScoredCount");
-                BigDecimal avgFraudScore = fraudScoredCount > 0
-                    ? totalFraudScoreSum.divide(
-                        BigDecimal.valueOf(fraudScoredCount), 4,
-                        java.math.RoundingMode.HALF_UP)
-                    : BigDecimal.ZERO;
-
-                // fraudBlockRateToday: failedTransactionsToday / transactionsToday
-                int failedToday = numInt(i, "failedTransactionsToday");
-                BigDecimal fraudBlockRateToday = transactionsToday > 0
-                    ? BigDecimal.valueOf(failedToday).divide(
-                        BigDecimal.valueOf(transactionsToday), 4,
-                        java.math.RoundingMode.HALF_UP)
-                    : BigDecimal.ZERO;
-
-                return new PlatformMetrics(transactionsToday, volumeToday, peak,
-                    avgFraudScore, fraudBlockRateToday, activeUsersToday, updatedAt);
+            List<Map<String, AttributeValue>> keys = new ArrayList<>();
+            for (int s = 0; s < NUM_SHARDS; s++) {
+                keys.add(Map.of(
+                    "PK", AttributeValue.fromS("PLATFORM#" + s),
+                    "SK", AttributeValue.fromS("REALTIME")));
             }
+            BatchGetItemResponse resp = dynamo.batchGetItem(BatchGetItemRequest.builder()
+                .requestItems(Map.of(platformMetricsTable,
+                    KeysAndAttributes.builder().keys(keys).build()))
+                .build());
+            List<Map<String, AttributeValue>> items =
+                resp.responses().getOrDefault(platformMetricsTable, List.of());
+            if (items.isEmpty()) {
+                return PlatformMetrics.empty();
+            }
+
+            int transactionsToday = 0;
+            BigDecimal volumeToday = BigDecimal.ZERO;
+            int activeUsersToday = 0;
+            int peak = 0;
+            BigDecimal totalFraudScoreSum = BigDecimal.ZERO;
+            int fraudScoredCount = 0;
+            int failedToday = 0;
+            String updatedAt = "";
+
+            for (var i : items) {
+                transactionsToday += numInt(i, "transactionsToday");
+                volumeToday = volumeToday.add(num(i, "volumeToday"));
+                activeUsersToday += numInt(i, "activeUsersToday");
+                // peakTransactionsPerMinute: fall back to last-minute counter
+                // per shard, keep the max across shards (a per-minute peak
+                // is a max, not a sum, even across shards)
+                int shardPeak = numInt(i, "peakTransactionsPerMinute");
+                if (shardPeak == 0) shardPeak = numInt(i, "transactionsLastMinute");
+                peak = Math.max(peak, shardPeak);
+                totalFraudScoreSum = totalFraudScoreSum.add(num(i, "totalFraudScoreSum"));
+                fraudScoredCount += numInt(i, "fraudScoredCount");
+                failedToday += numInt(i, "failedTransactionsToday");
+                String shardUpdatedAt = str(i, "updatedAt");
+                if (shardUpdatedAt != null && shardUpdatedAt.compareTo(updatedAt) > 0) {
+                    updatedAt = shardUpdatedAt;
+                }
+            }
+
+            // avgFraudScore/fraudBlockRateToday: recomputed from the SUMMED
+            // numerator/denominator across shards, not averaged per-shard-
+            // then-averaged-again (that would weight shards unequally
+            // whenever they don't have identical transaction counts).
+            BigDecimal avgFraudScore = fraudScoredCount > 0
+                ? totalFraudScoreSum.divide(
+                    BigDecimal.valueOf(fraudScoredCount), 4,
+                    java.math.RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+
+            BigDecimal fraudBlockRateToday = transactionsToday > 0
+                ? BigDecimal.valueOf(failedToday).divide(
+                    BigDecimal.valueOf(transactionsToday), 4,
+                    java.math.RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+
+            return new PlatformMetrics(transactionsToday, volumeToday, peak,
+                avgFraudScore, fraudBlockRateToday, activeUsersToday, updatedAt);
         } catch (Exception e) {
             log.warn("Failed to query platform metrics: {}", e.getMessage());
         }

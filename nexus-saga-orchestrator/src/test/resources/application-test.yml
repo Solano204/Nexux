@@ -1,0 +1,50 @@
+# ══════════════════════════════════════════════════════════════
+# nexus-saga-orchestrator — TEST profile
+# Used by: @SpringBootTest integration tests
+#
+# Didn't exist at all before this session (no src/test/resources directory)
+# - unlike fraud/transaction/account/ledger, this service never had even a
+# broken attempt at one. See 04_TESTING_STRATEGY_CHANGES.md Section 5.
+#
+# No datasource/kafka properties here on purpose: integration tests get
+# those from Testcontainers via @ServiceConnection (see
+# integration/support/AbstractIntegrationTest).
+# ══════════════════════════════════════════════════════════════
+
+spring:
+  cloud:
+    config:
+      enabled: false
+      fail-fast: false
+    bus:
+      enabled: false
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+  ai:
+    openai:
+      api-key: test   # SagaFailureExplainerService's ChatClient - not exercised
+                       # by these tests (no failure path calls explain() with a
+                       # real OpenAI-backed ChatClient in scope here), but Spring
+                       # AI's autoconfiguration validates this at context startup.
+
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false
+
+management:
+  tracing:
+    enabled: false    # No Zipkin in tests
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.nexus.saga: DEBUG

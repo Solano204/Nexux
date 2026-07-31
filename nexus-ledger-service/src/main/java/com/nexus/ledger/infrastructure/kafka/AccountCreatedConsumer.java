@@ -4,8 +4,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.ledger.domain.model.ChartOfAccount;
 import com.nexus.ledger.infrastructure.persistence.ChartOfAccountRepository;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Headers;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -28,6 +34,8 @@ public class AccountCreatedConsumer {
 
     private final ChartOfAccountRepository coaRepository;
     private final ObjectMapper objectMapper;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     @KafkaListener(
             topics = "accounts.created",
@@ -35,7 +43,13 @@ public class AccountCreatedConsumer {
             containerFactory = "kafkaListenerContainerFactory"
     )
     @Transactional
-    public void onAccountCreated(String message, Acknowledgment ack) {
+    public void onAccountCreated(ConsumerRecord<String, String> record,
+                                 Acknowledgment ack) {
+        String message = record.value();
+        Headers headers = record.headers();
+        Span span = KafkaTracePropagation.extractAndStartSpan(
+                tracer, propagator, record, "ledger-service-account-events", "accounts.created receive");
+        try (Tracer.SpanInScope ignoredScope = tracer.withSpan(span)) {
         try {
             JsonNode event = objectMapper.readTree(message);
 
@@ -79,6 +93,9 @@ public class AccountCreatedConsumer {
         } catch (Exception e) {
             log.error("Failed to process AccountCreatedEvent: {}", e.getMessage(), e);
             // Do not ack — Kafka will redeliver
+        }
+        } finally {
+            span.end();
         }
     }
 

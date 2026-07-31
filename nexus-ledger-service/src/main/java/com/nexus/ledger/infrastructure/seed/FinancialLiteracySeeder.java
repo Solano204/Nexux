@@ -120,10 +120,10 @@ public class FinancialLiteracySeeder implements ApplicationRunner {
         );
     }
 
-    private Document doc(String id, String title, String content) {
+    private Document doc(String code, String title, String content) {
         return Document.builder()
-                .id(id)
                 .text(title + "\n\n" + content)
+                .metadata("code", code)
                 .metadata("title", title)
                 .metadata("language", "es")
                 .metadata("category", "financial_literacy")

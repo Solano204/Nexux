@@ -1,0 +1,159 @@
+{
+  "id": null,
+  "uid": "nexus-resilience-status",
+  "title": "Nexus Platform - Resilience Status",
+  "description": "Guía de resiliencia, Fase 10 — estado de la pila completa (Timeout/Retry/CircuitBreaker/Bulkhead/LoadShedding/GracefulDegradation) de un vistazo. Circuit breaker/retry/bulkhead metric names son los binders estándar de resilience4j-spring-boot3 (TaggedCircuitBreakerMetrics/TaggedRetryMetrics/TaggedThreadPoolBulkheadMetrics) — no verificados contra un scrape en vivo (sin stack corriendo). loadshedding_rejections_total, gateway_global_rate_limit_rejections_total y feature_flag_disabled_total sí están confirmados desde el código (escritos en esta misma sesión, Fases 6/6/7/10).",
+  "tags": ["nexus", "resilience"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Circuit Breakers — por dependencia",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Breakers actualmente OPEN",
+      "description": "Vacío = todo cerrado. Cualquier fila acá es un CircuitBreakerOpen activo (alert_rules.yml).",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "resilience4j_circuitbreaker_state{state=\"open\"} == 1", "refId": "A", "format": "table", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "displayMode": "color-background" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }] } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Failure rate por breaker (todas las dependencias)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 7 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum by (service, name) (rate(resilience4j_circuitbreaker_calls_total{kind=\"failed\"}[5m])) / sum by (service, name) (rate(resilience4j_circuitbreaker_calls_total[5m]))", "refId": "A", "legendFormat": "{{service}} -> {{name}}" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.3 }, { "color": "red", "value": 0.5 }] } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 4,
+      "type": "row",
+      "title": "Retry",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "% de llamadas reintentadas que igual terminan fallando",
+      "description": "Fase 2: alto y sostenido acá significa que retry no está ayudando — el problema es un fallo sostenido, no transitorio. Ver el breaker correspondiente.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum by (service, name) (rate(resilience4j_retry_calls_total{kind=\"failed_with_retry\"}[5m])) / sum by (service, name) (rate(resilience4j_retry_calls_total[5m]))", "refId": "A", "legendFormat": "{{service}} -> {{name}}" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.3 }] } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 6,
+      "type": "row",
+      "title": "Bulkhead",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Threads disponibles por ThreadPoolBulkhead",
+      "description": "Fase 4 — ai-kyc-service.kyc-verification, ai-assistant-service.{account,transaction,fraud}-service-calls. Cayendo a 0 sostenido = saturado, las siguientes llamadas van a cola o rechazo.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 25 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "resilience4j_thread_pool_bulkhead_available_thread_count", "refId": "A", "legendFormat": "{{service}} -> {{name}}" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Load Shedding y Backpressure",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Rechazos por LoadSheddingFilter (Fase 6, por servicio)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum by (service) (rate(loadshedding_rejections_total[5m]))", "refId": "A", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Rechazos del gateway global, por motivo (Fase 6)",
+      "description": "reason=global_ceiling: techo de 5000 req/s. reason=tier_shed_early: Nivel 3/4 cortado para proteger Nivel 1/2 antes de llegar al techo.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum by (reason) (rate(gateway_global_rate_limit_rejections_total[5m]))", "refId": "A", "legendFormat": "{{reason}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Graceful Degradation",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Features desactivadas en las últimas 24h (Fase 7)",
+      "description": "Cero es lo esperado. Cualquier valor acá dispara FeatureFlagDisabled — chequear GET /internal/v1/feature-flags/{feature} por el motivo antes de reactivar a mano.",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 43 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum by (feature) (increase(feature_flag_disabled_total[24h]))", "refId": "A", "legendFormat": "{{feature}}" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } },
+        "overrides": []
+      },
+      "options": { "textMode": "value_and_name", "colorMode": "background" }
+    }
+  ]
+}

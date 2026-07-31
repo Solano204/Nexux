@@ -26,7 +26,9 @@ import java.util.UUID;
  * Account Query Service — CQRS Read Side.
  *
  * All methods are read-only (@Transactional readOnly=true).
- * Redis cache checked first for balance, falls back to PostgreSQL.
+ * Balance reads are Redis-only (see {@link #getBalanceCached}) — never
+ * PostgreSQL; the cache is write-through, warmed by
+ * AccountCommandService on every balance-changing event.
  * Analytics reads from MongoDB (pre-aggregated for fast response).
  */
 @Slf4j
@@ -61,22 +63,8 @@ public class AccountQueryService {
 
     public BalanceCacheRepository.BalanceCacheEntry getBalanceCached(
             UUID accountId, UUID requestingUserId) {
-        Account account = verifyOwnership(accountId, requestingUserId);
-
-        BalanceCacheRepository.BalanceCacheEntry cached =
-                balanceCacheRepository.getBalance(accountId);
-        if (cached != null) return cached;
-
-        var entry = new BalanceCacheRepository.BalanceCacheEntry(
-                account.getAvailableBalance(),
-                account.getReservedAmount(),
-                account.getTotalBalance(),
-                account.getCurrency(),
-                account.getStatus().name(),
-                null
-        );
-        balanceCacheRepository.cacheBalance(accountId, entry);
-        return entry;
+        verifyOwnership(accountId, requestingUserId);
+        return balanceCacheRepository.getBalance(accountId);
     }
 
     public AccountAnalyticsDocument getAnalytics(UUID accountId, UUID requestingUserId) {

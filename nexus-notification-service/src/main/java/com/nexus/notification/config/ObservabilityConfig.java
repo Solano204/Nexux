@@ -1,9 +1,15 @@
 package com.nexus.notification.config;
 
+import com.nexus.tracing.observation.ErrorTaggingObservationHandler;
+import com.nexus.tracing.sampling.ActuatorObservationPredicate;
+import io.micrometer.context.ContextExecutorService;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.config.MeterFilter;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
+import io.micrometer.observation.ObservationPredicate;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.observation.aop.ObservedAspect;
 import org.springframework.beans.factory.annotation.Value;
@@ -13,6 +19,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -75,11 +82,36 @@ public class ObservabilityConfig {
     }
 
     /**
+     * Platform-wide: adds a consistent error.type tag to every Observation
+     * whenever .error(ex) is called - see ErrorTaggingObservationHandler.
+     */
+    @Bean
+    public ObservationHandler<Observation.Context> errorTaggingObservationHandler() {
+        return new ErrorTaggingObservationHandler();
+    }
+
+    /**
+     * Excludes /actuator/** (Docker healthcheck noise). See
+     * ActuatorObservationPredicate for why this is an ObservationPredicate,
+     * not a SamplerFunction<HttpRequest> (the latter is never consulted by
+     * Spring Boot 3.x's HTTP server tracing).
+     */
+    @Bean
+    public ObservationPredicate excludeActuatorObservations() {
+        return new ActuatorObservationPredicate(List.of("/actuator"));
+    }
+
+    /**
      * Virtual thread executor for parallel channel delivery.
      * Used by NotificationProcessingService for concurrent data gathering.
+     *
+     * ContextExecutorService.wrap: a raw virtual-thread executor doesn't inherit
+     * the caller's ThreadLocal trace context - NotificationProcessingService opens
+     * its own local executor for this today (see that class), but this bean is
+     * exposed for the same purpose and must not regress the fix if it's adopted.
      */
     @Bean("virtualThreadExecutor")
     public ExecutorService virtualThreadExecutor() {
-        return Executors.newVirtualThreadPerTaskExecutor();
+        return ContextExecutorService.wrap(Executors.newVirtualThreadPerTaskExecutor());
     }
 }

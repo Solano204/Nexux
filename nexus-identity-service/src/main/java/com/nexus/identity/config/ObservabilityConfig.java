@@ -1,15 +1,22 @@
 package com.nexus.identity.config;
 
+import com.nexus.tracing.observation.ErrorTaggingObservationHandler;
+import com.nexus.tracing.sampling.ActuatorObservationPredicate;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.config.MeterFilter;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
+import io.micrometer.observation.ObservationPredicate;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.observation.aop.ObservedAspect;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.actuate.autoconfigure.metrics.MeterRegistryCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
 
 /**
  * Observability Configuration — Micrometer + Zipkin for identity service.
@@ -64,5 +71,31 @@ public class ObservabilityConfig {
     public ObservedAspect observedAspect(
             ObservationRegistry observationRegistry) {
         return new ObservedAspect(observationRegistry);
+    }
+
+    /**
+     * Platform-wide: adds a consistent error.type tag to every Observation
+     * (HTTP, @Observed, or manually-created) whenever .error(ex) is called -
+     * see ErrorTaggingObservationHandler for why this wasn't already uniform.
+     * Spring Boot's ObservationAutoConfiguration auto-collects every
+     * ObservationHandler bean via ObjectProvider and registers it on the
+     * ObservationRegistry - no wrapper/customizer bean needed.
+     */
+    @Bean
+    public ObservationHandler<Observation.Context> errorTaggingObservationHandler() {
+        return new ErrorTaggingObservationHandler();
+    }
+
+    /**
+     * Excludes /actuator/** from tracing (pure Docker healthcheck noise -
+     * every 10-15s per instance, zero diagnostic value). register/login are
+     * already captured since global probability is 1.0 - see
+     * ActuatorObservationPredicate for why this is an ObservationPredicate,
+     * not a SamplerFunction<HttpRequest> (the latter is never consulted by
+     * Spring Boot 3.x's HTTP server tracing).
+     */
+    @Bean
+    public ObservationPredicate excludeActuatorObservations() {
+        return new ActuatorObservationPredicate(List.of("/actuator"));
     }
 }

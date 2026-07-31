@@ -7,12 +7,19 @@ import com.nexus.ledger.domain.model.*;
 import com.nexus.ledger.domain.model.enums.*;
 import com.nexus.ledger.infrastructure.mongodb.*;
 import com.nexus.ledger.infrastructure.persistence.*;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
 import io.micrometer.core.instrument.*;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -51,12 +58,13 @@ public class LedgerCommandService {
     private final PostingRepository postingRepository;
     private final ChartOfAccountRepository coaRepository;
     private final OutboxRepository outboxRepository;
-    private final AccountLedgerSummaryRepository summaryRepository;
     private final PostingDocumentRepository postingDocRepository;
+    private final MongoTemplate mongoTemplate;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
     private final Tracer tracer;
+    private final Propagator propagator;
 
     // Metrics
     private final Timer postingTimer;
@@ -70,24 +78,26 @@ public class LedgerCommandService {
             PostingRepository postingRepository,
             ChartOfAccountRepository coaRepository,
             OutboxRepository outboxRepository,
-            AccountLedgerSummaryRepository summaryRepository,
             PostingDocumentRepository postingDocRepository,
+            MongoTemplate mongoTemplate,
             KafkaTemplate<String, String> kafkaTemplate,
             ObjectMapper objectMapper,
             ObservationRegistry observationRegistry,
             Tracer tracer,
+            Propagator propagator,
             MeterRegistry meterRegistry) {
 
         this.entryRepository = entryRepository;
         this.postingRepository = postingRepository;
         this.coaRepository = coaRepository;
         this.outboxRepository = outboxRepository;
-        this.summaryRepository = summaryRepository;
         this.postingDocRepository = postingDocRepository;
+        this.mongoTemplate = mongoTemplate;
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
         this.observationRegistry = observationRegistry;
         this.tracer = tracer;
+        this.propagator = propagator;
 
         this.postingTimer = Timer.builder("ledger.posting.duration.seconds")
                 .description("Ledger posting end-to-end duration")
@@ -146,6 +156,7 @@ public class LedgerCommandService {
                 idempotentReplayCounter.increment();
                 obs.event(Observation.Event.of(
                         "posting.idempotent.replay"));
+                obs.lowCardinalityKeyValue("nexus.idempotency.duplicate", "true");
                 log.info("Idempotent posting replay: txnId={}",
                         command.transactionId());
 
@@ -300,11 +311,13 @@ public class LedgerCommandService {
             postingRepository.save(posting);
 
             // ── Step 8: Outbox entry ───────────────────────
-            outboxRepository.save(OutboxEntry.of(
+            OutboxEntry postedEntry = OutboxEntry.of(
                     "ledger.posted", postingId,
                     "LedgerPosted",
                     buildLedgerPostedPayload(
-                            posting, debitEntry, creditEntry)));
+                            posting, debitEntry, creditEntry));
+            postedEntry.attachTraceContext(tracer);
+            outboxRepository.save(postedEntry);
 
             postingSuccessCounter.increment();
             obs.event(Observation.Event.of("posting.success"));
@@ -451,7 +464,7 @@ public class LedgerCommandService {
         postingRepository.save(original);
 
         // Write outbox event
-        outboxRepository.save(OutboxEntry.of(
+        OutboxEntry reversedEntry = OutboxEntry.of(
                 "ledger.reversed", originalPostingId,
                 "LedgerReversed",
                 objectMapper.createObjectNode()
@@ -461,7 +474,9 @@ public class LedgerCommandService {
                         .put("amount", original.getTotalDebit().toPlainString())
                         .put("reason", reason)
                         .put("reversedAt", Instant.now().toString())
-        ));
+        );
+        reversedEntry.attachTraceContext(tracer);
+        outboxRepository.save(reversedEntry);
 
         log.info("Ledger reversed: originalPostingId={} " +
                         "reversalPostingId={}",
@@ -492,8 +507,10 @@ public class LedgerCommandService {
                     "traceId", traceId
             );
 
-            kafkaTemplate.send("saga.replies", sagaId,
-                    objectMapper.writeValueAsString(reply));
+            ProducerRecord<String, String> replyRecord = new ProducerRecord<>(
+                    "saga.replies", sagaId, objectMapper.writeValueAsString(reply));
+            KafkaTracePropagation.injectTraceHeaders(tracer, propagator, replyRecord);
+            kafkaTemplate.send(replyRecord);
 
         } catch (Exception e) {
             log.error("Failed to publish LedgerPostedReply: {}",
@@ -553,30 +570,32 @@ public class LedgerCommandService {
                 .put("postedAt", Instant.now().toString());
     }
 
+    /**
+     * Applies a commutative delta ($inc) instead of read-modify-write.
+     * Two concurrent postings for the same account (e.g. two unrelated
+     * transfers touching the same account within the same async window)
+     * previously raced: both read the same currentBalance, both wrote
+     * their own new value, and one delta was silently lost — this
+     * document has no @Version and isn't behind the PostgreSQL row lock
+     * that protects Account.availableBalance. $inc is atomic at the
+     * MongoDB storage layer, so there's no read-then-write gap for a
+     * second update to land in.
+     */
     private void updateAccountSummary(UUID accountId, UUID postingId,
                                       BigDecimal amount,
                                       EntryType entryType,
                                       String description) {
-        var summary = summaryRepository
-                .findByAccountId(accountId.toString())
-                .orElse(new AccountLedgerSummaryDocument());
+        BigDecimal delta = entryType == EntryType.CREDIT
+                ? amount : amount.negate();
 
-        summary.setAccountId(accountId.toString());
-        summary.setLastPostingAt(Instant.now());
+        Query query = Query.query(
+                Criteria.where("_id").is(accountId.toString()));
+        Update update = new Update()
+                .inc("currentBalance", delta)
+                .set("lastPostingAt", Instant.now());
 
-        // Update current balance
-        if (summary.getCurrentBalance() == null) {
-            summary.setCurrentBalance(
-                    entryType == EntryType.CREDIT ? amount :
-                            BigDecimal.ZERO.subtract(amount));
-        } else {
-            summary.setCurrentBalance(
-                    entryType == EntryType.CREDIT
-                            ? summary.getCurrentBalance().add(amount)
-                            : summary.getCurrentBalance().subtract(amount));
-        }
-
-        summaryRepository.save(summary);
+        mongoTemplate.upsert(query, update,
+                AccountLedgerSummaryDocument.class);
     }
 
     private void createPostingDocument(PostingResult result,

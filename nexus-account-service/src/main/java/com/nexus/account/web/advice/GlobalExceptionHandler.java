@@ -252,6 +252,27 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(problem);
     }
 
+    // Real bug found while re-enabling AccountServiceContractTest
+    // (TESTING_STRATEGY.md Batch 1): AccountNotFoundException had no
+    // handler here at all, so every "account doesn't exist" lookup fell
+    // through to the generic Exception.class handler below and returned
+    // 500 INTERNAL_ERROR instead of 404 - wrong HTTP semantics, and it
+    // logged every one of these routine, expected lookups as an
+    // "Unhandled exception" error alongside real crashes.
+    @ExceptionHandler(AccountNotFoundException.class)
+    public ResponseEntity<ProblemDetail> handleAccountNotFound(
+            AccountNotFoundException ex) {
+        log.info("Account not found: {}", ex.getMessage());
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.NOT_FOUND, ex.getMessage());
+        problem.setTitle("Account Not Found");
+        problem.setType(URI.create("https://nexus.com/errors/account-not-found"));
+        problem.setProperty("errorCode", "ACCOUNT_NOT_FOUND");
+        problem.setProperty("timestamp", Instant.now().toString());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(problem);
+    }
+
     // ══════════════════════════════════════════════════════════
     // VALIDATION & GENERAL EXCEPTIONS
     // ══════════════════════════════════════════════════════════

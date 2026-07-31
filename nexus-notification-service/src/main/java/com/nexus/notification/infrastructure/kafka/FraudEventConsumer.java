@@ -7,9 +7,15 @@ import com.nexus.notification.application.NotificationProcessingService;
 import com.nexus.notification.domain.model.UserNotificationPreferences;
 import com.nexus.notification.domain.model.enums.NotificationEventType;
 import com.nexus.notification.infrastructure.mongodb.PreferencesRepository;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
 import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Headers;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
@@ -37,6 +43,8 @@ public class FraudEventConsumer {
     private final ObservationRegistry observationRegistry;
     private final SnsClient snsClient;
     private final PreferencesRepository preferencesRepository;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     @Value("${nexus.aws.notification-dispatch-topic-arn:}")
     private String notificationDispatchTopicArn;
@@ -46,7 +54,13 @@ public class FraudEventConsumer {
             groupId = "notification-service-fraud",
             containerFactory = "kafkaListenerContainerFactory"
     )
-    public void consumeFraudFlagged(String message, Acknowledgment ack) {
+    public void consumeFraudFlagged(ConsumerRecord<String, String> record,
+                                    Acknowledgment ack) {
+        String message = record.value();
+        Headers headers = record.headers();
+        Span span = KafkaTracePropagation.extractAndStartSpan(
+                tracer, propagator, record, "notification-service-fraud", "fraud.flagged receive");
+        try (Tracer.SpanInScope ignoredScope = tracer.withSpan(span)) {
         try {
             JsonNode event = objectMapper.readTree(message);
             String userId = event.path("userId").asText();
@@ -77,6 +91,9 @@ public class FraudEventConsumer {
 
         } catch (Exception e) {
             log.error("Failed to process fraud.flagged: {}", e.getMessage(), e);
+        }
+        } finally {
+            span.end();
         }
     }
 

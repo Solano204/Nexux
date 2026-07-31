@@ -4,7 +4,6 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.SQSBatchResponse;
 import com.amazonaws.services.lambda.runtime.events.SQSEvent;
-import com.amazonaws.xray.AWSXRay;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.nexus.payment.lambda.bridge.KafkaBridgeClient;
@@ -122,8 +121,6 @@ public class PaymentProcessorHandler
         for (SQSEvent.SQSMessage message : event.getRecords()) {
 
             String messageId = message.getMessageId();
-            var segment = AWSXRay.beginSubsegment(
-                    "ProcessPayment." + messageId.substring(0, 8));
 
             try {
                 PaymentProcessingResult result =
@@ -170,23 +167,15 @@ public class PaymentProcessorHandler
                     }
                 }
 
-                segment.putMetadata("status",
-                        result.status().name());
-                segment.putMetadata("networkTxnId",
-                        result.networkTransactionId());
-
             } catch (Exception e) {
                 // Unhandled exception — retryable
                 log.error("Unhandled exception for messageId={}: {}",
                         messageId, e.getMessage(), e);
-                segment.addException(e);
                 failures.add(SQSBatchResponse.BatchItemFailure
                         .builder()
                         .withItemIdentifier(messageId)
                         .build());
                 failed++;
-            } finally {
-                AWSXRay.endSubsegment();
             }
         }
 

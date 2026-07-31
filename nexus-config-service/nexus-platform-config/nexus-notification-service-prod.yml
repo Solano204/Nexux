@@ -21,4 +21,4 @@ nexus:
     region: ${AWS_REGION:us-east-1}
     access-key-id: ${AWS_ACCESS_KEY_ID:}
     secret-access-key: ${AWS_SECRET_ACCESS_KEY:}
-    notification-dispatch-topic-arn: ${NOTIFICATION_DISPATCH_TOPIC_ARN:}
+    notification-dispatch-topic-arn: ${SNS_NOTIFICATION_DISPATCH_TOPIC_ARN:}

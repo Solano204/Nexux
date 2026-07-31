@@ -6,6 +6,7 @@ import com.nexus.notification.domain.model.*;
 import com.nexus.notification.domain.model.enums.*;
 import com.nexus.notification.infrastructure.mongodb.*;
 import com.nexus.notification.infrastructure.redis.NotificationRedisRepository;
+import io.micrometer.context.ContextExecutorService;
 import io.micrometer.core.instrument.*;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
@@ -98,9 +99,18 @@ public class NotificationProcessingService {
                            String traceId,
                            String sourceTopic) {
 
+        // nexus.idempotency.duplicate set unconditionally (default "false",
+        // overridden below on the dedup-skip path) - Prometheus requires
+        // every registration of the same meter name to carry the same set
+        // of tag KEYS, not just matching values. Setting this tag only on
+        // the duplicate branch meant the first path to register "won" and
+        // every subsequent registration from the other path was rejected
+        // ("registration has failed... Note that subsequent logs will be
+        // logged at debug level" - confirmed live via docker logs).
         Observation obs = Observation.createNotStarted(
                         "notification.process", observationRegistry)
                 .lowCardinalityKeyValue("eventType", eventType.name())
+                .lowCardinalityKeyValue("nexus.idempotency.duplicate", "false")
                 .start();
 
         try (Observation.Scope scope = obs.openScope()) {
@@ -111,6 +121,7 @@ public class NotificationProcessingService {
 
             if (!isNew) {
                 dedupSkippedCounter.increment();
+                obs.lowCardinalityKeyValue("nexus.idempotency.duplicate", "true");
                 log.debug("Dedup skip: userId={} eventId={}",
                         userId, eventId);
                 return false;
@@ -131,9 +142,13 @@ public class NotificationProcessingService {
             }
 
             // ── Step 3: Concurrent data gathering (Virtual Threads) ─
+            // Wrapped with ContextExecutorService: a raw virtual-thread executor
+            // doesn't inherit this thread's ThreadLocal trace context, so
+            // loadPreferences() below would otherwise run as a disconnected
+            // root span instead of a child of the enclosing processing span.
             UserNotificationPreferences prefs;
-            try (ExecutorService executor =
-                         Executors.newVirtualThreadPerTaskExecutor()) {
+            try (ExecutorService executor = ContextExecutorService.wrap(
+                         Executors.newVirtualThreadPerTaskExecutor())) {
 
                 Future<UserNotificationPreferences> prefsFuture =
                         executor.submit(() -> loadPreferences(userId));

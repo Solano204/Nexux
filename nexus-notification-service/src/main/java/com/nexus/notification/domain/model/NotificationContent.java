@@ -37,14 +37,19 @@ public record NotificationContent(
         return tone == NotificationTone.URGENT;
     }
 
+    private static final String SMS_PREFIX = "NEXUS: ";
+
     /** SMS-safe body — truncated at 157 chars + "..." if needed */
     public String smsBody() {
-        String body = "NEXUS: " + (shortBody != null ? shortBody : title);
+        String body = SMS_PREFIX + (shortBody != null ? shortBody : title);
         if (body.length() > 157) {
-            // Truncate at last word boundary
+            // Truncate at last word boundary, but never into/before the
+            // "NEXUS: " prefix - a shortBody with no spaces at all (one
+            // long word) would otherwise match the prefix's own space and
+            // collapse the whole message to "NEXUS:...".
             body = body.substring(0, 157);
             int lastSpace = body.lastIndexOf(' ');
-            if (lastSpace > 0) body = body.substring(0, lastSpace);
+            if (lastSpace >= SMS_PREFIX.length()) body = body.substring(0, lastSpace);
             body = body + "...";
         }
         return body;

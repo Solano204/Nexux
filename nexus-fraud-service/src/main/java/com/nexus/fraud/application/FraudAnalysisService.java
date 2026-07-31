@@ -10,10 +10,15 @@ import com.nexus.fraud.infrastructure.persistence.FraudDecisionRepository;
 import com.nexus.fraud.infrastructure.persistence.OutboxRepository;
 import com.nexus.fraud.infrastructure.redis.FraudRedisRepository;
 import com.nexus.fraud.web.dto.FraudAnalysisRequest;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
@@ -47,6 +52,8 @@ public class FraudAnalysisService {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
+    private final Tracer tracer;
+    private final Propagator propagator;
     private final SqsClient sqsClient;
 
     @Value("${nexus.aws.fraud-alert-queue-url:}")
@@ -62,6 +69,8 @@ public class FraudAnalysisService {
             KafkaTemplate<String, String> kafkaTemplate,
             ObjectMapper objectMapper,
             ObservationRegistry observationRegistry,
+            Tracer tracer,
+            Propagator propagator,
             MeterRegistry meterRegistry,
             SqsClient sqsClient) {
 
@@ -72,6 +81,8 @@ public class FraudAnalysisService {
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
         this.observationRegistry = observationRegistry;
+        this.tracer = tracer;
+        this.propagator = propagator;
         this.sqsClient = sqsClient;
 
         this.hardRejectCounter = Counter.builder(
@@ -82,6 +93,16 @@ public class FraudAnalysisService {
     @Transactional
     public FraudDecision analyze(FraudAnalysisRequest request) {
 
+        // Tags the active span (the saga.commands receive span opened by
+        // FraudCommandConsumer) rather than creating a new Observation here -
+        // this class has no ObservationRegistry of its own, and the caller's
+        // span is already what's visible in Zipkin for this whole operation.
+        Span currentSpan = tracer.currentSpan();
+        if (currentSpan != null) {
+            currentSpan.tag("transaction.id", request.transactionId());
+            currentSpan.tag("user.id", request.userId());
+        }
+
         // ── Step 1: Idempotency check ──────────────────────────
         var existing = decisionRepository
                 .findByTransactionId(UUID.fromString(
@@ -90,6 +111,10 @@ public class FraudAnalysisService {
         if (existing.isPresent()) {
             log.info("Idempotent fraud check replay: txnId={}",
                     request.transactionId());
+            if (currentSpan != null) {
+                currentSpan.tag("operation.result", "idempotent_replay");
+                currentSpan.tag("nexus.idempotency.duplicate", "true");
+            }
             return toFraudDecision(existing.get());
         }
 
@@ -135,6 +160,13 @@ public class FraudAnalysisService {
 
         // ── Step 7: Publish SAGA reply ─────────────────────────
         publishSagaReply(decision, request);
+
+        if (currentSpan != null) {
+            currentSpan.tag("fraud.decision", decision.decision().name());
+            currentSpan.tag("fraud.risk_score", decision.riskScore().toString());
+            currentSpan.tag("operation.result",
+                    decision.isRejected() ? "rejected" : "cleared");
+        }
 
         return decision;
     }
@@ -225,9 +257,10 @@ public class FraudAnalysisService {
             reply.put("reasons", reasonList);
             reply.put("traceId", request.traceId());
 
-            kafkaTemplate.send("saga.replies",
-                    request.sagaId(),
-                    objectMapper.writeValueAsString(reply));
+            ProducerRecord<String, String> replyRecord = new ProducerRecord<>(
+                    "saga.replies", request.sagaId(), objectMapper.writeValueAsString(reply));
+            KafkaTracePropagation.injectTraceHeaders(tracer, propagator, replyRecord);
+            kafkaTemplate.send(replyRecord);
 
             log.info("SAGA reply sent: type={} txnId={} decision={}",
                     replyType, request.transactionId(), decision.decision());
@@ -263,11 +296,13 @@ public class FraudAnalysisService {
             reasons.forEach(reasonsArray::add);
             payload.set("reasons", reasonsArray);
 
-            outboxRepository.save(OutboxEntry.of(
+            OutboxEntry resultEntry = OutboxEntry.of(
                     "fraud.result",
                     UUID.fromString(request.transactionId()),
                     "FraudDecision",
-                    payload));
+                    payload);
+            resultEntry.attachTraceContext(tracer);
+            outboxRepository.save(resultEntry);
 
         } catch (Exception e) {
             log.warn("Failed to write fraud.result outbox event: {}", e.getMessage());
@@ -294,11 +329,13 @@ public class FraudAnalysisService {
                     .put("alertedAt", now.toString());
             payload.set("triggeringFactors", triggeringFactorsList);
 
-            outboxRepository.save(OutboxEntry.of(
+            OutboxEntry alertEntry = OutboxEntry.of(
                     "fraud.flagged",
                     UUID.fromString(request.transactionId()),
                     "FraudHighSeverityAlert",
-                    payload));
+                    payload);
+            alertEntry.attachTraceContext(tracer);
+            outboxRepository.save(alertEntry);
 
             if (!fraudAlertQueueUrl.isBlank()) {
                 publishFraudAlertToSqs(alertId, decision, request, now);

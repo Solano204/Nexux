@@ -1,8 +1,14 @@
 package com.nexus.assistant.infrastructure.kafka;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
@@ -23,9 +29,17 @@ public class AiQueryEventProducer {
 
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
+    private final Tracer tracer;
+    private final Propagator propagator;
+    private final ObservationRegistry observationRegistry;
 
     public void publishQueryLogged(String userId, String sessionId,
                                    String message, long durationMs) {
+        Observation obs = Observation.createNotStarted(
+                        "kafka.publish", observationRegistry)
+                .lowCardinalityKeyValue("topic", "ai.query.logged")
+                .highCardinalityKeyValue("kafka.key", userId)
+                .start();
         try {
             Map<String, Object> event = Map.of(
                     "eventType", "ai.query.logged",
@@ -36,12 +50,17 @@ public class AiQueryEventProducer {
                     "loggedAt", Instant.now().toString()
             );
 
-            kafkaTemplate.send("ai.query.logged", userId,
-                    objectMapper.writeValueAsString(event));
+            ProducerRecord<String, String> record = new ProducerRecord<>(
+                    "ai.query.logged", userId, objectMapper.writeValueAsString(event));
+            KafkaTracePropagation.injectTraceHeaders(tracer, propagator, record);
+            kafkaTemplate.send(record);
 
         } catch (Exception e) {
+            obs.error(e);
             log.warn("Failed to publish ai.query.logged: {}", e.getMessage());
             // Non-fatal — analytics loss is acceptable
+        } finally {
+            obs.stop();
         }
     }
 }

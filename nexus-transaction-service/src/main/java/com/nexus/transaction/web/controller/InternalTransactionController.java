@@ -5,8 +5,12 @@ import com.nexus.transaction.domain.model.Transaction;
 import com.nexus.transaction.domain.model.enums.TransactionStatus;
 import com.nexus.transaction.infrastructure.persistence.TransactionRepository;
 import com.nexus.transaction.web.dto.response.TransactionResponse;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -38,6 +42,8 @@ public class InternalTransactionController {
     private final TransactionRepository transactionRepository;
     private final TransactionQueryService queryService;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     @Value("${nexus.plane-bridge-secret:}")
     private String planeBridgeSecret;
@@ -153,8 +159,10 @@ public class InternalTransactionController {
         }
 
         try {
+            ProducerRecord<String, String> record = new ProducerRecord<>(topic, key, payload);
+            KafkaTracePropagation.injectTraceHeaders(tracer, propagator, record);
             SendResult<String, String> result =
-                    kafkaTemplate.send(topic, key, payload).get(5, java.util.concurrent.TimeUnit.SECONDS);
+                    kafkaTemplate.send(record).get(5, java.util.concurrent.TimeUnit.SECONDS);
             log.info("Bridge publish: topic={} key={} partition={} offset={}",
                     topic, key,
                     result.getRecordMetadata().partition(),

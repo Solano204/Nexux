@@ -3,7 +3,7 @@
     {
       "messageId": "mc-test-msg-001",
       "receiptHandle": "test-receipt-handle-mc",
-      "body": "{\"externalPaymentId\":\"mc-event-98765\",\"paymentNetwork\":\"MASTERCARD\",\"eventType\":\"PAYMENT_COMPLETED\",\"networkTransactionId\":\"mc-txn-54321\",\"amount\":\"875.50\",\"currency\":\"MXN\",\"cardLast4\":\"8901\",\"cardToken\":\"tok_mc_test_001\",\"merchantId\":\"MERCHANT-XYZ789\",\"merchantName\":\"Costco Wholesale\",\"merchantCategoryCode\":\"5300\",\"authorizationCode\":\"AUTH456\",\"responseCode\":\"00\",\"terminalId\":\"TERM002\",\"posEntryMode\":\"CONTACTLESS\",\"cardholderPresent\":true,\"isContactless\":true,\"timestamp\":\"2025-05-07T15:45:00Z\",\"targetAccountId\":\"nexus-account-uuid-002\"}",
+      "body": "{\"externalPaymentId\":\"mc-event-98765\",\"network\":\"MASTERCARD\",\"eventType\":\"CAPTURE\",\"networkTransactionId\":\"mc-txn-54321\",\"amount\":\"875.50\",\"currency\":\"MXN\",\"cardLast4\":\"8901\",\"cardToken\":\"tok_mc_test_001\",\"merchantId\":\"MERCHANT-XYZ789\",\"merchantName\":\"Costco Wholesale\",\"merchantCategoryCode\":\"5300\",\"authorizationCode\":\"AUTH456\",\"responseCode\":\"00\",\"terminalId\":\"TERM002\",\"posEntryMode\":\"CONTACTLESS\",\"cardholderPresent\":true,\"isContactless\":true,\"timestamp\":\"2025-05-07T15:45:00Z\",\"targetAccountId\":\"nexus-account-uuid-002\"}",
       "attributes": {
         "ApproximateReceiveCount": "1",
         "SentTimestamp": "1715095500000",

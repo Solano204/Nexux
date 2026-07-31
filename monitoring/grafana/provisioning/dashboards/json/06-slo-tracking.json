@@ -1,0 +1,201 @@
+{
+  "id": null,
+  "uid": "nexus-slo-tracking",
+  "title": "Nexus Platform - SLO Tracking",
+  "description": "4 SLOs with multi-window burn-rate panels (Google SRE workbook pattern: burn_rate = error_ratio / error_budget, error_budget = 1 - SLO). Fast window (1h, threshold 14.4x) catches an outage that would exhaust a 30-day error budget in under 2 days; slow window (6h, threshold 6x) catches a slower, sustained degradation - both need to fire together before it's treated as a real SLO-burning event, which is why each SLO gets two panels side by side rather than one combined alert. Depends on the management.metrics.distribution.slo config added to nexus-platform-config/application-prod.yml alongside this dashboard (adds exact-boundary histogram buckets at 500ms/5s/10s that le= matching below needs) - without it these panels return no data.",
+  "tags": ["nexus", "slo"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "SLO 1 — 99% of auth requests under 500ms",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Fast burn (1h window, threshold 14.4x)",
+      "description": "burn_rate = (fraction of auth requests over 500ms in the window) / (1 - 0.99). Sustained >14.4x here means the whole monthly error budget would be gone in under 2 days if it kept up.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        {
+          "expr": "(sum(rate(http_server_requests_seconds_count{service=\"identity-service\", uri=~\"/api/v1/auth.*\"}[1h])) - sum(rate(http_server_requests_seconds_bucket{service=\"identity-service\", uri=~\"/api/v1/auth.*\", le=\"0.5\"}[1h]))) / sum(rate(http_server_requests_seconds_count{service=\"identity-service\", uri=~\"/api/v1/auth.*\"}[1h])) / 0.01",
+          "refId": "A",
+          "legendFormat": "burn rate (1h)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 14.4 }] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Slow burn (6h window, threshold 6x)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        {
+          "expr": "(sum(rate(http_server_requests_seconds_count{service=\"identity-service\", uri=~\"/api/v1/auth.*\"}[6h])) - sum(rate(http_server_requests_seconds_bucket{service=\"identity-service\", uri=~\"/api/v1/auth.*\", le=\"0.5\"}[6h]))) / sum(rate(http_server_requests_seconds_count{service=\"identity-service\", uri=~\"/api/v1/auth.*\"}[6h])) / 0.01",
+          "refId": "A",
+          "legendFormat": "burn rate (6h)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 6 }] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 4,
+      "type": "row",
+      "title": "SLO 2 — Platform-wide error rate under 1%",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Fast burn (1h window, threshold 14.4x)",
+      "description": "Reuses service:http_requests_error_ratio:rate5m from monitoring/recording_rules.yml, re-aggregated over 1h/6h windows here rather than the recording rule's own 5m window - SLO burn rate needs longer windows than a live-dashboard error-rate panel does.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_seconds_count{status=~\"5..\"}[1h])) / sum(rate(http_server_requests_seconds_count[1h])) / 0.01", "refId": "A", "legendFormat": "burn rate (1h)" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 14.4 }] } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Slow burn (6h window, threshold 6x)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_seconds_count{status=~\"5..\"}[6h])) / sum(rate(http_server_requests_seconds_count[6h])) / 0.01", "refId": "A", "legendFormat": "burn rate (6h)" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 6 }] } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "SLO 3 — Onboarding (registration→KYC→accounts) saga under 10s (p95), end-to-end",
+      "description": "Registration flow <10s end-to-end is the full OnboardingFlowSaga, not just the synchronous POST /api/v1/auth/register response - KYC verification and account creation happen asynchronously after that HTTP call returns. saga.duration.seconds{sagaType=ONBOARDING} (confirmed registered in OnboardingFlowSagaProcessor/TransferSagaProcessor's constructor) is the metric that actually spans the whole thing.",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Fast burn (1h window, threshold 14.4x)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        {
+          "expr": "(sum(rate(saga_duration_seconds_count{sagaType=\"ONBOARDING\"}[1h])) - sum(rate(saga_duration_seconds_bucket{sagaType=\"ONBOARDING\", le=\"10\"}[1h]))) / sum(rate(saga_duration_seconds_count{sagaType=\"ONBOARDING\"}[1h])) / 0.05",
+          "refId": "A",
+          "legendFormat": "burn rate (1h)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 14.4 }] } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Slow burn (6h window, threshold 6x)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        {
+          "expr": "(sum(rate(saga_duration_seconds_count{sagaType=\"ONBOARDING\"}[6h])) - sum(rate(saga_duration_seconds_bucket{sagaType=\"ONBOARDING\", le=\"10\"}[6h]))) / sum(rate(saga_duration_seconds_count{sagaType=\"ONBOARDING\"}[6h])) / 0.05",
+          "refId": "A",
+          "legendFormat": "burn rate (6h)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 6 }] } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "SLO 4 — Transfer saga under 5s (p95), end-to-end (balance reserve → fraud check → ledger post → finalize)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Fast burn (1h window, threshold 14.4x)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        {
+          "expr": "(sum(rate(saga_duration_seconds_count{sagaType=\"TRANSFER\"}[1h])) - sum(rate(saga_duration_seconds_bucket{sagaType=\"TRANSFER\", le=\"5\"}[1h]))) / sum(rate(saga_duration_seconds_count{sagaType=\"TRANSFER\"}[1h])) / 0.05",
+          "refId": "A",
+          "legendFormat": "burn rate (1h)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 14.4 }] } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Slow burn (6h window, threshold 6x)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "nexus-prometheus" },
+      "targets": [
+        {
+          "expr": "(sum(rate(saga_duration_seconds_count{sagaType=\"TRANSFER\"}[6h])) - sum(rate(saga_duration_seconds_bucket{sagaType=\"TRANSFER\", le=\"5\"}[6h]))) / sum(rate(saga_duration_seconds_count{sagaType=\"TRANSFER\"}[6h])) / 0.05",
+          "refId": "A",
+          "legendFormat": "burn rate (6h)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 6 }] } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    }
+  ]
+}

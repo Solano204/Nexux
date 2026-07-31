@@ -23,6 +23,12 @@
     <!-- NO <dependencyManagement> block — parent owns it -->
 
     <dependencies>
+        <dependency>
+            <groupId>com.nexus</groupId>
+            <artifactId>nexus-tracing-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Spring Boot Core -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -43,6 +49,16 @@
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+        </dependency>
+
+        <!-- Chaos Monkey for Spring Boot (resiliencia guide, Fase 9) —
+             piloto de menor blast radius. Solo se activa con el profile
+             "chaos" explícito (application-chaos.yml) — nunca por
+             defecto, ni en dev ni en prod. -->
+        <dependency>
+            <groupId>de.codecentric</groupId>
+            <artifactId>chaos-monkey-spring-boot</artifactId>
+            <version>3.1.0</version>
         </dependency>
 
         <!-- MongoDB (notification-specific — identity uses PostgreSQL) -->
@@ -111,6 +127,11 @@
             <groupId>net.logstash.logback</groupId>
             <artifactId>logstash-logback-encoder</artifactId>
             <!-- NO hardcoded version — parent BOM manages it -->
+        </dependency>
+        <dependency>
+            <groupId>com.github.loki4j</groupId>
+            <artifactId>loki-logback-appender</artifactId>
+            <version>1.5.2</version>
         </dependency>
 
         <!-- Utilities -->

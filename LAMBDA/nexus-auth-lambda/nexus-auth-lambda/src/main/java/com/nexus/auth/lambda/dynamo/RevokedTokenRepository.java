@@ -38,6 +38,12 @@ public class RevokedTokenRepository {
                             .tableName(tableName)
                             .key(Map.of(
                                     "PK", AttributeValue.fromS("JTI#" + jti)))
+                            // Revocation is a binary security decision, not
+                            // a case that tolerates DynamoDB's default
+                            // eventually-consistent read window - this is a
+                            // base-table GetItem (not a GSI), so
+                            // ConsistentRead is available at 2x RCU cost.
+                            .consistentRead(true)
                             .build());
             return response.hasItem();
         } catch (Exception e) {

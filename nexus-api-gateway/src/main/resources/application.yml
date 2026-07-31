@@ -56,6 +56,9 @@ spring:
           uri: lb://nexus-identity-service
           predicates:
             - Path=/api/v1/auth/**
+          metadata:
+            response-timeout: 5000
+            connect-timeout: 2000
           filters:
             - name: RequestRateLimiter
               args:
@@ -86,8 +89,8 @@ spring:
           predicates:
             - Path=/api/v1/accounts/**
           metadata:
-            response-timeout: 120000
-            connect-timeout: 5000
+            response-timeout: 5000
+            connect-timeout: 2000
           filters:
             - name: JwtAuthentication
             - name: RequestRateLimiter
@@ -112,6 +115,9 @@ spring:
           uri: lb://nexus-transaction-service
           predicates:
             - Path=/api/v1/transactions/**
+          metadata:
+            response-timeout: 5000
+            connect-timeout: 2000
           filters:
             - name: JwtAuthentication
             - name: RequestRateLimiter
@@ -133,9 +139,12 @@ spring:
           predicates:
             - Path=/api/v1/ai/**
           metadata:
-            response-timeout: 120000
+            response-timeout: 45000
             connect-timeout: 5000
           filters:
+            - name: FeatureFlag
+              args:
+                feature: ai-assistant
             - name: JwtAuthentication
             - name: RequestRateLimiter
               args:
@@ -152,6 +161,9 @@ spring:
           uri: lb://nexus-identity-service
           predicates:
             - Path=/api/v1/users/**
+          metadata:
+            response-timeout: 5000
+            connect-timeout: 2000
           filters:
             - name: JwtAuthentication
             - name: RequestRateLimiter
@@ -173,6 +185,9 @@ spring:
           predicates:
             - Path=/internal/v1/users/**,/internal/v1/health/**
             - RemoteAddr=172.20.0.0/16
+          metadata:
+            response-timeout: 5000
+            connect-timeout: 2000
           filters:
             - name: CircuitBreaker
               args:
@@ -199,6 +214,9 @@ spring:
           predicates:
             - Path=/internal/v1/notifications/**
             - RemoteAddr=172.20.0.0/16
+          metadata:
+            response-timeout: 5000
+            connect-timeout: 2000
           filters:
             - name: JwtAuthentication
             - name: CircuitBreaker
@@ -210,6 +228,9 @@ spring:
           uri: lb://nexus-ledger-service
           predicates:
             - Path=/api/v1/ledger/**
+          metadata:
+            response-timeout: 5000
+            connect-timeout: 2000
           filters:
             - name: JwtAuthentication
             - name: RequestRateLimiter
@@ -227,6 +248,9 @@ spring:
           uri: lb://nexus-analytics-service
           predicates:
             - Path=/api/v1/analytics/**
+          metadata:
+            response-timeout: 12000
+            connect-timeout: 2000
           filters:
             - name: JwtAuthentication
             - name: RequestRateLimiter
@@ -350,13 +374,16 @@ resilience4j:
       account-service:
         base-config: default
         failure-rate-threshold: 50
-        slow-call-duration-threshold: 120000ms
+        slow-call-duration-threshold: 2000ms
       identity-service:
         base-config: default
         failure-rate-threshold: 60
         slow-call-duration-threshold: 3000ms
       ai-assistant-service:
         base-config: default
+        sliding-window-type: TIME_BASED
+        sliding-window-size: 60
+        minimum-number-of-calls: 5
         failure-rate-threshold: 60
         slow-call-duration-threshold: 30000ms
         wait-duration-in-open-state: 60s
@@ -370,6 +397,9 @@ resilience4j:
         slow-call-duration-threshold: 2000ms
       analytics-service:
         base-config: default
+        sliding-window-type: TIME_BASED
+        sliding-window-size: 60
+        minimum-number-of-calls: 5
         failure-rate-threshold: 70
         slow-call-duration-threshold: 5000ms
       notification-service:
@@ -400,10 +430,13 @@ resilience4j:
         timeout-duration: 10s
         cancel-running-future: true
       account-service:
-        timeout-duration: 120s
+        timeout-duration: 5s
+        cancel-running-future: false
+      identity-service:
+        timeout-duration: 5s
         cancel-running-future: false
       ai-assistant-service:
-        timeout-duration: 120s
+        timeout-duration: 45s
         cancel-running-future: false
       default:
         timeout-duration: 10s
@@ -418,6 +451,10 @@ nexus:
       algorithms:
         - RS256
       refresh-interval-minutes: 60
+      cognito:
+        user-pool-id: ${COGNITO_USER_POOL_ID:}
+        region: ${COGNITO_REGION:us-east-1}
+        client-id: ${COGNITO_CLIENT_ID:}
       blacklist:
         redis-key-prefix: "jwt:blacklist:"
         check-timeout-ms: 100
@@ -452,7 +489,7 @@ management:
       show-details: always
       show-components: always
     gateway:
-      enabled: true
+      access: unrestricted
   prometheus:
     metrics:
       export:

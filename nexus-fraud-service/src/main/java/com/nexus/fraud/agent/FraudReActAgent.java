@@ -3,6 +3,7 @@ package com.nexus.fraud.agent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.fraud.domain.model.*;
 import com.nexus.fraud.domain.model.enums.*;
+import com.nexus.fraud.infrastructure.ai.FraudLlmGateway;
 import com.nexus.fraud.web.dto.FraudAnalysisRequest;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -10,15 +11,15 @@ import io.micrometer.core.instrument.Timer;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.*;
 import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.*;
+import io.micrometer.context.ContextSnapshot;
 import java.util.concurrent.StructuredTaskScope;
 import java.util.concurrent.StructuredTaskScope.Joiner;
 import java.util.concurrent.StructuredTaskScope.Subtask;
@@ -52,9 +53,7 @@ import java.util.concurrent.StructuredTaskScope.Subtask;
 @Component
 public class FraudReActAgent {
 
-    private final ChatClient planningClient;
-    private final ChatClient agentClient;
-    private final ChatClient synthesisClient;
+    private final FraudLlmGateway llmGateway;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
 
@@ -67,17 +66,20 @@ public class FraudReActAgent {
 
     private static final int MAX_TOOL_CALL_STEPS = 8;
 
+    // Testing-only bypass for when there's no working OpenAI key: skips
+    // planning/tools/synthesis entirely and always approves, so transactions
+    // can flow end-to-end without AI. Set nexus.ai.mock-mode=true
+    // (nexus-platform-config) to enable.
+    @Value("${nexus.ai.mock-mode:false}")
+    private boolean mockMode;
+
     public FraudReActAgent(
-            @Qualifier("fraudPlanningClient") ChatClient planningClient,
-            @Qualifier("fraudAgentClient") ChatClient agentClient,
-            @Qualifier("fraudSynthesisClient") ChatClient synthesisClient,
+            FraudLlmGateway llmGateway,
             ObjectMapper objectMapper,
             ObservationRegistry observationRegistry,
             MeterRegistry meterRegistry) {
 
-        this.planningClient = planningClient;
-        this.agentClient = agentClient;
-        this.synthesisClient = synthesisClient;
+        this.llmGateway = llmGateway;
         this.objectMapper = objectMapper;
         this.observationRegistry = observationRegistry;
 
@@ -103,6 +105,12 @@ public class FraudReActAgent {
      * @return Structured FraudDecision (never null — uses safe fallback)
      */
     public FraudDecision analyze(FraudAnalysisRequest request) {
+
+        if (mockMode) {
+            log.info("MOCK MODE: skipping fraud analysis, auto-approving " +
+                    "txnId={}", request.transactionId());
+            return buildMockApprovedDecision(request);
+        }
 
         Instant startTime = Instant.now();
         Timer.Sample timerSample = Timer.start();
@@ -190,10 +198,7 @@ public class FraudReActAgent {
 
             String planningPrompt = buildPlanningPrompt(request);
 
-            FraudAnalysisPlan plan = planningClient.prompt()
-                    .user(planningPrompt)
-                    .call()
-                    .entity(FraudAnalysisPlan.class);
+            FraudAnalysisPlan plan = llmGateway.plan(planningPrompt);
 
             planObs.highCardinalityKeyValue(
                     "toolsPlanned",
@@ -289,13 +294,21 @@ public class FraudReActAgent {
 
         List<ToolResult> results = new ArrayList<>();
 
+        // executeToolSingle() opens its own "fraud.tool.{name}" Observation via
+        // Observation.createNotStarted(...).start() - that relies on the current
+        // Observation being available from a ThreadLocal, which a forked virtual
+        // thread does NOT inherit from the thread that called scope.fork(). Without
+        // this snapshot+wrap, every tool span would show up in Zipkin as its own
+        // disconnected root trace instead of a child of fraud.planning/fraud.analysis.
+        ContextSnapshot snapshot = ContextSnapshot.captureAll();
+
         try (var scope = StructuredTaskScope.open(
                 Joiner.<ToolResult>allSuccessfulOrThrow())) {
 
             // Fork each tool onto its own Virtual Thread
             for (FraudAnalysisPlan.ToolExecutionStep step : batch) {
-                scope.fork(() ->
-                        executeToolSingle(step, request, history));
+                scope.fork(snapshot.wrap(() ->
+                        executeToolSingle(step, request, history)));
             }
 
             // join() blocks until all subtasks complete or one fails
@@ -349,13 +362,10 @@ public class FraudReActAgent {
             log.debug("Executing tool: {} for txnId={}",
                     step.toolName(), request.transactionId());
 
-            ChatResponse response = agentClient.prompt()
-                    .messages(history)
-                    .user("Execute tool: " + step.toolName() +
+            ChatResponse response = llmGateway.executeTool(history,
+                    "Execute tool: " + step.toolName() +
                             " with context: " + String.join(", ",
-                            step.toolArguments()))
-                    .call()
-                    .chatResponse();
+                            step.toolArguments()));
 
             long durationMs = Instant.now().toEpochMilli() -
                     toolStart.toEpochMilli();
@@ -407,10 +417,7 @@ public class FraudReActAgent {
                     new ArrayList<>(conversationHistory);
             fullContext.add(new UserMessage(synthesisPrompt));
 
-            FraudDecision decision = synthesisClient.prompt()
-                    .messages(fullContext)
-                    .call()
-                    .entity(FraudDecision.class);
+            FraudDecision decision = llmGateway.synthesize(fullContext);
 
             Instant completedAt = Instant.now();
             long analysisTimeMs = completedAt.toEpochMilli() -
@@ -536,6 +543,26 @@ public class FraudReActAgent {
             Return ONLY valid FraudDecision JSON.
             """,
                 req.transactionId());
+    }
+
+    private FraudDecision buildMockApprovedDecision(
+            FraudAnalysisRequest request) {
+        Instant now = Instant.now();
+        return new FraudDecision(
+                request.transactionId(),
+                FraudDecisionOutcome.APPROVE,
+                new BigDecimal("5"),
+                new BigDecimal("0.99"),
+                List.of(),
+                List.of("nexus.ai.mock-mode=true - no real analysis was performed"),
+                "nexus.ai.mock-mode=true - synthetic approval, no AI analysis was performed.",
+                List.of(),
+                List.of(),
+                RecommendedAction.PROCEED_NORMALLY,
+                null,
+                Map.of(),
+                now, now, 0L
+        );
     }
 
     private FraudDecision buildFallbackDecision(

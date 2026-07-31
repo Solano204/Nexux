@@ -147,6 +147,23 @@
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-opentelemetry</artifactId>
         </dependency>
+        <!-- Zipkin span exporter - quarkus-opentelemetry auto-registers a
+             ZipkinSpanExporter bean once this is on the classpath, read via
+             quarkus.opentelemetry.tracer.exporter.zipkin.* below. Replaces
+             OTLP, which was pointed at Zipkin's v2 JSON endpoint (wrong
+             protocol - OTLP is gRPC/protobuf, Zipkin speaks its own JSON
+             API), so spans were never actually reaching Zipkin. -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-zipkin</artifactId>
+        </dependency>
+        <!-- Implements the B3Propagator used by quarkus.otel.propagators=b3
+             below - without it on the classpath, OTel autoconfiguration
+             rejects "b3" as an unrecognized propagator value at startup. -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-extension-trace-propagators</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-smallrye-health</artifactId>
@@ -177,6 +194,12 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-test-common</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>3.27.6</version>
             <scope>test</scope>
         </dependency>
 

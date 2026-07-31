@@ -1,5 +1,6 @@
 package com.nexus.assistant.application;
 
+import io.github.resilience4j.ratelimiter.RateLimiter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.document.Document;
@@ -41,6 +42,7 @@ public class DocumentAnalysisService {
     private final ChatClient visionClient;
     private final ChatClient primaryClient;
     private final VectorStore financialKnowledgeVectorStore;
+    private final RateLimiter openAiRateLimiter;
 
     public DocumentAnalysisService(
             @Qualifier("aiAssistantVisionClient")
@@ -48,10 +50,12 @@ public class DocumentAnalysisService {
             @Qualifier("aiAssistantPrimaryClient")
             ChatClient primaryClient,
             @Qualifier("financialKnowledgeVectorStore")
-            VectorStore financialKnowledgeVectorStore) {
+            VectorStore financialKnowledgeVectorStore,
+            RateLimiter openAiRateLimiter) {
         this.visionClient = visionClient;
         this.primaryClient = primaryClient;
         this.financialKnowledgeVectorStore = financialKnowledgeVectorStore;
+        this.openAiRateLimiter = openAiRateLimiter;
     }
 
     public Flux<String> analyzeAndRespond(
@@ -68,28 +72,29 @@ public class DocumentAnalysisService {
                 // model's JSON response into the record automatically.
                 // No need to set responseFormat — entity() adds the
                 // JSON-mode instruction to the prompt internally in M6.
-                DocumentExtractResult extracted = visionClient.prompt()
-                        .system("""
-                                You are a financial document analyzer.
-                                Extract all financial information from this document.
-                                Return ONLY valid JSON matching exactly this shape:
-                                {
-                                  "documentType": "BILL|RECEIPT|STATEMENT|UNKNOWN",
-                                  "merchant":     "<string or null>",
-                                  "totalAmount":  <number or null>,
-                                  "currency":     "<MXN|USD|EUR|etc>",
-                                  "dueDate":      "<YYYY-MM-DD or null>",
-                                  "accountNumber":"<string or null>",
-                                  "confidence":   <0.0–1.0>
-                                }
-                                No extra keys, no markdown fences, no explanation.
-                                """)
-                        .user(u -> {
-                            u.text("Extract financial data: " + userMessage);
-                            u.media(MimeType.valueOf(mimeType), document);
-                        })
-                        .call()
-                        .entity(DocumentExtractResult.class);
+                DocumentExtractResult extracted = RateLimiter.decorateSupplier(
+                        openAiRateLimiter, () -> visionClient.prompt()
+                                .system("""
+                                        You are a financial document analyzer.
+                                        Extract all financial information from this document.
+                                        Return ONLY valid JSON matching exactly this shape:
+                                        {
+                                          "documentType": "BILL|RECEIPT|STATEMENT|UNKNOWN",
+                                          "merchant":     "<string or null>",
+                                          "totalAmount":  <number or null>,
+                                          "currency":     "<MXN|USD|EUR|etc>",
+                                          "dueDate":      "<YYYY-MM-DD or null>",
+                                          "accountNumber":"<string or null>",
+                                          "confidence":   <0.0–1.0>
+                                        }
+                                        No extra keys, no markdown fences, no explanation.
+                                        """)
+                                .user(u -> {
+                                    u.text("Extract financial data: " + userMessage);
+                                    u.media(MimeType.valueOf(mimeType), document);
+                                })
+                                .call()
+                                .entity(DocumentExtractResult.class)).get();
 
                 // ── Step 2: Validate confidence ───────────────────────
                 if (extracted == null || extracted.confidence() < 0.7) {

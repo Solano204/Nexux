@@ -1,0 +1,315 @@
+# Verification status (written without a live /actuator/prometheus scrape -
+# see [[feedback_no_execution]]; confirm all of this once services are back
+# up before trusting it in production):
+#   CONFIRMED live (metric name grep'd directly out of the 4 existing
+#   Grafana dashboard JSONs, which already query these against a real
+#   scrape): up, http_server_requests_seconds_count/bucket,
+#   jvm_memory_used_bytes/max_bytes, jvm_gc_pause_seconds_*,
+#   hikaricp_connections_active/idle/max, kafka_producer_record_send_total,
+#   kafka_consumer_fetch_manager_records_lag_max, process_cpu_usage.
+#   CONFIRMED from source (Counter.builder(...) registrations read
+#   directly): notification.dedup.skipped.total, ledger.postings.total.
+#   NOT CONFIRMED (standard Micrometer binder names, same family as
+#   confirmed ones above, but this exact series wasn't seen in a dashboard
+#   or scrape output): hikaricp_connections_pending,
+#   kafka_consumer_coordinator_rebalance_total. Marked in each rule's
+#   description.
+#   NOT IMPLEMENTED (no Prometheus scrape target exists for the underlying
+#   service at all): Elasticsearch and Zipkin alerts, Eureka/Config-Server
+#   specific alerts. See the comment block near the bottom of this file.
+groups:
+  - name: nexus-platform-alerts
+    rules:
+      # ── Service availability ──────────────────────────────────
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} is down"
+          description: "Target {{ $labels.instance }} has been unresponsive for over 1 minute."
+
+      # NEW — catches the 16/17-down scenario as its own paged event instead
+      # of 16 separate ServiceDown alerts firing silently into the same
+      # noise. count(up)/count() gives the total known target count so this
+      # doesn't need a hardcoded service count that drifts as services are
+      # added/removed.
+      - alert: AllServicesDownAnomaly
+        expr: (count(up == 0) / count(up)) > 0.5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 50% of platform targets are down"
+          description: "{{ $value | humanizePercentage }} of known Prometheus targets are reporting up==0. Likely a shared-dependency or host-level outage, not N unrelated crashes."
+
+      # ── HTTP error rate / latency ─────────────────────────────
+      # Replaces the old absolute-rate HighHTTP5xxRate (>0.05 req/s) with an
+      # actual ratio, matching what 02-spring-boot-statistics.json already
+      # computes per-service (see its "Error Rate %" panel) - an absolute
+      # rate threshold alerts identically on a quiet service and a
+      # high-traffic one, which isn't what "10% of requests are failing"
+      # means.
+      - alert: HighErrorRate
+        expr: service:http_requests_error_ratio:rate5m > 0.10
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High 5xx error rate on {{ $labels.service }}"
+          description: "{{ $labels.service }} 5xx ratio has been above 10% for over 2 minutes."
+
+      - alert: HighP99Latency
+        expr: service:http_request_duration_seconds:p99 > 2
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p99 latency on {{ $labels.service }}"
+          description: "{{ $labels.service }} p99 request latency has been above 2s for over 3 minutes."
+
+      # Per-endpoint variant - uri label exists on http_server_requests_seconds_*
+      # (confirmed via 00-platform-overview.json's per-status breakdown panel,
+      # which groups by the same metric family). Kept as a separate, lower-
+      # priority alert since per-(service,uri) cardinality is much higher -
+      # if this ever needs trimming, restrict to the auth/txn/kyc path
+      # prefixes the way ActuatorObservationPredicate already excludes
+      # /actuator.
+      - alert: HighP99LatencyByEndpoint
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_server_requests_seconds_bucket[5m])) by (service, uri, le)
+          ) > 2
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p99 latency on {{ $labels.service }} {{ $labels.uri }}"
+          description: "{{ $labels.service }} {{ $labels.uri }} p99 latency has been above 2s for over 3 minutes."
+
+      # ── Kafka ──────────────────────────────────────────────────
+      # kafka_consumer_fetch_manager_records_lag_max confirmed live in
+      # 03-kafka-overview.json's "Consumer Lag" panel.
+      - alert: KafkaConsumerLagHigh
+        expr: service_topic:kafka_consumer_lag:max > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer lag high on {{ $labels.service }} / {{ $labels.topic }}"
+          description: "{{ $labels.service }} has more than 1000 records of lag on {{ $labels.topic }} for over 5 minutes."
+
+      # KafkaConsumerGroupAnomaly (unexpected group count per topic): NOT
+      # IMPLEMENTED. No metric exposes "how many consumer groups are
+      # actively reading a topic" platform-wide today - that would need
+      # either a Kafka-broker-side exporter (JMX) or a custom gauge nobody
+      # has built. Per the platform's own comment in KafkaTracePropagation,
+      # the real prior incident this would have caught (duplicate
+      # saga.replies processing) is already covered by a concrete counter
+      # instead: notification.dedup.skipped.total (registered in
+      # NotificationProcessingService) and the equivalent idempotent-replay
+      # counters in ledger-service/account-service
+      # (idempotentReplayCounter). Alerting on a *rate* of those is the
+      # available, real alternative signal - see KafkaDuplicateProcessingHigh
+      # below.
+      - alert: KafkaDuplicateProcessingHigh
+        expr: |
+          (
+            sum(rate(notification_dedup_skipped_total[5m]))
+            + sum(rate(ledger_postings_total{outcome="ALREADY_EXISTS"}[5m]))
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Duplicate Kafka message processing rate is elevated"
+          description: "Combined dedup-skip/idempotent-replay rate across notification-service and ledger-service has been above 1/s for 5 minutes - possible consumer redelivery storm. Both counter names verified directly against their Counter.builder(...) registrations: notification.dedup.skipped.total in NotificationProcessingService, ledger.postings.total{outcome=ALREADY_EXISTS} in LedgerCommandService (its field is misleadingly named idempotentReplayCounter but the actual registered metric+tag is ledger.postings.total{outcome=\"ALREADY_EXISTS\"})."
+
+      # KafkaRebalanceStorm: uses the standard Micrometer KafkaClientMetrics
+      # binder name (kafka_consumer_coordinator_rebalance_total for
+      # trigger-count). This binder family is already confirmed active
+      # (kafka_producer_record_send_total and
+      # kafka_consumer_fetch_manager_records_lag_max are both live in
+      # 03-kafka-overview.json), but this specific metric name has NOT been
+      # checked against a real scrape - flagging per the "never invent"
+      # rule rather than presenting it as verified.
+      - alert: KafkaRebalanceStorm
+        expr: sum(rate(kafka_consumer_coordinator_rebalance_total[10m])) by (service) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated Kafka rebalance rate on {{ $labels.service }}"
+          description: "{{ $labels.service }} has triggered more than 1 rebalance per ~3min average over the last 10 minutes - check for consumer crash-looping or session-timeout misconfiguration. NEEDS LIVE VERIFICATION: metric name not yet confirmed against a real scrape."
+
+      # ── JVM ────────────────────────────────────────────────────
+      - alert: JVMHeapNearMax
+        expr: (jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"}) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High heap usage on {{ $labels.service }}"
+          description: "Heap usage on {{ $labels.instance }} has been above 85% for over 5 minutes."
+
+      # Leak proxy, not an instantaneous %: alerts only when old-gen has
+      # been net-increasing for 30m with no drop (deriv > 0 the whole
+      # window), which a healthy GC cycle (sawtooth pattern) won't trigger.
+      # id="G1 Old Gen" label confirmed via 01-jvm-micrometer.json's
+      # per-pool memory panel (groups jvm_memory_used_bytes by "id").
+      - alert: JVMOldGenGrowing
+        expr: deriv(jvm_memory_used_bytes{area="heap", id=~".*Old.*"}[30m]) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Old-gen heap trending up with no GC recovery on {{ $labels.service }}"
+          description: "{{ $labels.service }} old-gen usage has grown monotonically for 30 minutes with no drop - possible memory leak, not a normal GC sawtooth."
+
+      # ── HikariCP ───────────────────────────────────────────────
+      # hikaricp_connections_active/max confirmed live in
+      # 02-spring-boot-statistics.json's pool-utilization panel.
+      - alert: HikariPoolExhausted
+        expr: (hikaricp_connections_active / hikaricp_connections_max) > 0.90
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HikariCP pool near exhaustion on {{ $labels.service }}"
+          description: "{{ $labels.service }} connection pool has been above 90% utilization for over 2 minutes."
+
+      # hikaricp_connections_pending is a standard Micrometer HikariCP
+      # binder gauge (same binder family as _active/_idle/_max, which are
+      # confirmed live) but this specific series hasn't been checked
+      # against a real scrape - flagging per the "never invent" rule.
+      - alert: HikariPoolWaiting
+        expr: hikaricp_connections_pending > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Threads waiting on HikariCP connections on {{ $labels.service }}"
+          description: "{{ $labels.service }} has had threads waiting for a DB connection for over 1 minute. NEEDS LIVE VERIFICATION: metric name not yet confirmed against a real scrape."
+
+      # ── Elasticsearch ──────────────────────────────────────────
+      # elasticsearch_exporter added to docker-compose-prod.yml + scraped in
+      # prometheus.yml as part of building Part 3.3's Infra Deep Dive
+      # dashboard - these two are real alerts now, not flagged, using the
+      # standard prometheus-community/elasticsearch_exporter metric names.
+      # NEEDS LIVE VERIFICATION like everything added without a running
+      # scrape: the exporter hasn't been checked against a real cluster yet.
+      - alert: ElasticsearchClusterNotGreen
+        expr: elasticsearch_cluster_health_status{color="green"} != 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elasticsearch cluster health is not green"
+          description: "Cluster has been non-green for over 5 minutes."
+
+      - alert: ElasticsearchDiskWatermark
+        expr: |
+          (1 - (elasticsearch_filesystem_data_available_bytes / elasticsearch_filesystem_data_size_bytes)) > 0.80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elasticsearch disk usage above 80% watermark on {{ $labels.instance }}"
+          description: "Node has been above 80% disk usage for over 5 minutes."
+
+      # ZipkinIngestFailures: NOT IMPLEMENTED. openzipkin/zipkin's server
+      # module exposes a Micrometer-backed /metrics endpoint in Prometheus
+      # format only when STORAGE_TYPE metrics are enabled and a prometheus
+      # registry module is on its classpath - the stock openzipkin/zipkin:3.3
+      # image used here does not have this wired, and there's no off-the-
+      # shelf exporter sidecar for it the way Elasticsearch has one -
+      # flagging for a follow-up rather than writing a rule against a
+      # series that doesn't exist.
+
+      # ── Eureka / Config Server ─────────────────────────────────
+      # DiscoveryClientRegistrationFailures, ConfigServerUnreachable: NOT
+      # IMPLEMENTED as their own alerts. Spring Cloud Netflix Eureka and
+      # Spring Cloud Config Client don't expose a standard Micrometer
+      # metric for "registration is failing but the app is still up" or
+      # "config fetch failed" - a config-fetch failure at startup fails
+      # the whole Spring context (already covered by ServiceDown), and a
+      # background Eureka renewal failure only surfaces in logs, not a
+      # gauge/counter, in the versions this platform uses. A real signal
+      # would need a custom Gauge wired to
+      # ApplicationEventPublisher<InstanceRegisteredEvent>/discovery
+      # client heartbeat callbacks, which doesn't exist in the codebase
+      # today - flagging rather than inventing a metric name that isn't
+      # there.
+
+  # ── Resilience (guía de resiliencia, Fase 10) ─────────────────────
+  # Circuit breaker / retry / bulkhead metric names below are the
+  # standard resilience4j-spring-boot3 Micrometer binder names
+  # (TaggedCircuitBreakerMetrics / TaggedRetryMetrics /
+  # TaggedThreadPoolBulkheadMetrics) - not grep'd out of a live scrape
+  # (no running stack), but these are library-fixed names, not
+  # something this codebase defines itself, so confidence is high.
+  # loadshedding_rejections_total, gateway_global_rate_limit_rejections_total
+  # and feature_flag_disabled_total ARE confirmed from source - all three
+  # written this session (Fases 6, 6, 10).
+  - name: nexus-resilience-alerts
+    rules:
+      - alert: CircuitBreakerOpen
+        expr: resilience4j_circuitbreaker_state{state="open"} == 1
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Circuit breaker '{{ $labels.name }}' is OPEN on {{ $labels.service }}"
+          description: "This dependency has been failing enough to trip its breaker - higher-priority signal than waiting for someone to notice degraded responses. Check the corresponding /fallback/* path is serving correctly."
+
+      # A breaker that's OPEN for a long stretch (not just tripped once) is
+      # a different, worse situation than a brief trip-and-recover - this
+      # fires on top of CircuitBreakerOpen, at higher severity, once it's
+      # clearly not self-healing.
+      - alert: CircuitBreakerOpenSustained
+        expr: resilience4j_circuitbreaker_state{state="open"} == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit breaker '{{ $labels.name }}' has been OPEN for over 5 minutes"
+          description: "{{ $labels.service }} -> {{ $labels.name }} isn't recovering on its own. If this is ai-assistant-service, check whether AiFeatureHealthMonitor already auto-disabled the feature flag (see FeatureFlagDisabled below) - if not, it will within the next 2 minutes."
+
+      - alert: RetryExhaustionRateHigh
+        expr: |
+          sum by (service, name) (rate(resilience4j_retry_calls_total{kind="failed_with_retry"}[5m]))
+          / sum by (service, name) (rate(resilience4j_retry_calls_total[5m]))
+          > 0.3
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Over 30% of retried calls to '{{ $labels.name }}' on {{ $labels.service }} still fail after all attempts"
+          description: "Retrying isn't helping here - the dependency is down, not transiently blipping (Fase 2's whole point: retry+jitter alone doesn't fix a sustained failure). Check the corresponding circuit breaker."
+
+      - alert: LoadSheddingActive
+        expr: increase(loadshedding_rejections_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} is shedding load (Fase 6)"
+          description: "in-flight requests exceeded nexus.load-shedding.max-in-flight. Service is protecting itself, but real capacity is being turned away - check whether this is a genuine traffic spike or a downstream dependency slowing this service down."
+
+      - alert: GlobalCapacityReservedForCore
+        expr: increase(gateway_global_rate_limit_rejections_total{reason="tier_shed_early"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gateway is shedding Nivel 3/4 traffic to protect core capacity"
+          description: "Platform-wide load is above 80% of the global ceiling (Fase 6) - IA/analytics traffic is being turned away on purpose to protect fondos/auth. Not yet critical, but worth knowing before it gets there."
+
+      - alert: FeatureFlagDisabled
+        expr: increase(feature_flag_disabled_total[1m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Feature '{{ $labels.feature }}' was just disabled (Fase 7)"
+          description: "Either AiFeatureHealthMonitor auto-disabled it after a sustained circuit-open, or someone hit the manual override. Check GET /internal/v1/feature-flags/{{ $labels.feature }} for the reason before re-enabling."

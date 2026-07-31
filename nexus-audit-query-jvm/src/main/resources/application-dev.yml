@@ -1,7 +1,8 @@
 spring:
   threads:
     virtual:
-      enabled: true
+      # disabled: breaks Brave trace-context propagation - see application.yml
+      enabled: false
 
   kafka:
     bootstrap-servers: localhost:19092

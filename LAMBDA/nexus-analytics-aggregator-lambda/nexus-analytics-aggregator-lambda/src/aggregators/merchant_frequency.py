@@ -14,7 +14,7 @@ from decimal import Decimal
 
 import boto3
 
-from utils.logging_config import log
+from src.utils.logging_config import log
 
 _dynamo = boto3.resource("dynamodb")
 _table = _dynamo.Table(os.environ["MERCHANT_FREQUENCY_TABLE"])

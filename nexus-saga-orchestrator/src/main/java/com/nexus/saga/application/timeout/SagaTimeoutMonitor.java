@@ -5,7 +5,6 @@ import com.nexus.saga.application.transfer.TransferSagaProcessor;
 import com.nexus.saga.domain.model.SagaFailureContext;
 import com.nexus.saga.domain.model.transfer.TransferStep;
 import com.nexus.saga.infrastructure.jpa.*;
-import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -23,8 +22,11 @@ import java.util.List;
  * - A participant service crashes mid-processing
  * - A network partition prevents reply delivery
  *
- * All timeout handling transitions to compensation,
- * which releases any reserved funds.
+ * Pre-pivot timeouts (before LEDGER_POSTING) compensate by releasing the
+ * balance reservation. Post-pivot timeouts (BALANCE_FINALIZE, NOTIFICATION)
+ * do NOT — the ledger already posted, so they retry the idempotent
+ * follow-up command or force-complete instead. See TransferSagaProcessor's
+ * "POST-PIVOT TIMEOUT HANDLING" section and TransferStep's class doc.
  */
 @Slf4j
 @Component
@@ -37,8 +39,7 @@ public class SagaTimeoutMonitor {
     private final com.nexus.saga.application.ai
             .SagaFailureExplainerService explainerService;
     private final ObjectMapper objectMapper;
-
-    private final Counter timeoutFiredCounter;
+    private final MeterRegistry meterRegistry;
 
     public SagaTimeoutMonitor(
             SagaTimeoutRepository timeoutRepository,
@@ -56,10 +57,7 @@ public class SagaTimeoutMonitor {
         this.transferProcessor = transferProcessor;
         this.explainerService = explainerService;
         this.objectMapper = objectMapper;
-
-        this.timeoutFiredCounter =
-                Counter.builder("saga.timeout.total")
-                        .register(meterRegistry);
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -80,7 +78,13 @@ public class SagaTimeoutMonitor {
         for (SagaTimeout timeout : fired) {
             try {
                 processTimeout(timeout);
-                timeoutFiredCounter.increment();
+                // Tagged with sagaType to match TransferSagaProcessor's own
+                // "saga.timeout.total" counter - both must share the same
+                // tag-key set, or Prometheus rejects whichever registers
+                // second ("all meters with the same name have the same
+                // set of tag keys").
+                meterRegistry.counter("saga.timeout.total",
+                        "sagaType", timeout.getSagaType()).increment();
             } catch (Exception e) {
                 log.error("Failed to process timeout {}: {}",
                         timeout.getTimeoutId(), e.getMessage(), e);
@@ -111,6 +115,33 @@ public class SagaTimeoutMonitor {
                             state.getCurrentStep(),
                             timeout.getTimeoutType());
 
+                    // BALANCE_FINALIZE and NOTIFICATION fire AFTER
+                    // LEDGER_POSTING (the pivot) — releasing the balance
+                    // reservation is the wrong compensation there, since
+                    // the ledger already posted. Route those through
+                    // pivot-aware handling instead of the generic
+                    // pre-pivot compensation path below.
+                    switch (timeout.getTimeoutType()) {
+                        case "BALANCE_FINALIZE" -> {
+                            transferProcessor.retryFinalizeOrEscalate(state);
+                            return;
+                        }
+                        case "NOTIFICATION" -> {
+                            transferProcessor
+                                    .forceCompleteDespiteNotificationTimeout(state);
+                            return;
+                        }
+                        case "COMPENSATION" -> {
+                            transferProcessor.retryCompensationOrEscalate(state);
+                            return;
+                        }
+                        default -> { /* pre-pivot — fall through below */ }
+                    }
+
+                    // Pre-pivot timeout types (BALANCE_RESERVATION,
+                    // FRAUD_CHECK, FRAUD_REVIEW, LEDGER_POST): the ledger
+                    // has not posted yet, so releasing the reservation is
+                    // still the correct compensation.
                     var ctx = SagaFailureContext.builder()
                             .failureType(SagaFailureContext.FailureType.SAGA_TIMEOUT)
                             .userId(state.getSourceUserId().toString())
@@ -125,18 +156,10 @@ public class SagaTimeoutMonitor {
 
                     var explanation = explainerService.explain(ctx);
 
-                    if (state.isFundsReserved()) {
-                        transferProcessor.startCompensation(
-                                state, TransferStep.TIMED_OUT,
-                                "Timeout: " + timeout.getTimeoutType(),
-                                explanation);
-                    } else {
-                        // No funds reserved — complete with failure directly
-                        transferProcessor.startCompensation(
-                                state, TransferStep.TIMED_OUT,
-                                "Timeout: " + timeout.getTimeoutType(),
-                                explanation);
-                    }
+                    transferProcessor.startCompensation(
+                            state, TransferStep.TIMED_OUT,
+                            "Timeout: " + timeout.getTimeoutType(),
+                            explanation);
                 });
     }
 

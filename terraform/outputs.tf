@@ -17,6 +17,11 @@ output "env_block" {
     # whatever value is already in your .env from when this key was first created.
     AWS_SECRET_ACCESS_KEY=${aws_iam_access_key.nexus_platform.secret}
 
+    # ─── Cognito (nexus-identity-service, nexus-api-gateway) ──────
+    # Auth-lambda "Option B" mirror — see AWS-DOCKER-WORKFLOWS/02_LOGIN_FLOW.md
+    COGNITO_USER_POOL_ID=${aws_cognito_user_pool.nexus.id}
+    COGNITO_REGION=${var.aws_region}
+
     # ─── KYC Resources (nexus-identity-service, nexus-ai-kyc-service) ─
     KYC_S3_BUCKET=${aws_s3_bucket.kyc_documents.bucket}
     KYC_QUEUE_URL=${aws_sqs_queue.kyc_pending.url}

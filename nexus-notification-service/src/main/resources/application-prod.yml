@@ -35,8 +35,6 @@ eureka:
 management:
   tracing:
     enabled: true
-    sampling:
-      probability: ${TRACING_SAMPLE_RATE:0.05}
   zipkin:
     tracing:
       endpoint: ${ZIPKIN_ENDPOINT:http://nexus-zipkin:9411/api/v2/spans}

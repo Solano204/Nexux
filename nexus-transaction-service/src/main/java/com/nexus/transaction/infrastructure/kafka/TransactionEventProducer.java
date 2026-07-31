@@ -1,11 +1,15 @@
 package com.nexus.transaction.infrastructure.kafka;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
@@ -32,6 +36,8 @@ public class TransactionEventProducer {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
+    private final Tracer tracer;
+    private final Propagator propagator;
     private final Counter publishedCounter;
     private final Counter publishFailedCounter;
 
@@ -39,10 +45,14 @@ public class TransactionEventProducer {
             KafkaTemplate<String, String> kafkaTemplate,
             ObjectMapper objectMapper,
             ObservationRegistry observationRegistry,
+            Tracer tracer,
+            Propagator propagator,
             MeterRegistry meterRegistry) {
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
         this.observationRegistry = observationRegistry;
+        this.tracer = tracer;
+        this.propagator = propagator;
 
         this.publishedCounter = Counter.builder("transaction.kafka.published.total")
                 .description("Total events published to Kafka")
@@ -64,10 +74,14 @@ public class TransactionEventProducer {
 
         try {
             String key = transactionId.toString();
+            obs.highCardinalityKeyValue("kafka.key", key);
             String value = objectMapper.writeValueAsString(payload);
 
+            ProducerRecord<String, String> record = new ProducerRecord<>(topic, key, value);
+            KafkaTracePropagation.injectTraceHeaders(tracer, propagator, record);
+
             CompletableFuture<SendResult<String, String>> future =
-                    kafkaTemplate.send(topic, key, value);
+                    kafkaTemplate.send(record);
 
             future.whenComplete((result, ex) -> {
                 if (ex != null) {

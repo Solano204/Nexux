@@ -109,20 +109,42 @@ public class AuthController {
                 .path("/api/v1/auth/refresh-token")  // Scoped path
                 .build();
 
-        // Return response WITHOUT refresh token in body
+        // Same XSS protection for the best-effort Cognito refresh token
+        // (absent whenever Cognito login didn't happen — cookie just
+        // won't carry a value worth stealing in that case).
+        ResponseCookie cognitoRefreshCookie = ResponseCookie
+                .from("cognitoRefreshToken",
+                        response.cognitoRefreshToken() != null
+                                ? response.cognitoRefreshToken() : "")
+                .httpOnly(true)
+                .secure(true)
+                .sameSite("Strict")
+                .maxAge(Duration.ofDays(30))
+                .path("/api/v1/auth/refresh-token")
+                .build();
+
+        // Return response WITHOUT refresh tokens in body
         LoginResponse sanitizedResponse = new LoginResponse(
                 response.accessToken(),
                 null,  // Don't expose refresh token in body
                 response.expiresIn(),
                 response.tokenType(),
                 response.userId(),
-                response.roles()
+                response.roles(),
+                response.cognitoAccessToken(),
+                response.cognitoIdToken(),
+                null  // Don't expose Cognito refresh token in body either
         );
 
-        return ResponseEntity.ok()
-                .header(HttpHeaders.SET_COOKIE,
-                        refreshCookie.toString())
-                .body(sanitizedResponse);
+        ResponseEntity.BodyBuilder responseBuilder = ResponseEntity.ok()
+                .header(HttpHeaders.SET_COOKIE, refreshCookie.toString());
+
+        if (response.cognitoRefreshToken() != null) {
+            responseBuilder.header(HttpHeaders.SET_COOKIE,
+                    cognitoRefreshCookie.toString());
+        }
+
+        return responseBuilder.body(sanitizedResponse);
     }
 
     @Operation(

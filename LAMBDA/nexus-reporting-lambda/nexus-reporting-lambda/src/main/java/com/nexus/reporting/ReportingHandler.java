@@ -111,7 +111,21 @@ public class ReportingHandler
             reportDate, reportTypes, context.getRemainingTimeInMillis());
 
         // Query all data once
-        DailyReportData data = QUERY_SERVICE.queryAll(reportDate);
+        DailyReportData data;
+        try {
+            data = QUERY_SERVICE.queryAll(reportDate);
+        } catch (Exception e) {
+            log.error("Data query failed — no reports can be generated: {}",
+                e.getMessage(), e);
+            long durationMs = System.currentTimeMillis() - startMs;
+            List<String> errors = List.of("QUERY_FAILED: " + e.getMessage());
+            List<ReportResult> results = reportTypes.stream()
+                .map(t -> ReportResult.failed(t, "Data query failed: " + e.getMessage()))
+                .toList();
+            publishNotification(reportDate, results, errors, durationMs);
+            return new ReportingResult(reportDate.toString(), results, errors,
+                durationMs, "FAILED");
+        }
 
         log.info("Data loaded: txns={} alerts={} users={}",
             data.transactionCount(), data.fraudAlertCount(),

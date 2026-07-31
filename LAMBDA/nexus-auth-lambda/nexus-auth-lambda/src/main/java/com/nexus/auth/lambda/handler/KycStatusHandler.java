@@ -2,7 +2,6 @@ package com.nexus.auth.lambda.handler;
 
 import com.amazonaws.services.lambda.runtime.events.APIGatewayV2HTTPEvent;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayV2HTTPResponse;
-import com.amazonaws.xray.AWSXRay;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.auth.lambda.AuthLambdaHandler;
 import com.nexus.auth.lambda.bridge.LocalPlaneBridgeClient;
@@ -47,8 +46,6 @@ public class KycStatusHandler {
     public APIGatewayV2HTTPResponse handle(
             APIGatewayV2HTTPEvent event) {
 
-        var segment = AWSXRay.beginSubsegment("KycStatusCheck");
-
         try {
             // Extract userId from path: /auth/kyc-status/{userId}
             Map<String, String> pathParams = event.getPathParameters();
@@ -69,7 +66,6 @@ public class KycStatusHandler {
 
                 log.debug("KYC status from cache: userId={}",
                         userId);
-                segment.putMetadata("source", "cache");
 
                 return AuthLambdaHandler.successResponse(200,
                         KycStatusResult.fromSession(session.get()),
@@ -77,8 +73,6 @@ public class KycStatusHandler {
             }
 
             // ── Cache miss or stale — call local plane ─────────
-            segment.putMetadata("source", "local_plane");
-
             Optional<KycStatusResult> kycResult = bridgeClient
                     .fetchKycStatus(userId);
 
@@ -119,12 +113,9 @@ public class KycStatusHandler {
                     "KYC status temporarily unavailable");
 
         } catch (Exception e) {
-            segment.addException(e);
             log.error("KYC status error: {}", e.getMessage(), e);
             return AuthLambdaHandler.errorResponse(500,
                     "INTERNAL_ERROR", "KYC status check failed");
-        } finally {
-            AWSXRay.endSubsegment();
         }
     }
 

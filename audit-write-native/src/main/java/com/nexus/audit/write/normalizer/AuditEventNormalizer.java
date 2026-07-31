@@ -146,25 +146,29 @@ public class AuditEventNormalizer {
                 eventType.contains("DOCUMENT_FRAUD"))
             return "CRITICAL";
 
-        if (eventType.contains("FRAUD") ||
-                eventType.contains("REJECTED") ||
-                eventType.contains("FAILED"))
-            return "WARNING";
-
+        // fraudScore is checked before the generic FRAUD/REJECTED/FAILED
+        // keyword match below so a high score can still escalate to
+        // CRITICAL — the keyword match alone must not cap severity at
+        // WARNING for an event that's actually critical.
         double fraudScore = raw.path("payload")
                 .path("fraudScore").asDouble(-1);
         if (fraudScore > 85) return "CRITICAL";
-        if (fraudScore > 60) return "WARNING";
 
-        String amountStr = raw.path("amount").asText(
-                raw.path("payload").path("amount").asText("0"));
-        try {
-            BigDecimal amount = new BigDecimal(amountStr);
-            if (amount.compareTo(LARGE_AMOUNT_THRESHOLD) > 0)
-                return "WARNING";
-        } catch (NumberFormatException ignored) {}
+        boolean warning = fraudScore > 60 ||
+                eventType.contains("FRAUD") ||
+                eventType.contains("REJECTED") ||
+                eventType.contains("FAILED");
 
-        return "INFO";
+        if (!warning) {
+            String amountStr = raw.path("amount").asText(
+                    raw.path("payload").path("amount").asText("0"));
+            try {
+                BigDecimal amount = new BigDecimal(amountStr);
+                warning = amount.compareTo(LARGE_AMOUNT_THRESHOLD) > 0;
+            } catch (NumberFormatException ignored) {}
+        }
+
+        return warning ? "WARNING" : "INFO";
     }
 
     private String extractUserId(JsonNode raw) {
@@ -245,7 +249,8 @@ public class AuditEventNormalizer {
                  "account.frozen"            -> "nexus-account-service";
             case "users.registered",
                  "identity.verified",
-                 "identity.rejected"         -> "nexus-identity-service";
+                 "identity.rejected",
+                 "identity.events"           -> "nexus-identity-service";
             case "ledger.posted",
                  "ledger.reversed"           -> "nexus-ledger-service";
             case "saga.commands",

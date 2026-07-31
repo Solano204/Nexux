@@ -16,14 +16,20 @@ spring:
 
   threads:
     virtual:
-      enabled: true
+      # disabled: Brave's ThreadLocal trace context doesn't survive virtual
+      # thread mount/unmount - controller-dispatched spans were silently
+      # never exported to Zipkin (actuator/internal spans traced fine).
+      enabled: false
 
   datasource:
     url: ${DATASOURCE_URL:jdbc:postgresql://localhost:5433/nexus_ai_assistant}
     username: ${POSTGRES_USER:nexus}
     password: ${POSTGRES_PASSWORD:nexus_dev_password}
     hikari:
+      # Fase 8: connection-timeout was missing — see account-service.
       maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 3000
 
   jpa:
     hibernate:
@@ -39,7 +45,8 @@ spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
     producer:
-      acks: "1"
+      acks: all
+      enable-idempotence: true
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
@@ -79,6 +86,10 @@ spring:
 
 server:
   port: 8090
+  tomcat:
+    threads:
+      max: 50
+    accept-count: 25
 
 springdoc:
   api-docs:
@@ -104,6 +115,8 @@ eureka:
     lease-expiration-duration-in-seconds: 90
 
 nexus:
+  load-shedding:
+    max-in-flight: 40
   services:
     account:
       url: ${ACCOUNT_SERVICE_URL:http://localhost:8085}
@@ -112,11 +125,64 @@ nexus:
     fraud:
       url: ${FRAUD_SERVICE_URL:http://localhost:8087}
 
+resilience4j:
+  thread-pool-bulkhead:
+    instances:
+      # Isolated per dependency (Fase 3 principle) so a stuck account-service
+      # call can't also starve capacity meant for transaction-service or
+      # fraud-service calls. Sizing (Fase 4): estimado, no medido — latencia
+      # típica ~5s peor caso (Fase 1), proyecto solo/portfolio, no se espera
+      # sostener más de unos pocos chats concurrentes con tool-calls activos
+      # a la vez. Ajustar con datos reales bajo carga.
+      account-service-calls:
+        core-thread-pool-size: 4
+        max-thread-pool-size: 8
+        queue-capacity: 4
+        keep-alive-duration: 20s
+      transaction-service-calls:
+        core-thread-pool-size: 4
+        max-thread-pool-size: 8
+        queue-capacity: 4
+        keep-alive-duration: 20s
+      fraud-service-calls:
+        core-thread-pool-size: 4
+        max-thread-pool-size: 8
+        queue-capacity: 4
+        keep-alive-duration: 20s
+
+  circuitbreaker:
+    instances:
+      ai-assistant-reads:
+        # TIME_BASED, not COUNT_BASED: these tool-calls only fire when a
+        # chat message actually triggers one — same low/bursty-traffic
+        # reasoning as the gateway's ai-assistant-service breaker (Fase 3).
+        sliding-window-type: TIME_BASED
+        sliding-window-size: 60
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        slow-call-rate-threshold: 80
+        slow-call-duration-threshold: 5s
+        wait-duration-in-open-state: 20s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+  retry:
+    instances:
+      ai-assistant-reads:
+        max-attempts: 2
+        wait-duration: 200ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        enable-randomized-wait: true
+        randomized-wait-factor: 0.5
+        retry-exceptions:
+          - java.net.SocketTimeoutException
+          - java.net.ConnectException
+
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics
+        include: health,info,prometheus,metrics,circuitbreakers,retries,threadpoolbulkheads
   metrics:
     tags:
       application: ${spring.application.name}

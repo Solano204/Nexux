@@ -4,10 +4,17 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexus.account.application.command.AccountCommandService;
 import com.nexus.account.infrastructure.ai.TransactionIndexingService;
+import com.nexus.tracing.kafka.KafkaTracePropagation;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.header.Headers;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.Acknowledgment;
@@ -46,6 +53,8 @@ public class SagaCommandConsumer {
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
     private final TransactionIndexingService transactionIndexingService;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     private static final String REPLIES_TOPIC = "saga.replies";
     private static final String TARGET_SERVICE = "nexus-account-service";
@@ -55,7 +64,20 @@ public class SagaCommandConsumer {
             groupId = "account-service-saga-commands",
             containerFactory = "kafkaListenerContainerFactory"
     )
-    public void consumeSagaCommand(String message, Acknowledgment ack) {
+    public void consumeSagaCommand(ConsumerRecord<String, String> record,
+                                   Acknowledgment ack) {
+        String message = record.value();
+        Headers headers = record.headers();
+        Span span = KafkaTracePropagation.extractAndStartSpan(
+                tracer, propagator, record, "account-service-saga-commands", "saga.commands receive");
+        try (Tracer.SpanInScope ignored = tracer.withSpan(span)) {
+            consumeSagaCommandTraced(message, ack);
+        } finally {
+            span.end();
+        }
+    }
+
+    private void consumeSagaCommandTraced(String message, Acknowledgment ack) {
 
         Observation obs = Observation.createNotStarted(
                         "kafka.message.processed", observationRegistry)
@@ -118,7 +140,14 @@ public class SagaCommandConsumer {
             obs.error(e);
             log.error("Failed to process SAGA command: {}",
                     e.getMessage(), e);
-            // Do NOT acknowledge — let Kafka redeliver
+            // Rethrow so KafkaConfig's DefaultErrorHandler(deadLetterRecoverer,
+            // FixedBackOff) actually sees this failure - swallowing it here
+            // and just not acking meant the container-level retry+DLT never
+            // triggered; redelivery only happened on a restart/rebalance
+            // (unbounded wait), not the intended bounded 3-retry-then-DLT
+            // policy. Safe to retry: handlers below already check existing
+            // state before executing (see class Javadoc).
+            throw new RuntimeException("Failed to process SAGA command", e);
         } finally {
             obs.stop();
         }
@@ -173,8 +202,10 @@ public class SagaCommandConsumer {
                 "repliedAt", java.time.Instant.now().toString()
         );
 
-        kafkaTemplate.send(REPLIES_TOPIC, sagaId,
-                objectMapper.writeValueAsString(reply));
+        ProducerRecord<String, String> replyRecord = new ProducerRecord<>(
+                REPLIES_TOPIC, sagaId, objectMapper.writeValueAsString(reply));
+        KafkaTracePropagation.injectTraceHeaders(tracer, propagator, replyRecord);
+        kafkaTemplate.send(replyRecord);
 
         log.info("ReserveBalance reply sent: sagaId={} result={}",
                 sagaId, replyType);
@@ -213,8 +244,10 @@ public class SagaCommandConsumer {
                 "repliedAt", java.time.Instant.now().toString()
         );
 
-        kafkaTemplate.send(REPLIES_TOPIC, sagaId,
-                objectMapper.writeValueAsString(reply));
+        ProducerRecord<String, String> replyRecord = new ProducerRecord<>(
+                REPLIES_TOPIC, sagaId, objectMapper.writeValueAsString(reply));
+        KafkaTracePropagation.injectTraceHeaders(tracer, propagator, replyRecord);
+        kafkaTemplate.send(replyRecord);
     }
 
     private void handleFinalizeTransfer(JsonNode command, String sagaId,
@@ -254,8 +287,10 @@ public class SagaCommandConsumer {
                 "repliedAt", java.time.Instant.now().toString()
         );
 
-        kafkaTemplate.send(REPLIES_TOPIC, sagaId,
-                objectMapper.writeValueAsString(reply));
+        ProducerRecord<String, String> replyRecord = new ProducerRecord<>(
+                REPLIES_TOPIC, sagaId, objectMapper.writeValueAsString(reply));
+        KafkaTracePropagation.injectTraceHeaders(tracer, propagator, replyRecord);
+        kafkaTemplate.send(replyRecord);
     }
 
     private void handleCreditAccount(JsonNode command, String sagaId,
@@ -284,8 +319,10 @@ public class SagaCommandConsumer {
                 "repliedAt", java.time.Instant.now().toString()
         );
 
-        kafkaTemplate.send(REPLIES_TOPIC, sagaId,
-                objectMapper.writeValueAsString(reply));
+        ProducerRecord<String, String> replyRecord = new ProducerRecord<>(
+                REPLIES_TOPIC, sagaId, objectMapper.writeValueAsString(reply));
+        KafkaTracePropagation.injectTraceHeaders(tracer, propagator, replyRecord);
+        kafkaTemplate.send(replyRecord);
 
         log.info("CreditAccount reply sent: sagaId={} accountId={} amount={}",
                 sagaId, accountId, amount);
@@ -317,8 +354,10 @@ public class SagaCommandConsumer {
                 "repliedAt", java.time.Instant.now().toString()
         );
 
-        kafkaTemplate.send(REPLIES_TOPIC, sagaId,
-                objectMapper.writeValueAsString(reply));
+        ProducerRecord<String, String> replyRecord = new ProducerRecord<>(
+                REPLIES_TOPIC, sagaId, objectMapper.writeValueAsString(reply));
+        KafkaTracePropagation.injectTraceHeaders(tracer, propagator, replyRecord);
+        kafkaTemplate.send(replyRecord);
 
         log.info("Accounts created via SAGA: userId={} sagaId={} " +
                 "count={}", userId, sagaId, accounts.size());

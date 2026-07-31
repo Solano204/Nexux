@@ -90,10 +90,18 @@ public class HttpKafkaBridgeClient extends KafkaBridgeClient {
                     FailureReason.KAFKA_BRIDGE_TIMEOUT,
                     "Bridge timeout after 10s");
         } catch (Exception e) {
-            log.error("HTTP bridge exception: {}", e.getMessage());
+            Throwable root = e;
+            while (root.getCause() != null && root.getCause() != root) {
+                root = root.getCause();
+            }
+            String reason = root.getMessage() != null
+                    ? root.getMessage()
+                    : root.getClass().getName();
+            log.error("HTTP bridge exception: type={} reason={}",
+                    e.getClass().getName(), reason, e);
             return KafkaBridgeResult.failure(
                     FailureReason.KAFKA_BRIDGE_UNAVAILABLE,
-                    e.getMessage());
+                    reason);
         }
     }
 }

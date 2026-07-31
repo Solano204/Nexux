@@ -1,6 +1,7 @@
 package com.nexus.assistant.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -41,6 +42,7 @@ public class FinancialAssistantAgent {
     private final ToolCallingManager toolCallingManager;
     private final ObjectMapper objectMapper;
     private final ObservationRegistry observationRegistry;
+    private final RateLimiter openAiRateLimiter;
 
     private final Timer chatResponseTimer;
     private final Counter agentModeCounter;
@@ -59,7 +61,8 @@ public class FinancialAssistantAgent {
             ToolCallingManager toolCallingManager,
             ObjectMapper objectMapper,
             ObservationRegistry observationRegistry,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            RateLimiter openAiRateLimiter) {
 
         this.primaryClient = primaryClient;
         this.agentClient = agentClient;
@@ -67,6 +70,7 @@ public class FinancialAssistantAgent {
         this.toolCallingManager = toolCallingManager;
         this.objectMapper = objectMapper;
         this.observationRegistry = observationRegistry;
+        this.openAiRateLimiter = openAiRateLimiter;
 
         this.chatResponseTimer =
                 Timer.builder("ai.chat.response.duration")
@@ -144,12 +148,13 @@ public class FinancialAssistantAgent {
                         .internalToolExecutionEnabled(false)
                         .build();
 
-                ChatResponse chatResponse = agentClient.prompt()
-                        .messages(messages)
-                        .advisors(a -> a.param(
-                                CHAT_MEMORY_CONVERSATION_ID_KEY, conversationId))
-                        .call()
-                        .chatResponse();
+                ChatResponse chatResponse = RateLimiter.decorateSupplier(
+                        openAiRateLimiter, () -> agentClient.prompt()
+                                .messages(messages)
+                                .advisors(a -> a.param(
+                                        CHAT_MEMORY_CONVERSATION_ID_KEY, conversationId))
+                                .call()
+                                .chatResponse()).get();
 
                 obs.stop();
 
@@ -179,13 +184,14 @@ public class FinancialAssistantAgent {
                                 result.conversationHistory(),
                                 toolOptions);
 
-                        chatResponse = agentClient.prompt()
-                                .messages(result.conversationHistory())
-                                .advisors(a -> a.param(
-                                        CHAT_MEMORY_CONVERSATION_ID_KEY,
-                                        conversationId))
-                                .call()
-                                .chatResponse();
+                        chatResponse = RateLimiter.decorateSupplier(
+                                openAiRateLimiter, () -> agentClient.prompt()
+                                        .messages(result.conversationHistory())
+                                        .advisors(a -> a.param(
+                                                CHAT_MEMORY_CONVERSATION_ID_KEY,
+                                                conversationId))
+                                        .call()
+                                        .chatResponse()).get();
 
                         stepObs.event(Observation.Event.of(
                                 "agent.step.complete"));

@@ -6,8 +6,8 @@ import os
 
 import boto3
 
-from utils.logging_config import log
-from alerting.message_builder import build_subject
+from src.utils.logging_config import log
+from src.alerting.message_builder import build_subject
 
 _sns = boto3.client("sns",
                     region_name=os.environ.get(

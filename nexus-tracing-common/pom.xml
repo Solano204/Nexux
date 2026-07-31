@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.nexus</groupId>
+        <artifactId>nexus-financial-platform</artifactId>
+        <version>1.0.0</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>nexus-tracing-common</artifactId>
+    <packaging>jar</packaging>
+    <name>Nexus Tracing Common</name>
+    <description>
+        Shared manual trace-propagation helpers for Kafka producers/consumers.
+        Static methods only, no Spring beans of its own - callers pass in
+        their already-autoconfigured Tracer/Propagator, so this jar carries
+        no component-scan requirement and works whether the consuming
+        service auto-configures Kafka or builds its own ProducerFactory/
+        ConsumerFactory by hand (see nexus-platform-config/application-prod.yml
+        for why that distinction matters here).
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-observation</artifactId>
+        </dependency>
+        <!-- For ActuatorObservationPredicate: every consuming service is a
+             Spring Boot servlet web app and already carries both of these
+             transitively via spring-boot-starter-web, so provided scope -
+             this jar shouldn't bundle its own copy. -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-web</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <release>25</release>
+                    <enablePreview>true</enablePreview>
+                    <compilerArgs>
+                        <arg>-parameters</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

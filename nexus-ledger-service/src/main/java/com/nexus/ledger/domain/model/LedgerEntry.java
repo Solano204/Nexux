@@ -5,10 +5,12 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
 import java.util.UUID;
 
@@ -149,7 +151,15 @@ public class LedgerEntry {
     @PrePersist
     void prePersist() {
         if (entryId == null) entryId = UUID.randomUUID();
-        if (postedAt == null) postedAt = Instant.now();
+        // Truncate to microseconds (posted_at is TIMESTAMPTZ) before this
+        // value is used for anything, including the checksum below - the
+        // JDBC driver rounds the nanosecond remainder rather than
+        // truncating it like Instant.truncatedTo() does, so leaving the
+        // field at full nanosecond precision and only truncating a local
+        // copy inside computeChecksum() intermittently disagrees with what
+        // Postgres actually stores (off by one microsecond whenever the
+        // dropped nanoseconds round up).
+        if (postedAt == null) postedAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
         if (valueDate == null) valueDate = LocalDate.now();
         if (effectiveDate == null) effectiveDate = LocalDate.now();
         if (postedByService == null) postedByService = "ledger-service";
@@ -182,13 +192,20 @@ public class LedgerEntry {
      * Used by the integrity verification job to detect tampering.
      */
     public String computeChecksum() {
+        // amount/running_balance are NUMERIC(20,4) in Postgres - a
+        // pre-persist value built from user input (e.g. scale 2, "1000.00")
+        // reloads from the DB at scale 4 ("1000.0000"), so without
+        // normalizing scale here too, isChecksumValid() would falsely fail
+        // for every entry the instant it's read back from storage. postedAt
+        // is already truncated to microseconds in prePersist(), matching
+        // what TIMESTAMPTZ actually stores.
         String data = entryId + ":" +
                 postingId + ":" +
                 accountId + ":" +
                 entryType + ":" +
-                amount.toPlainString() + ":" +
+                amount.setScale(4, RoundingMode.HALF_UP).toPlainString() + ":" +
                 currency + ":" +
-                runningBalance.toPlainString() + ":" +
+                runningBalance.setScale(4, RoundingMode.HALF_UP).toPlainString() + ":" +
                 (postedAt != null ? postedAt.toString() : "");
 
         try {
