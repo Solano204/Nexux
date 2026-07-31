@@ -86,7 +86,11 @@ import static org.mockito.Mockito.*;
                 "spring.datasource.username=sa",
                 "spring.datasource.password=",
                 "spring.flyway.enabled=false",
-                "spring.jpa.hibernate.ddl-auto=none"
+                "spring.jpa.hibernate.ddl-auto=none",
+                // No broker in this test (see class Javadoc) - the real
+                // @KafkaListener in FraudCommandConsumer must never call
+                // start(), or it hangs retrying a connection to nothing.
+                "nexus.kafka.listener.auto-startup=false"
         })
 @ActiveProfiles("test")
 @Tag("component")

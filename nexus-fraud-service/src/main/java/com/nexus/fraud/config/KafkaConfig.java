@@ -42,6 +42,14 @@ public class KafkaConfig {
     @Value("${spring.kafka.bootstrap-servers}")
     private String bootstrapServers;
 
+    // Component tests boot the real Spring context but have no broker to
+    // connect to - true everywhere else (dev/prod), overridden to false in
+    // FraudAnalysisServiceComponentTest so the listener container never
+    // calls start() (which is what triggers both the topic-existence
+    // AdminClient check and the real consumer connection).
+    @Value("${nexus.kafka.listener.auto-startup:true}")
+    private boolean listenerAutoStartup;
+
     // Micrometer's Kafka client metrics (including consumer lag,
     // kafka.consumer.fetch.manager.lag) only get bound when a
     // MicrometerConsumerListener/MicrometerProducerListener is explicitly
@@ -97,6 +105,7 @@ public class KafkaConfig {
         ConcurrentKafkaListenerContainerFactory<String, String> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory());
+        factory.setAutoStartup(listenerAutoStartup);
         factory.getContainerProperties().setAckMode(
                 ContainerProperties.AckMode.MANUAL);
         factory.getContainerProperties().setObservationEnabled(true);
