@@ -19,10 +19,14 @@ import java.util.List;
  *
  * In production: replace with actual domain names.
  *
- * Note: CORS is also configured via application.yml globalcors.
- * This bean provides programmatic control and overrides YAML when present.
- *
+a
+s
+ñsañ
+ñasñ
+sñ * 
  * 
+ * 
+ * asksksak
  * askljlksalkshlakshs
  * +asmklsajiolksajnm
  */
