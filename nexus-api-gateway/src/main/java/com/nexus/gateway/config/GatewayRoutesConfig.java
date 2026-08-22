@@ -16,11 +16,6 @@ import org.springframework.util.unit.DataSize;
 
 /**
  * Gateway Routes Configuration — Programmatic route definitions.
- *
- * These routes COMPLEMENT the YAML-defined routes in application.yml.
- * Use this class for routes that require dynamic or conditional logic
- * that cannot be expressed cleanly in YAML.
- *
  * Route priority: YAML routes and programmatic routes are merged by
  * Spring Cloud Gateway. Order matters — lower order = higher priority.
  *
