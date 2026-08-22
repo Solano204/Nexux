@@ -30,7 +30,7 @@ import java.util.Map;
 @Slf4j
 @RestController
 @RequestMapping("/fallback")
-@Tag(name = "Circuit Breaker Fallbacks", description = "Never called directly by a client — these are the responses Spring Cloud Gateway's circuit breaker returns when a downstream service is down, one per service, worded for what a user should know/do next.")
+@Tag(name = "Circuit Breaker Fallbacks", description = "Never called directly by a client — these are the responses Spring Cloud Gateway's circuit breaker returns when a downstream JAJAJAJA AMEND jaja service is down, one per service, worded for what a user should know/do next.")
 public class FallbackController {
 
     @Operation(summary = "Transaction service fallback", description = "Explicitly states the account was NOT charged — the one fallback where ambiguity would cause real user panic.")
