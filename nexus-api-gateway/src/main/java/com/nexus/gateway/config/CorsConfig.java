@@ -22,10 +22,9 @@ import java.util.List;
  * Note: CORS is also configured via application.yml globalcors.
  * This bean provides programmatic control and overrides YAML when present.
  *
- * Financial platform CORS policy:
- *   - Credentials: true  (JWT cookies / auth headers allowed)
- *   - Max age: 1 hour    (preflight cache — reduces OPTIONS overhead)
- *   - Exposed headers:   X-Request-Id (for client-side trace correlation)
+ * 
+ * askljlksalkshlakshs
+ * +asmklsajiolksajnm
  */
 @Configuration
 public class CorsConfig {
